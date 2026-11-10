@@ -1,0 +1,335 @@
+@import url("https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@400;500;600;700;800&display=swap");
+
+@import "tailwindcss";
+
+/* Base styles */
+@layer base {
+  :root {
+    color: var(--ink);
+    background: var(--background-page);
+    font-family: var(--font-body);
+    font-synthesis: none;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #d8d4e7 transparent;
+  }
+  body {
+    min-width: 320px;
+    min-height: 100vh;
+  }
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+  button {
+    cursor: pointer;
+  }
+}
+
+/* Design tokens */
+:root {
+  --ink: #29243d;
+  --muted: #6f697c;
+  --line: #e9e2ee;
+  --purple: #7958e8;
+  --purple-dark: #5f3fd0;
+  --lavender: #f0ebff;
+  --coral: #ff6b9a;
+  --pink: #ff6b9a;
+  --mint: #71c8b5;
+  --gold: #ffc857;
+  --paper: #fff;
+  --background-page: #fff9f0;
+  --font-body: "Nunito", sans-serif;
+  --font-heading: "Fredoka", "Nunito", sans-serif;
+  --control-height: 38px;
+  --padding-button: 0 14px;
+  --gap-button: 7px;
+  --gap-field: 6px;
+  --radius-button: 12px;
+  --radius-input: 11px;
+  --radius-card: 18px;
+  --radius-modal: 22px;
+  --shadow-card: 0 5px 18px rgb(78 49 112 / 6%);
+  --shadow-button: 0 5px 13px rgb(121 88 232 / 24%);
+  --shadow-modal: 0 25px 70px #2419324d;
+}
+
+/* Shared UI components */
+.icon-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  border: 0;
+  background: transparent;
+  color: #777487;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.icon-btn:hover {
+  background: #f3f0f9;
+  color: var(--purple);
+}
+.btn {
+  height: var(--control-height);
+  border-radius: 9px;
+  padding: var(--padding-button);
+  border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gap-button);
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.btn-primary {
+  background: var(--purple);
+  color: #fff;
+  box-shadow: 0 3px 8px #7157d933;
+}
+.btn-primary:hover {
+  background: var(--purple-dark);
+}
+.btn-secondary {
+  background: #fff;
+  color: #4d4960;
+  border-color: #ded9e8;
+}
+.btn-secondary:hover {
+  border-color: #bdb4d4;
+  background: #faf9fc;
+}
+.btn-ghost {
+  background: transparent;
+  color: #5f5a72;
+}
+.btn-danger {
+  background: #fff0ee;
+  color: #c95145;
+}
+.card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px #392b5910;
+}
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 18px 20px;
+  border-bottom: 1px solid #f0eef4;
+}
+.card-head h3 {
+  font-size: 14px;
+  margin: 0 0 3px;
+}
+.card-head p {
+  font-size: 10.5px;
+  color: var(--muted);
+  margin: 0;
+}
+.eyebrow {
+  font-size: 9px;
+  letter-spacing: 1.3px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 20px;
+  background: #f4f2f7;
+  color: #6e697b;
+  font-size: 8.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.badge-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #aaa5b3;
+}
+.badge-success {
+  background: #eaf8f2;
+  color: #348b71;
+}
+.badge-success .badge-dot {
+  background: #52ad91;
+}
+.badge-warning {
+  background: #fff5dc;
+  color: #a87518;
+}
+.badge-warning .badge-dot {
+  background: #dea632;
+}
+.badge-danger {
+  background: #fff0ed;
+  color: #c65f51;
+}
+.badge-danger .badge-dot {
+  background: #e87565;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-field);
+  margin-bottom: 13px;
+  flex: 1;
+}
+.field > span {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #5a5668;
+}
+.field input,
+.field textarea {
+  height: var(--control-height);
+  border: 1px solid #dcd8e5;
+  border-radius: 8px;
+  padding: 0 11px;
+  outline: none;
+  font-size: 10.5px;
+  color: var(--ink);
+  background: #fff;
+}
+.field textarea {
+  height: 70px;
+  padding: 10px;
+  resize: none;
+}
+.field input:focus,
+.field textarea:focus {
+  border-color: var(--purple);
+  box-shadow: 0 0 0 3px #7157d915;
+}
+.icon-btn.danger {
+  color: #d8685b;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: #27223599;
+  backdrop-filter: blur(3px);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+.modal {
+  width: min(580px, 100%);
+  max-height: 90vh;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: var(--shadow-modal);
+  overflow: auto;
+}
+.modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 22px;
+  border-bottom: 1px solid var(--line);
+}
+.modal-head .eyebrow {
+  color: var(--purple);
+}
+.modal-head h2 {
+  font-family: "Fraunces";
+  font-size: 20px;
+  margin: 3px 0 0;
+}
+.modal-body {
+  padding: 22px;
+}
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  padding: 14px 22px;
+  background: #faf9fc;
+  border-top: 1px solid var(--line);
+}
+
+/* Responsive styles */
+@media (max-width: 600px) {
+  .modal-footer .btn {
+    flex: 1;
+  }
+}
+
+/* Theme overrides */
+h1,
+h2,
+h3 {
+  font-family: var(--font-heading);
+}
+
+.card {
+  border-color: #e9e2ee;
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+.btn {
+  border-radius: var(--radius-button);
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.btn-primary {
+  background: #7958e8;
+  box-shadow: var(--shadow-button);
+}
+
+.btn-primary:hover {
+  background: #5f3fd0;
+  box-shadow: 0 7px 18px rgb(121 88 232 / 30%);
+  transform: translateY(-1px);
+}
+
+.btn-secondary {
+  border-color: #d9cfeb;
+  color: #4c4167;
+}
+
+.btn-secondary:hover {
+  border-color: #7958e8;
+  background: #f8f5ff;
+  color: #5f3fd0;
+}
+
+.icon-btn,
+.field input,
+.field textarea {
+  border-radius: var(--radius-input);
+}
+
+.badge {
+  border-radius: 999px;
+  font-weight: 800;
+}
+
+.badge-danger {
+  background: #ffedf3;
+  color: #a92f57;
+}
+
+.modal {
+  border-radius: var(--radius-modal);
+  border: 1px solid rgb(255 255 255 / 60%);
+}
+
+.modal-head {
+  background: linear-gradient(110deg, #fbf9ff, #fff8f4);
+}
