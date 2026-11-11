@@ -1,4 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Hub } from "aws-amplify/utils";
+import { authErrorMessage, requireAuthSession, signOut as cognitoSignOut } from "./features/auth/services/authService";
 import { Navigate, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { AppModal, type ModalName } from "./components/AppModal";
 import { Sidebar, Topbar } from "./components/layout";
@@ -33,8 +35,13 @@ const publicPaths: Record<PublicPage, string> = {
   reset: "/reset-password",
 };
 
-function PublicRoute({ page, onAuthenticated }: { page: PublicPage; onAuthenticated: () => void }) {
+function PublicRoute({ page, authenticated, onAuthenticated }: {
+  page: PublicPage;
+  authenticated: boolean;
+  onAuthenticated: () => void;
+}) {
   const navigate = useNavigate();
+  if (authenticated && page !== "landing") return <Navigate to="/app/dashboard" replace />;
   return (
     <PublicApp
       page={page}
@@ -77,8 +84,11 @@ function WorkspaceLayout({ onSignOut }: { onSignOut: () => void }) {
 }
 
 export default function App() {
-  // UI-only sign-in state for the wireframe; no real authentication is performed.
   const [authenticated, setAuthenticated] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [signingOut, setSigningOut] = useState(false);
+  const sessionVersion = useRef(0);
+  const signOutPending = useRef(false);
   const [modal, setModal] = useState<ModalName | null>(null);
   const [toast, setToast] = useState("");
   const toastTimer = useRef<number | undefined>(undefined);
@@ -96,25 +106,94 @@ export default function App() {
 
   useEffect(() => () => window.clearTimeout(toastTimer.current), []);
 
-  const enterWorkspace = () => {
-    setAuthenticated(true);
-    navigate("/app/dashboard");
+  const refreshSession = useCallback(async () => {
+    if (signOutPending.current) return;
+    const version = ++sessionVersion.current;
+    try {
+      await requireAuthSession();
+      if (version === sessionVersion.current) setAuthenticated(true);
+    } catch {
+      if (version === sessionVersion.current) setAuthenticated(false);
+    } finally {
+      if (version === sessionVersion.current) setCheckingSession(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSession();
+    const refresh = () => { void refreshSession(); };
+    const unsubscribe = Hub.listen("auth", ({ payload }) => {
+      if (payload.event === "signedOut" || payload.event === "tokenRefresh_failure") {
+        ++sessionVersion.current;
+        setAuthenticated(false);
+        setCheckingSession(false);
+      } else if (payload.event === "signedIn") {
+        refresh();
+      }
+    });
+    window.addEventListener("focus", refresh);
+    const timer = window.setInterval(refresh, 60_000);
+    return () => {
+      ++sessionVersion.current;
+      unsubscribe();
+      window.removeEventListener("focus", refresh);
+      window.clearInterval(timer);
+    };
+  }, [refreshSession]);
+
+  useEffect(() => {
+    if (!authenticated) setModal(null);
+  }, [authenticated]);
+
+  // This is also the landing demo callback. It never grants a mock session.
+  const enterWorkspace = async () => {
+    if (signOutPending.current) return;
+    const version = ++sessionVersion.current;
+    try {
+      await requireAuthSession();
+      if (version !== sessionVersion.current) return;
+      setAuthenticated(true);
+      setCheckingSession(false);
+      navigate("/app/dashboard");
+    } catch {
+      if (version !== sessionVersion.current) return;
+      setAuthenticated(false);
+      setCheckingSession(false);
+      navigate("/login");
+    }
   };
 
-  const signOut = () => {
-    setAuthenticated(false);
-    navigate("/");
+  const signOut = async () => {
+    if (signOutPending.current) return;
+    signOutPending.current = true;
+    ++sessionVersion.current;
+    setSigningOut(true);
+    try {
+      await cognitoSignOut();
+      setAuthenticated(false);
+      setModal(null);
+      setToast("");
+      navigate("/");
+    } catch (error) {
+      setToast(`Sign out failed. ${authErrorMessage(error)}`);
+    } finally {
+      signOutPending.current = false;
+      setSigningOut(false);
+      setCheckingSession(false);
+    }
   };
+
+  if (checkingSession || signingOut) return <LoadingState label={signingOut ? "Signing out?" : "Checking your session?"} />;
 
   return (
     <>
       <Routes>
-        <Route path="/" element={<PublicRoute page="landing" onAuthenticated={enterWorkspace} />} />
-        <Route path="/login" element={<PublicRoute page="login" onAuthenticated={enterWorkspace} />} />
-        <Route path="/signup" element={<PublicRoute page="signup" onAuthenticated={enterWorkspace} />} />
+        <Route path="/" element={<PublicRoute authenticated={authenticated} page="landing" onAuthenticated={enterWorkspace} />} />
+        <Route path="/login" element={<PublicRoute authenticated={authenticated} page="login" onAuthenticated={enterWorkspace} />} />
+        <Route path="/signup" element={<PublicRoute authenticated={authenticated} page="signup" onAuthenticated={enterWorkspace} />} />
         <Route
           path="/reset-password"
-          element={<PublicRoute page="reset" onAuthenticated={enterWorkspace} />}
+          element={<PublicRoute authenticated={authenticated} page="reset" onAuthenticated={enterWorkspace} />}
         />
 
         <Route
@@ -143,7 +222,7 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
 
-      <AppModal modal={modal} onClose={closeModal} onSaved={showSaved} />
+      <AppModal modal={authenticated ? modal : null} onClose={closeModal} onSaved={showSaved} />
       {toast && (
         <div className="toast" role="status">
           <span>✓</span>

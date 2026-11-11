@@ -12,5 +12,5 @@ export function PublicApp({
   enterApp: () => void;
 }) {
   if (page === "landing") return <Landing setPage={setPage} enterApp={enterApp} />;
-  return <AuthCard page={page} setPage={setPage} enterApp={enterApp} />;
+  return <AuthCard key={page} page={page} setPage={setPage} enterApp={enterApp} />;
 }
