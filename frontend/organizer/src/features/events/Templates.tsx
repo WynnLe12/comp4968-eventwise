@@ -50,7 +50,7 @@ function TemplateDetails({ id, onClose }: { id: string; onClose: () => void }) {
             ) : (
               <div className="table-wrap">
                 <table className="template-category-table">
-                  <thead><tr><th scope="col">Category</th><th scope="col">Allocation</th></tr></thead>
+                  <thead><tr><th scope="col">Category</th><th scope="col">Allocation (%)</th></tr></thead>
                   <tbody>{template.categories.map(category => (
                     <tr key={category.templateCategoryId}>
                       <td>{category.name}</td><td>{Number(category.defaultPercentage)}%</td>
