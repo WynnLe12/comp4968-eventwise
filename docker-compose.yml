@@ -1,0 +1,41 @@
+# Local MySQL for development and tests. Not used in AWS (RDS is the real database).
+#
+#   docker compose up -d        start (first start loads the schema)
+#   docker compose down -v      stop and wipe the data (next start reloads the schema)
+#
+# The files mounted into /docker-entrypoint-initdb.d run once, in name order,
+# only when the data volume is empty. After changing the schema or seed, run
+# `docker compose down -v` and start again.
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: eventwise-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: localroot
+      MYSQL_DATABASE: eventwise
+      MYSQL_USER: eventwise
+      MYSQL_PASSWORD: localpass
+      TZ: UTC
+    command: ["--default-time-zone=+00:00"]
+    ports:
+      - "127.0.0.1:3307:3306" # localhost only - 3307 avoids a clash with a MySQL already installed on 3306
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./database/mysql/schemas/eventwise_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "127.0.0.1",
+          "-uroot",
+          "-plocalroot",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  mysql-data:
