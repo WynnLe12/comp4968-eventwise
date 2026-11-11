@@ -130,7 +130,7 @@ export default function App() {
           <Route path="expenses" element={<Expenses onAdd={() => openModal("expense")} />} />
           <Route path="vendors" element={<Vendors onAdd={() => openModal("vendor")} />} />
           <Route path="guests" element={<Guests onAdd={() => openModal("guest")} />} />
-          <Route path="templates" element={<Templates applyTemplate={() => openModal("template")} />} />
+          <Route path="templates" element={<Templates />} />
           <Route path="tasks" element={<Tasks />} />
           <Route path="timeline" element={<Timeline />} />
           <Route path="documents" element={<Documents />} />
