@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { handleTemplates } from "./event-service/handlers/templates";
+import { handleBudgetCategories } from "./event-service/handlers/budgetCategories";
 import { closePool } from "./shared/db/pool";
 import { sendJson, type ErrorResponse, type HealthResponse } from "./shared/utils/http";
 
@@ -10,14 +11,35 @@ export function createAppServer(): Server {
       sendJson<HealthResponse>(response, 200, { status: "ok" });
       return;
     }
-    void handleTemplates(request.method, request.url?.split("?")[0] ?? "/", response)
-      .then((handled) => {
-        if (!handled) sendJson<ErrorResponse>(response, 404, { error: "Not found" });
-      })
-      .catch((error: unknown) => {
-        console.error("Template request failed", error);
-        sendJson<ErrorResponse>(response, 500, { error: "Internal server error" });
+    void (async () => {
+      const path = request.url?.split("?")[0] ?? "/";
+
+      // Feature 3: Budget Categories
+      // The local server has no verified Cognito identity yet.
+      // Passing null ensures protected requests are rejected.
+      const budgetHandled = await handleBudgetCategories(request, response, null);
+
+      if (budgetHandled) return;
+
+      // Feature 11: Event Templates (Lulu)
+      const templateHandled = await handleTemplates(request.method, path, response);
+
+      if (templateHandled) return;
+
+      sendJson<ErrorResponse>(response, 404, {
+        error: "Not found"
       });
+    })().catch((error: unknown) => {
+      console.error("API request failed", error);
+
+      if (!response.headersSent) {
+        sendJson<ErrorResponse>(response, 500, {
+          error: "Internal server error"
+        });
+      } else if (!response.writableEnded) {
+        response.end();
+      }
+    });
   });
 }
 
