@@ -1,5 +1,6 @@
 import { ApiError } from "../errors";
-import type { Expense, ExpenseInput, ExpenseQuery, ExpenseRepository, ExpenseRow } from "../types";
+import type { Expense, ExpenseInput, ExpenseQuery, ExpenseRepository, ExpenseRow, PaymentQuery } from "../types";
+import { parsePaymentBody } from "./payment-validation";
 import { cents, money, parseExpenseBody, parseId } from "./validation";
 
 export function presentExpense(row: ExpenseRow, today: string): Expense {
@@ -65,6 +66,33 @@ export class ExpenseService {
       await tx.validateAssociations(eventId, input);
       await tx.update(eventId, expenseId, input);
       return presentExpense(requireRow(await tx.find(eventId, expenseId)), this.today());
+    });
+  }
+  async listPayments(eventId: string, expenseId: string, sub: string, query: PaymentQuery) {
+    this.event(eventId, sub); parseId(expenseId, "expenseId", true);
+    return this.repository.transaction(async tx => {
+      await tx.assertMember(eventId, sub);
+      // Prevent a concurrent delete/payment write from changing history mid-read.
+      requireRow(await tx.find(eventId, expenseId, true));
+      const result = await tx.listPayments(eventId, expenseId, query);
+      return { data: result.rows, total: result.total, limit: query.limit, offset: query.offset };
+    });
+  }
+  async recordPayment(eventId: string, expenseId: string, sub: string, body: unknown) {
+    this.event(eventId, sub); parseId(expenseId, "expenseId", true);
+    return this.repository.transaction(async tx => {
+      await tx.assertMember(eventId, sub);
+      // Same parent-row lock as expense updates/deletes. Always lock BEFORE reading balance.
+      const row = requireRow(await tx.find(eventId, expenseId, true));
+      const today = this.today();
+      const current = presentExpense(row, today);
+      const input = parsePaymentBody(body, today);
+      if (cents(input.amount) > cents(current.outstandingAmount)) {
+        throw new ApiError(409, "PAYMENT_EXCEEDS_BALANCE", "Payment exceeds the outstanding balance.");
+      }
+      const payment = await tx.createPayment(eventId, expenseId, input);
+      const expense = presentExpense(requireRow(await tx.find(eventId, expenseId)), today);
+      return { payment, expense };
     });
   }
   async remove(eventId: string, expenseId: string, sub: string): Promise<void> {

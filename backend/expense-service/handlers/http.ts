@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { ApiError, invalid } from "../errors";
 import { ExpenseService } from "../services/expenses";
+import { parsePaymentQuery } from "../services/payment-validation";
 import { parseExpenseQuery, parseId } from "../services/validation";
 import type { Authenticate } from "../../shared/auth/cognito";
 import { sendJson } from "../../shared/utils/http";
@@ -39,7 +40,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
 export function expenseHttpHandler(service: ExpenseService, authenticate: Authenticate) {
   return async (request: IncomingMessage, response: ServerResponse): Promise<boolean> => {
     const url = new URL(request.url ?? "/", "http://localhost");
-    const match = /^\/events\/([^/]+)\/expenses(?:\/([^/]+))?$/.exec(url.pathname);
+    const match = /^\/events\/([^/]+)\/expenses(?:\/([^/]+)(\/payments)?)?$/.exec(url.pathname);
     if (!match) return false;
     // Reserved for commit 6; never interpret 'summary' as an expense ID.
     if (match[2] === "summary") return false;
@@ -47,13 +48,20 @@ export function expenseHttpHandler(service: ExpenseService, authenticate: Authen
       const eventId = parseId(match[1], "eventId", true);
       const expenseId = match[2] === undefined ? undefined : parseId(match[2], "expenseId", true);
       const sub = await authenticate(request.headers.authorization);
-      const allowed = expenseId ? ["GET", "PATCH", "DELETE"] : ["GET", "POST"];
+      const isPayments = match[3] !== undefined;
+      const allowed = isPayments ? ["GET", "POST"] : expenseId ? ["GET", "PATCH", "DELETE"] : ["GET", "POST"];
       if (!allowed.includes(request.method ?? "")) {
         response.setHeader("Allow", allowed.join(", "));
         throw new ApiError(405, "METHOD_NOT_ALLOWED", "Method not allowed.");
       }
-      if (!(request.method === "GET" && !expenseId) && url.searchParams.size) invalid("query", "This endpoint does not accept query parameters.");
-      if (request.method === "GET" && !expenseId) {
+      if (!(request.method === "GET" && (!expenseId || isPayments)) && url.searchParams.size) invalid("query", "This endpoint does not accept query parameters.");
+      if (isPayments && expenseId) {
+        if (request.method === "GET") {
+          sendJson(response, 200, await service.listPayments(eventId, expenseId, sub, parsePaymentQuery(url.searchParams)));
+        } else {
+          sendJson(response, 201, { data: await service.recordPayment(eventId, expenseId, sub, await readJson(request)) });
+        }
+      } else if (request.method === "GET" && !expenseId) {
         sendJson(response, 200, await service.list(eventId, sub, parseExpenseQuery(url.searchParams)));
       } else if (request.method === "GET" && expenseId) {
         sendJson(response, 200, { data: await service.get(eventId, expenseId, sub) });

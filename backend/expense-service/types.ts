@@ -37,7 +37,29 @@ export interface ExpenseTransaction {
   create(eventId: string, input: ExpenseInput): Promise<string>;
   update(eventId: string, expenseId: string, input: ExpenseInput): Promise<void>;
   remove(eventId: string, expenseId: string): Promise<void>;
+  listPayments(eventId: string, expenseId: string, query: PaymentQuery): Promise<{ rows: Payment[]; total: number }>;
+  createPayment(eventId: string, expenseId: string, input: PaymentInput): Promise<Payment>;
 }
 export interface ExpenseRepository {
   transaction<T>(work: (tx: ExpenseTransaction) => Promise<T>): Promise<T>;
+}
+
+export interface PaymentInput {
+  amount: string;
+  paidAt: string;
+  paymentType: "DEPOSIT" | "PAYMENT";
+  notes: string | null;
+}
+export interface Payment {
+  paymentId: string;
+  expenseId: string;
+  amount: string;
+  paidAt: string;
+  paymentType: "DEPOSIT" | "PAYMENT" | "REFUND";
+  notes: string | null;
+  createdAt: string;
+}
+export interface PaymentQuery {
+  limit: number;
+  offset: number;
 }

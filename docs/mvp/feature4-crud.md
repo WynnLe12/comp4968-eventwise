@@ -21,7 +21,7 @@ Membership rows and association rows are held with shared locks; expense mutatio
 
 The current transaction isolation is READ COMMITTED. Count/list reads are scoped to the same event but are not a frozen pagination snapshot across concurrent changes. Refresh if records change during paging.
 
-The local HTTP server reuses the feature service. Lambda packaging is still commit 9. Payment-write/history endpoints are commit 5; category/event summaries are commit 6. `/expenses/summary` is reserved and currently returns 404. Frontend integration is later; this commit does not change the expense screen.
+The local HTTP server reuses the feature service. Lambda packaging is still commit 9. Payment-write/history endpoints are now provided by commit 5 (see [payment checks](feature4-payments.md)); category/event summaries are commit 6. `/expenses/summary` is reserved and currently returns 404. Frontend integration is later; this commit does not change the expense screen.
 
 ## Apply and install
 
@@ -34,7 +34,7 @@ npm --prefix backend test
 ```
 
 The corrected test command remains `npm run build && cd dist && node --test`.
-Expected default result: 15 passing tests. No MySQL or real Cognito account is required for this default suite. Service tests use an in-memory repository; HTTP tests inject an authenticator inside test code. This proves behavior at those boundaries, not live RDS/Cognito integration.
+Expected default result after commit 5: 23 passing tests (15 at commit 4). No MySQL or real Cognito account is required for this default suite. Service tests use an in-memory repository; HTTP tests inject an authenticator inside test code. This proves behavior at those boundaries, not live RDS/Cognito integration.
 
 ## MySQL check (run separately)
 
@@ -101,7 +101,7 @@ Example JSON POST body (choose IDs from the authorized event):
 
 ## Review checklist
 
-- [ ] Default 15 tests, typecheck and build pass.
+- [ ] Current default tests, typecheck and build pass.
 - [ ] db:check succeeds locally.
 - [ ] Commit 3 fixture verification succeeds.
 - [ ] MySQL CRUD integration check passes locally.

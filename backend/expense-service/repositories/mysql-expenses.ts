@@ -1,7 +1,7 @@
-import type { Pool, PoolConnection, RowDataPacket } from "mysql2/promise";
+import type { Pool, PoolConnection, RowDataPacket, ResultSetHeader } from "mysql2/promise";
 import { getDatabasePool } from "../../shared/db/pool";
 import { ApiError, invalid } from "../errors";
-import type { ExpenseInput, ExpenseQuery, ExpenseRepository, ExpenseRow, ExpenseTransaction } from "../types";
+import type { ExpenseInput, ExpenseQuery, ExpenseRepository, ExpenseRow, ExpenseTransaction, Payment, PaymentInput, PaymentQuery } from "../types";
 
 type Row = RowDataPacket & ExpenseRow;
 const joins = `FROM expenses e
@@ -86,6 +86,39 @@ class MySqlExpenseTransaction implements ExpenseTransaction {
     await this.connection.execute(
       "UPDATE expenses SET category_id = ?, vendor_id = ?, description = ?, committed_amount = ?, due_date = ? WHERE event_id = ? AND expense_id = ?",
       [input.categoryId, input.vendorId, input.description, input.committedAmount, input.dueDate, eventId, expenseId]);
+  }
+  async listPayments(eventId: string, expenseId: string, query: PaymentQuery): Promise<{ rows: Payment[]; total: number }> {
+    const scope = "FROM expense_payments p JOIN expenses e ON e.expense_id = p.expense_id WHERE e.event_id = ? AND e.expense_id = ?";
+    const [counts] = await this.connection.execute<RowDataPacket[]>(`SELECT COUNT(*) AS total ${scope}`, [eventId, expenseId]);
+    const total = Number(counts[0]?.total ?? 0);
+    if (!Number.isSafeInteger(total)) throw new ApiError(500, "INTERNAL_ERROR", "Result count exceeds supported range.");
+    const [rows] = await this.connection.query<(RowDataPacket & Payment)[]>(
+      `SELECT CAST(p.payment_id AS CHAR) AS paymentId, CAST(p.expense_id AS CHAR) AS expenseId,
+       p.amount, p.paid_at AS paidAt, p.payment_type AS paymentType, p.notes,
+       DATE_FORMAT(p.created_at, '%Y-%m-%dT%H:%i:%sZ') AS createdAt ${scope}
+       ORDER BY p.paid_at DESC, p.payment_id DESC LIMIT ? OFFSET ?`,
+      [eventId, expenseId, query.limit, query.offset]);
+    return { rows, total };
+  }
+  async createPayment(eventId: string, expenseId: string, input: PaymentInput): Promise<Payment> {
+    // Caller holds the parent expense lock. Scope the INSERT itself as defense in depth.
+    const [inserted] = await this.connection.execute<ResultSetHeader>(
+      `INSERT INTO expense_payments (expense_id, amount, paid_at, payment_type, notes)
+       SELECT expense_id, ?, ?, ?, ? FROM expenses WHERE event_id = ? AND expense_id = ?`,
+      [input.amount, input.paidAt, input.paymentType, input.notes, eventId, expenseId]);
+    if (inserted.affectedRows !== 1) throw new ApiError(404, "NOT_FOUND", "Expense not found.");
+    const [ids] = await this.connection.query<RowDataPacket[]>("SELECT CAST(LAST_INSERT_ID() AS CHAR) AS id");
+    const paymentId = String(ids[0]!.id);
+    const [rows] = await this.connection.execute<(RowDataPacket & Payment)[]>(
+      `SELECT CAST(p.payment_id AS CHAR) AS paymentId, CAST(p.expense_id AS CHAR) AS expenseId,
+       p.amount, p.paid_at AS paidAt, p.payment_type AS paymentType, p.notes,
+       DATE_FORMAT(p.created_at, '%Y-%m-%dT%H:%i:%sZ') AS createdAt
+       FROM expense_payments p JOIN expenses e ON e.expense_id = p.expense_id
+       WHERE e.event_id = ? AND e.expense_id = ? AND p.payment_id = ?`, [eventId, expenseId, paymentId]);
+    const payment = rows[0];
+    if (!payment) throw new ApiError(500, "INTERNAL_ERROR", "Unable to record payment.");
+    await this.connection.execute("UPDATE expenses SET updated_at = CURRENT_TIMESTAMP WHERE event_id = ? AND expense_id = ?", [eventId, expenseId]);
+    return payment;
   }
   async remove(eventId: string, expenseId: string): Promise<void> {
     await this.connection.execute("DELETE FROM expenses WHERE event_id = ? AND expense_id = ?", [eventId, expenseId]);
