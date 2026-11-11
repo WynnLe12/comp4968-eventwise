@@ -1,16 +1,16 @@
 import { useEffect, useState } from "react";
-import { Badge, Button, Card, Icon, Modal } from "../../components/ui";
+import { Button, Card, Icon, Modal } from "../../components/ui";
 import { EmptyState, LoadingState, PageHeader } from "../../components/page";
 import { getEventTemplate, listEventTemplates } from "../../services/eventTemplates";
 import type { EventTemplateDetails } from "../../types/eventTemplates";
 
 // Presentation only: all template names, IDs and budget data come from the API.
-const artwork: Record<string, { art: string; label: string }> = {
-  wedding: { art: "wedding", label: "I DO" },
-  baby_shower: { art: "baby", label: "OH BABY" },
-  birthday: { art: "birthday", label: "PARTY" },
-  corporate: { art: "corporate", label: "TEAM" },
-  other: { art: "corporate", label: "YOUR EVENT" },
+const artwork: Record<string, string> = {
+  wedding: "wedding",
+  baby_shower: "baby",
+  birthday: "birthday",
+  corporate: "corporate",
+  other: "corporate",
 };
 
 function LoadError({ retry }: { retry: () => void }) {
@@ -102,7 +102,7 @@ export function Templates() {
               const art = artwork[template.templateKey] ?? artwork.other;
               return (
                 <Card className="template-card" key={template.templateId}>
-                  <div className={`template-art ${art.art}`}><span>{art.label}</span><Badge>{template.name}</Badge></div>
+                  <div className={`template-art ${art}`}><span>{template.name}</span></div>
                   <div className="template-content">
                     <h3>{template.name}</h3>
                     <div className="template-details">
