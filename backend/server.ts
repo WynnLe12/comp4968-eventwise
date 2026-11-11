@@ -1,4 +1,6 @@
 import { createServer, type Server } from "node:http";
+import { handleTemplates } from "./event-service/handlers/templates";
+import { closePool } from "./shared/db/pool";
 import { sendJson, type ErrorResponse, type HealthResponse } from "./shared/utils/http";
 
 // Local runtime scaffold. Business endpoints belong in the existing service folders.
@@ -8,7 +10,14 @@ export function createAppServer(): Server {
       sendJson<HealthResponse>(response, 200, { status: "ok" });
       return;
     }
-    sendJson<ErrorResponse>(response, 404, { error: "Not found" });
+    void handleTemplates(request.method, request.url?.split("?")[0] ?? "/", response)
+      .then((handled) => {
+        if (!handled) sendJson<ErrorResponse>(response, 404, { error: "Not found" });
+      })
+      .catch((error: unknown) => {
+        console.error("Template request failed", error);
+        sendJson<ErrorResponse>(response, 500, { error: "Internal server error" });
+      });
   });
 }
 
@@ -25,6 +34,6 @@ if (require.main === module) {
   });
   server.listen(port, host, () => console.log(`EventWise backend listening on http://${host}:${port}`));
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.on(signal, () => server.close());
+    process.on(signal, () => server.close(() => { void closePool(); }));
   }
 }
