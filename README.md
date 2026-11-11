@@ -51,10 +51,10 @@ Feature components, routing and mock-data types retain their existing structure.
 The frontend uses ES modules, with Vite producing the browser build.
 
 The backend is a new TypeScript scaffold: no JavaScript backend, framework,
-authentication, database connection or business API existed to migrate. Existing
+authentication, database connection or business API existed to migrate. A shared lazy MySQL pool and environment loader have since been added; event-scoped expense CRUD is now implemented; other business endpoints remain unimplemented. Existing
 service folders are preserved. `backend/server.ts` is a local Node.js HTTP entry
-point with `GET /health` returning `{"status":"ok"}`; other routes return JSON 404
-responses. It uses CommonJS via NodeNext and compiles to `backend/dist`. This local
+point with `GET /health` returning `{"status":"ok"}` and protected expense CRUD routes.
+Unknown routes return JSON 404 responses. It uses CommonJS via NodeNext and compiles to `backend/dist`. This local
 entry point does not replace the planned Lambda deployment architecture.
 
 | Check | Frontend | Backend |
@@ -64,13 +64,16 @@ entry point does not replace the planned Lambda deployment architecture.
 | Production runtime | `npm --prefix frontend/organizer run preview` | `npm --prefix backend start` |
 | Tests | No existing test suite | `npm --prefix backend test` |
 
-Backend tests cover health, unknown routes and unsupported methods. Frontend assets
+Backend tests cover health, expense validation, access checks and HTTP behavior.
+See [Feature 4 CRUD checks](docs/mvp/feature4-crud.md) for the separate MySQL integration check. Frontend assets
 are emitted to `frontend/organizer/dist`. The eventual SPA host must route
 application URLs back to `index.html` for React Router.
 
 Backend environment variables `HOST` and `PORT` default to `127.0.0.1` and `3000`.
-Set variables in your shell or deployment environment; no dotenv loader is
-configured, so copying `.env.example` does not automatically load it into Node.js.
+Copy `.env.example` to repository-root `.env` for local development. The backend
+loads this file from a stable path in both source and compiled runtimes. Existing
+shell/deployment variables take precedence. Missing `.env` is allowed when variables
+are supplied by the deployment environment.
 Use Vite's `VITE_` variables only for public frontend configuration. Never place
 secrets in frontend variables. Environment files and build outputs are ignored.
 
@@ -82,8 +85,8 @@ interactions update local component state only. There are no frontend API calls,
 so business API compatibility cannot be checked until endpoints and integration
 exist. Existing budget rounding and fixed summary indicators remain prototype
 limitations outside this migration. Guest portal and cloud/database directories
-remain scaffolds. The result is a runnable frontend and backend scaffold, not yet
-a completed event-planning backend.
+remain scaffolds. Expense CRUD now has a backend implementation, but the frontend remains a
+prototype and the full event-planning backend is not complete.
 
 ## Development conventions
 
@@ -92,3 +95,29 @@ a completed event-planning backend.
 - Put shared backend authentication and database helpers in `backend/shared/`.
 - Document new API endpoints in `docs/api/` and schema changes through migrations.
 - Add post-MVP features to existing modules where appropriate rather than creating duplicate applications.
+
+## Shared MySQL connection
+
+The backend uses `mysql2/promise` through `backend/shared/db/pool.ts`.
+Use `getDatabasePool()` and parameterized `execute(sql, parameters)` calls in repositories.
+The pool is lazy; `/health` is a liveness check and does not verify database readiness.
+DECIMAL and BIGINT values remain strings. Do not convert money to floating-point
+numbers or IDs to JavaScript Number. SQL DATE values are returned as strings.
+
+For a local connection check, copy `.env.example` to `.env` if it does not already
+exist, run `npm --prefix backend run db:up`, then `npm --prefix backend run db:check`.
+The check executes SELECT 1 and closes its connections; it does not seed, reset or
+modify records. The existing `db:seed` command remains a separate Docker-specific
+local helper and does not use this pool or target RDS. Do not use `db:reset` unless
+wiping the disposable local database is intended.
+
+Configuration: DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME,
+DB_CONNECTION_LIMIT (default 5), DB_CONNECT_TIMEOUT_MS (default 10000), and optional
+DB_SSL_CA_FILE (absolute CA file path). Setting the CA file enables certificate
+verification; a missing/unreadable CA fails rather than falling back to plaintext.
+Local Docker uses no TLS. RDS TLS/secrets/network settings must be supplied by the
+shared deployment. This commit does not configure AWS.
+
+The local server closes the pool on shutdown. A future Lambda adapter should reuse
+the pool across warm invocations rather than close it after each request. Pool size
+must be considered alongside Lambda concurrency and the database connection limit.

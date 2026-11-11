@@ -15,7 +15,8 @@
     "db:up": "docker compose -f ../docker-compose.yml up -d --wait",
     "db:seed": "node ../scripts/db-seed.mjs",
     "db:reset": "docker compose -f ../docker-compose.yml down -v && npm run db:up && npm run db:seed",
-    "db:check": "tsx shared/db/check.ts"
+    "db:check": "tsx shared/db/check.ts",
+    "test:db": "npm run build && node dist/verification/expenses-mysql.js"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
@@ -23,6 +24,7 @@
     "typescript": "^5.7.0"
   },
   "dependencies": {
+    "aws-jwt-verify": "^5.2.1",
     "dotenv": "^18.0.10",
     "mysql2": "^3.24.6"
   }
