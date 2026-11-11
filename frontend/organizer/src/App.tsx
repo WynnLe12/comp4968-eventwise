@@ -7,7 +7,7 @@ import { PublicApp } from "./features/auth/PublicPage";
 import { pagePath } from "./routes/navigation";
 import type { Page, PublicPage } from "./types";
 
-const named = <K extends string>(load: () => Promise<Record<K, React.ComponentType<any>>>, key: K) =>
+const named = <K extends string, P extends object>(load: () => Promise<Record<K, React.ComponentType<P>>>, key: K) =>
   lazy(() => load().then((module) => ({ default: module[key] })));
 
 const Dashboard = named(() => import("./features/dashboard/Dashboard"), "Dashboard");
