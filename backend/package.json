@@ -17,7 +17,8 @@
     "db:reset": "docker compose -f ../docker-compose.yml down -v && npm run db:up && npm run db:seed",
     "db:check": "tsx shared/db/check.ts",
     "test:db": "npm run build && node dist/verification/expenses-mysql.js",
-    "test:payments:db": "npm run build && node dist/verification/payments-mysql.js"
+    "test:payments:db": "npm run build && node dist/verification/payments-mysql.js",
+    "test:summary:db": "npm run build && node dist/verification/summary-mysql.js"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

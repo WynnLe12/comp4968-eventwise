@@ -1,7 +1,7 @@
 import type { Pool, PoolConnection, RowDataPacket, ResultSetHeader } from "mysql2/promise";
 import { getDatabasePool } from "../../shared/db/pool";
 import { ApiError, invalid } from "../errors";
-import type { ExpenseInput, ExpenseQuery, ExpenseRepository, ExpenseRow, ExpenseTransaction, Payment, PaymentInput, PaymentQuery } from "../types";
+import type { ExpenseInput, ExpenseQuery, ExpenseRepository, ExpenseRow, ExpenseTransaction, Payment, PaymentInput, PaymentQuery, SummaryRow } from "../types";
 
 type Row = RowDataPacket & ExpenseRow;
 const joins = `FROM expenses e
@@ -22,6 +22,42 @@ class MySqlExpenseTransaction implements ExpenseTransaction {
     const [rows] = await this.connection.execute<RowDataPacket[]>(
       "SELECT member_id FROM event_members WHERE event_id = ? AND cognito_sub = ? AND role IN ('OWNER','CO_PLANNER') FOR SHARE", [eventId, sub]);
     if (!rows.length) throw new ApiError(403, "FORBIDDEN", "You do not have access to this event.");
+  }
+  async summaryRows(eventId: string, today: string): Promise<SummaryRow[]> {
+    // A single nonlocking SELECT gives all category/event values one consistent snapshot.
+    // Aggregate payments per expense BEFORE aggregating expenses per category.
+    const [rows] = await this.connection.execute<(RowDataPacket & SummaryRow)[]>(`
+      WITH payment_totals AS (
+        SELECT p.expense_id,
+          SUM(CASE WHEN p.payment_type = 'REFUND' THEN -p.amount ELSE p.amount END) AS paid
+        FROM expense_payments p JOIN expenses e ON e.expense_id = p.expense_id
+        WHERE e.event_id = ? GROUP BY p.expense_id
+      ), expense_totals AS (
+        SELECT e.category_id, e.committed_amount, e.due_date, COALESCE(p.paid, 0.00) AS paid,
+          e.committed_amount - COALESCE(p.paid, 0.00) AS outstanding
+        FROM expenses e LEFT JOIN payment_totals p ON p.expense_id = e.expense_id
+        WHERE e.event_id = ?
+      ), category_totals AS (
+        SELECT category_id, SUM(committed_amount) AS committed, SUM(paid) AS paid,
+          SUM(CASE WHEN due_date < ? AND outstanding > 0 THEN outstanding ELSE 0.00 END) AS overdue,
+          SUM(CASE WHEN DATE_FORMAT(due_date, '%Y-%m') = LEFT(?, 7) AND outstanding > 0 THEN outstanding ELSE 0.00 END) AS due_month,
+          COUNT(*) AS expense_count,
+          SUM(CASE WHEN outstanding > 0 THEN 1 ELSE 0 END) AS open_count,
+          SUM(CASE WHEN DATE_FORMAT(due_date, '%Y-%m') = LEFT(?, 7) AND outstanding > 0 THEN 1 ELSE 0 END) AS month_count,
+          SUM(CASE WHEN committed_amount < 0 OR paid < 0 OR paid > committed_amount THEN 1 ELSE 0 END) AS invalid_count
+        FROM expense_totals GROUP BY category_id
+      )
+      SELECT ev.total_budget AS eventBudget, CAST(c.category_id AS CHAR) AS categoryId,
+        c.name AS categoryName, COALESCE(c.planned_amount, 0.00) AS plannedAmount,
+        COALESCE(t.committed, 0.00) AS committedTotal, COALESCE(t.paid, 0.00) AS paidTotal,
+        COALESCE(t.overdue, 0.00) AS overdueTotal, COALESCE(t.due_month, 0.00) AS dueThisMonthTotal,
+        COALESCE(t.expense_count, 0) AS expenseCount, COALESCE(t.open_count, 0) AS openExpenseCount,
+        COALESCE(t.month_count, 0) AS dueThisMonthCount, COALESCE(t.invalid_count, 0) AS invalidCount
+      FROM events ev LEFT JOIN budget_categories c ON c.event_id = ev.event_id
+      LEFT JOIN category_totals t ON t.category_id = c.category_id
+      WHERE ev.event_id = ? ORDER BY c.sort_order, c.category_id`,
+      [eventId, eventId, today, today, today, eventId]);
+    return rows;
   }
   async validateAssociations(eventId: string, input: ExpenseInput): Promise<void> {
     const [categories] = await this.connection.execute<RowDataPacket[]>(

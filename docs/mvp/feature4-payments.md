@@ -56,7 +56,7 @@ npm --prefix backend run typecheck
 npm --prefix backend test
 ```
 
-Expected default suite: **23 passing tests**. No MySQL or real Cognito account is required for the default suite. It checks validation, payment math, history, access control, rollback behavior with an in-memory repository, and HTTP responses. This does not independently prove real database transactions.
+Expected default suite after commit 6: **29 passing tests** (23 at commit 5). No MySQL or real Cognito account is required for the default suite. It checks validation, payment math, history, access control, rollback behavior with an in-memory repository, and HTTP responses. This does not independently prove real database transactions.
 
 Keep Node aligned with the declared repository requirement: >=22.12.0. Passing tests on Node 20 does not remove the npm engine warning or establish full project support for that version. No engine requirement is changed in this commit.
 
@@ -97,6 +97,6 @@ If your fixtures are absent, load 03_expenses_seed.sql using the commit 3 instru
 
 ## Integration boundary
 
-Category/event aggregate endpoints remain commit 6; the service now supplies updated per-expense totals. Payment UI/history and summary refresh remain commits 7-8. Cognito configuration and real event memberships remain shared dependencies from commit 4. Lambda deployment remains commit 9.
+Commit 6 now exposes category/event aggregates (see [summary checks](feature4-summary.md)); payment writes also supply updated per-expense totals. Payment UI/history and summary refresh remain commits 7-8. Cognito configuration and real event memberships remain shared dependencies from commit 4. Lambda deployment remains commit 9.
 
 Trello: Implement deposit and payment recording. Record the automated and real MySQL results, link the commit/PR, and follow the team's review/merge requirement before moving to Done.

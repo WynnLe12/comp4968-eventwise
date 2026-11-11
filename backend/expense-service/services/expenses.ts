@@ -1,3 +1,4 @@
+import { buildExpenseSummary } from "./summary";
 import { ApiError } from "../errors";
 import type { Expense, ExpenseInput, ExpenseQuery, ExpenseRepository, ExpenseRow, PaymentQuery } from "../types";
 import { parsePaymentBody } from "./payment-validation";
@@ -24,6 +25,14 @@ export class ExpenseService {
   private event(value: string, sub: string): void {
     parseId(value, "eventId", true);
     if (!sub) throw new ApiError(401, "UNAUTHENTICATED", "Sign in to continue.");
+  }
+  async summary(eventId: string, sub: string) {
+    this.event(eventId, sub);
+    const today = this.today();
+    return this.repository.transaction(async tx => {
+      await tx.assertMember(eventId, sub);
+      return buildExpenseSummary(eventId, today, await tx.summaryRows(eventId, today));
+    });
   }
   async list(eventId: string, sub: string, query: ExpenseQuery) {
     this.event(eventId, sub);

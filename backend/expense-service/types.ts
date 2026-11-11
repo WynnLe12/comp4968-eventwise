@@ -31,6 +31,7 @@ export interface ExpenseQuery {
 }
 export interface ExpenseTransaction {
   assertMember(eventId: string, sub: string): Promise<void>;
+  summaryRows(eventId: string, today: string): Promise<SummaryRow[]>;
   validateAssociations(eventId: string, input: ExpenseInput): Promise<void>;
   find(eventId: string, expenseId: string, lock?: boolean): Promise<ExpenseRow | null>;
   list(eventId: string, query: ExpenseQuery, today: string): Promise<{ rows: ExpenseRow[]; total: number }>;
@@ -62,4 +63,49 @@ export interface Payment {
 export interface PaymentQuery {
   limit: number;
   offset: number;
+}
+
+// One SQL snapshot row per category; a category-less event returns one null-category row.
+export interface SummaryRow {
+  eventBudget: string;
+  categoryId: string | null;
+  categoryName: string | null;
+  plannedAmount: string;
+  committedTotal: string;
+  paidTotal: string;
+  overdueTotal: string;
+  dueThisMonthTotal: string;
+  expenseCount: string | number;
+  openExpenseCount: string | number;
+  dueThisMonthCount: string | number;
+  invalidCount: string | number;
+}
+export interface CategorySummary {
+  categoryId: string;
+  categoryName: string;
+  plannedAmount: string;
+  committedTotal: string;
+  paidTotal: string;
+  outstandingTotal: string;
+  remainingBudget: string;
+  isOverBudget: boolean;
+  overdueTotal: string;
+}
+export interface ExpenseSummary {
+  eventId: string;
+  asOfDate: string;
+  eventBudget: string;
+  allocatedBudget: string;
+  unallocatedBudget: string;
+  committedTotal: string;
+  paidTotal: string;
+  outstandingTotal: string;
+  remainingBudget: string;
+  isOverBudget: boolean;
+  overdueTotal: string;
+  dueThisMonthTotal: string;
+  expenseCount: number;
+  openExpenseCount: number;
+  dueThisMonthCount: number;
+  categories: CategorySummary[];
 }

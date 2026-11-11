@@ -6,7 +6,7 @@ import { ApiError, invalid } from "../expense-service/errors";
 import { ExpenseService, presentExpense } from "../expense-service/services/expenses";
 import { parsePaymentBody, parsePaymentQuery } from "../expense-service/services/payment-validation";
 import { cents, money, parseExpenseBody, parseExpenseQuery, parseId } from "../expense-service/services/validation";
-import type { ExpenseInput, ExpenseQuery, ExpenseRepository, ExpenseRow, ExpenseTransaction, Payment, PaymentInput, PaymentQuery } from "../expense-service/types";
+import type { ExpenseInput, ExpenseQuery, ExpenseRepository, ExpenseRow, ExpenseTransaction, Payment, PaymentInput, PaymentQuery, SummaryRow } from "../expense-service/types";
 import { createCognitoAuthenticator } from "../shared/auth/cognito";
 
 const input: ExpenseInput = { categoryId: "4001", vendorId: "4001", description: "Venue", committedAmount: "1200.00", dueDate: "2026-11-10" };
@@ -26,6 +26,17 @@ class MemoryRepository implements ExpenseRepository, ExpenseTransaction {
   }
   async assertMember(event: string, sub: string) {
     if (!(event === "400" && ["owner", "planner"].includes(sub))) throw new ApiError(403, "FORBIDDEN", "No access.");
+  }
+  async summaryRows(event: string, today: string): Promise<SummaryRow[]> {
+    const rows = [...this.rows.values()].filter(row => row.eventId === event);
+    const outstanding = (r: ExpenseRow) => cents(r.committedAmount) - cents(r.paidTotal);
+    const sum = (values: bigint[]) => money(values.reduce((a, b) => a + b, 0n));
+    return [{ eventBudget: "2000.00", categoryId: "4001", categoryName: "Venue", plannedAmount: "1000.00",
+      committedTotal: sum(rows.map(r => cents(r.committedAmount))), paidTotal: sum(rows.map(r => cents(r.paidTotal))),
+      overdueTotal: sum(rows.filter(r => r.dueDate !== null && r.dueDate < today && outstanding(r) > 0n).map(outstanding)),
+      dueThisMonthTotal: sum(rows.filter(r => r.dueDate?.slice(0, 7) === today.slice(0, 7) && outstanding(r) > 0n).map(outstanding)),
+      expenseCount: rows.length, openExpenseCount: rows.filter(r => outstanding(r) > 0n).length,
+      dueThisMonthCount: rows.filter(r => r.dueDate?.slice(0, 7) === today.slice(0, 7) && outstanding(r) > 0n).length, invalidCount: 0 }];
   }
   async validateAssociations(event: string, data: ExpenseInput) {
     if (event !== "400" || data.categoryId !== "4001") invalid("categoryId", "Wrong event.");
@@ -121,6 +132,7 @@ test("owner and co-planner can create/get/update/delete, preserving ID strings",
 test("all CRUD operations enforce membership; nested cross-event IDs return 404", async () => {
   const { service } = setup();
   for (const action of [
+    () => service.summary("400", "outsider"),
     () => service.list("400", "outsider", { limit: 50, offset: 0 }),
     () => service.get("400", "4001", "outsider"),
     () => service.create("400", "outsider", input),
@@ -165,7 +177,11 @@ test("HTTP routes return JSON status codes, body limits, pagination and no-conte
   const denied = await fetch(`${base}/events/400/expenses`, { method: "PUT", headers });
   assert.equal(denied.status, 405); assert.equal(denied.headers.get("allow"), "GET, POST");
   assert.equal((await fetch(`${base}/events/400/expenses?limit=0`, { headers })).status, 422);
-  assert.equal((await fetch(`${base}/events/400/expenses/summary`, { headers })).status, 404);
+  assert.equal((await fetch(`${base}/events/400/expenses/summary`, { headers })).status, 200);
+  assert.equal((await fetch(`${base}/events/400/expenses/summary?limit=1`, { headers })).status, 422);
+  const summaryMethod = await fetch(`${base}/events/400/expenses/summary`, { method: "POST", headers });
+  assert.equal(summaryMethod.status, 405); assert.equal(summaryMethod.headers.get("allow"), "GET");
+  assert.equal((await fetch(`${base}/events/400/expenses/summary/payments`, { headers })).status, 404);
   assert.equal((await fetch(`${base}/events/400/expenses`, { method: "POST", headers, body: "{" })).status, 400);
   assert.equal((await fetch(`${base}/events/400/expenses`, { method: "POST", headers: { Authorization: headers.Authorization }, body: "{}" })).status, 415);
   assert.equal((await fetch(`${base}/events/400/expenses`, { method: "POST", headers, body: JSON.stringify({ text: "a".repeat(17000) }) })).status, 413);
@@ -284,4 +300,19 @@ test("payment HTTP endpoints return 201/200 and reject invalid requests and unsu
   assert.equal((await fetch(`${base}?categoryId=4001`, { headers })).status, 422);
   assert.equal((await fetch(`${base}?limit=1`, { method: "POST", headers, body })).status, 422);
   assert.equal((await fetch(base.replace("4001/payments", "4010/payments"), { headers })).status, 404);
+});
+
+
+test("event summary ignores list pagination and updates after expense/payment changes", async () => {
+  const { service } = setup();
+  const original = await service.summary("400", "owner");
+  assert.equal(original.committedTotal, "1200.00");
+  assert.equal(original.paidTotal, "200.00");
+  await service.list("400", "owner", { limit: 1, offset: 99 });
+  assert.deepEqual(await service.summary("400", "planner"), original);
+  const created = await service.create("400", "owner", { ...input, committedAmount: "100.00" });
+  await service.recordPayment("400", created.expenseId, "owner", { amount: "25.00", paidAt: "2026-11-11" });
+  const summary = await service.summary("400", "owner");
+  assert.equal(summary.committedTotal, "1300.00"); assert.equal(summary.paidTotal, "225.00");
+  assert.equal(summary.outstandingTotal, "1075.00"); assert.equal(summary.remainingBudget, "700.00");
 });

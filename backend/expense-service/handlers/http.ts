@@ -42,17 +42,22 @@ export function expenseHttpHandler(service: ExpenseService, authenticate: Authen
     const url = new URL(request.url ?? "/", "http://localhost");
     const match = /^\/events\/([^/]+)\/expenses(?:\/([^/]+)(\/payments)?)?$/.exec(url.pathname);
     if (!match) return false;
-    // Reserved for commit 6; never interpret 'summary' as an expense ID.
-    if (match[2] === "summary") return false;
+    const isSummary = match[2] === "summary";
+    if (isSummary && match[3]) return false;
     try {
       const eventId = parseId(match[1], "eventId", true);
-      const expenseId = match[2] === undefined ? undefined : parseId(match[2], "expenseId", true);
+      const expenseId = (match[2] === undefined || isSummary) ? undefined : parseId(match[2], "expenseId", true);
       const sub = await authenticate(request.headers.authorization);
       const isPayments = match[3] !== undefined;
-      const allowed = isPayments ? ["GET", "POST"] : expenseId ? ["GET", "PATCH", "DELETE"] : ["GET", "POST"];
+      const allowed = isSummary ? ["GET"] : isPayments ? ["GET", "POST"] : expenseId ? ["GET", "PATCH", "DELETE"] : ["GET", "POST"];
       if (!allowed.includes(request.method ?? "")) {
         response.setHeader("Allow", allowed.join(", "));
         throw new ApiError(405, "METHOD_NOT_ALLOWED", "Method not allowed.");
+      }
+      if (isSummary) {
+        if (url.searchParams.size) invalid("query", "Summary covers the whole event and accepts no filters.");
+        sendJson(response, 200, { data: await service.summary(eventId, sub) });
+        return true;
       }
       if (!(request.method === "GET" && (!expenseId || isPayments)) && url.searchParams.size) invalid("query", "This endpoint does not accept query parameters.");
       if (isPayments && expenseId) {
