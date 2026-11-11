@@ -122,9 +122,9 @@ The server applies these on POST and PATCH, using the vendor as it will be saved
 
 **Automatic changes** (applied before checking):
 
-1. Moving to `RESEARCHING` from any other booking status clears `quoteAmount` and `contractTotal`, and sets `contractStatus` to `NOT_STARTED`. This is refused while the contract is `PENDING` or `SIGNED`.
-2. Setting a `quoteAmount` on a `RESEARCHING` vendor (without also changing the booking status) moves it to `QUOTED`.
-3. Setting `contractStatus` to `SIGNED` moves the booking status to `BOOKED`.
+1. Moving to `RESEARCHING` from any other booking status clears `quoteAmount` and `contractTotal`, and sets `contractStatus` to `NOT_STARTED`. This is refused while the contract is `PENDING` or `SIGNED`, unless the same request cancels it (`"contractStatus": "CANCELLED"`). A quote or contract total sent in the same request isn't cleared; it's refused, because Researching vendors can't have one. Send `null` to clear it.
+2. Setting a `quoteAmount` on a `RESEARCHING` vendor moves it to `QUOTED`. This includes a new vendor whose add form sends `"bookingStatus": "RESEARCHING"` with a quote.
+3. Changing `contractStatus` to `SIGNED` moves a `QUOTED` vendor to `BOOKED`. It doesn't apply to Researching or Declined vendors; those get an error instead.
 
 **Combinations that are refused with 422** (field and message):
 
@@ -135,7 +135,10 @@ The server applies these on POST and PATCH, using the vendor as it will be saved
 | Contract total with no contract                             | `contractTotal`  | Add a contract first                                                 |
 | Any contract on a researching vendor                        | `contractStatus` | Researching vendors can't have a contract                            |
 | Pending or signed contract on a declined vendor             | `contractStatus` | Only quoted or booked vendors can have an active contract            |
-| Signed contract on a vendor that isn't booked               | `bookingStatus`  | A vendor with a signed contract is booked. Cancel the contract first |
+| Declining (or un-booking) a vendor with a signed contract   | `bookingStatus`  | A vendor with a signed contract is booked. Cancel the contract first |
+| Declining a vendor with a pending contract                  | `bookingStatus`  | Cancel the contract first                                            |
+
+The error goes under the field the request changed: setting a contract on a declined vendor is a `contractStatus` error, and declining a vendor with a contract is a `bookingStatus` error.
 
 **Field validation** (also 422):
 
@@ -143,6 +146,7 @@ The server applies these on POST and PATCH, using the vendor as it will be saved
 | ------------------------------ | -------------------------------------- | --------------------------------------------------- |
 | `name`                         | Required, not blank                    | Business name is required                           |
 | text fields                    | Within the max length above            | Keep this under N characters                        |
+| text fields                    | A string (not a number, array, …)      | Enter text                                          |
 | `email`                        | Valid format when given                | Enter a valid email address                         |
 | `quoteAmount`, `contractTotal` | 0 to 9999999999.99, at most 2 decimals | Enter an amount of 0 or more, with up to 2 decimals |
 | `bookingStatus`                | One of the 4 values                    | Choose a valid booking status                       |
