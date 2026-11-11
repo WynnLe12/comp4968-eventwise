@@ -55,4 +55,19 @@ Wynn owns authentication/authorization; these routes currently have no auth midd
 consistent with the existing scaffold. Add the agreed auth integration before deployment.
 Feature 1 will consume the selected template ID. Coordinate allocation calculations and
 transactional category initialization with Minh; neither is implemented here.
-The frontend still uses mock templates and needs separate API integration.
+The Templates Tab loads the list and selected template details from these APIs.
+Both requests support loading, error/retry and empty states; requests are cancelled
+when their component unmounts. No event creation or allocation preview is implemented.
+
+Start the backend on port 3000 with DB_* exported, and run `npm run dev` in
+`frontend/organizer`. The Vite development server forwards `/api/*` to
+`http://127.0.0.1:3000/*`; no backend CORS change is required. This proxy is dev-only.
+For hosting, use a same-origin `/api` reverse proxy or build with public
+`VITE_API_BASE_URL` pointing to an API with appropriate CORS. Never put secrets there.
+
+After simulated sign-in, open More → Templates (`/app/templates`). Verify all five
+seeded types and use “View budget defaults” to inspect persisted categories/percentages.
+If the backend is unavailable, expect an error with Retry, not mock fallback data.
+A list response with `templates: []` shows an empty state; details with
+`categories: []` show “No budget defaults yet”. This integration does not apply seeds.
+The existing Create Event and Budget reset dialogs remain separate prototype flows.
