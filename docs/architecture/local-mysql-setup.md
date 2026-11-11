@@ -42,7 +42,7 @@ The database port is bound to `127.0.0.1`, so only your own machine can connect,
    - `db:up` waits until MySQL is healthy. The first run downloads the `mysql:8.0` image and loads [`eventwise_schema.sql`](../../database/mysql/schemas/eventwise_schema.sql), which takes a minute.
    - `db:seed` loads every file in [`database/mysql/seeds/`](../../database/mysql/seeds/).
 
-   The npm scripts don't need `npm install`; they only use Docker and Node. Without npm, use `docker compose up -d` from the repo root, then `docker compose ps` until `STATUS` shows `Up ... (healthy)`.
+   The npm scripts don't need `npm install`. They only use Docker and Node. Without npm, use `docker compose up -d` from the repo root, then `docker compose ps` until `STATUS` shows `Up ... (healthy)`.
 
 3. **Check that it loaded**
 
@@ -56,12 +56,12 @@ The database port is bound to `127.0.0.1`, so only your own machine can connect,
 
 Run these from the `backend/` folder:
 
-| Script | What it does | When to use it |
-| --- | --- | --- |
-| `npm run db:up` | Starts MySQL and waits until it's healthy. On an empty volume, it also loads the schema | Start of a work session |
-| `npm run db:seed` | Loads every `.sql` file in `database/mysql/seeds/`, in name order. Each file clears its own rows first, so this resets the seed data and keeps the tables | After tests or experiments changed the data |
-| `npm run db:seed -- <file> [<file> …]` | Loads only the named seed files | Re-running just your feature's seed |
-| `npm run db:reset` | Deletes the database volume, starts MySQL (schema reloads), then runs `db:seed` | After the schema changes, or when anything is broken |
+| Script                                 | What it does                                                                                                                                              | When to use it                                       |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `npm run db:up`                        | Starts MySQL and waits until it's healthy. On an empty volume, it also loads the schema                                                                   | Start of a work session                              |
+| `npm run db:seed`                      | Loads every `.sql` file in `database/mysql/seeds/`, in name order. Each file clears its own rows first, so this resets the seed data and keeps the tables | After tests or experiments changed the data          |
+| `npm run db:seed -- <file> [<file> …]` | Loads only the named seed files                                                                                                                           | Re-running just your feature's seed                  |
+| `npm run db:reset`                     | Deletes the database volume, starts MySQL (schema reloads), then runs `db:seed`                                                                           | After the schema changes, or when anything is broken |
 
 How they work:
 
@@ -105,10 +105,10 @@ Inside the MySQL shell, try `SHOW TABLES;`, `DESCRIBE vendors;` or `SELECT * FRO
 
 ### What's there now
 
-| File | Owner | Contents |
-| --- | --- | --- |
-| [`01_base_seed.sql`](../../database/mysql/seeds/01_base_seed.sql) | Shared | 2 events, 3 members, 9 budget categories. Stand-ins until Features 1 and 3 have their own seeds |
-| [`02_vendors_seed.sql`](../../database/mysql/seeds/02_vendors_seed.sql) | Feature 5 | 10 vendors, plus the expenses and payments linked to them |
+| File                                                                    | Owner     | Contents                                                                                        |
+| ----------------------------------------------------------------------- | --------- | ----------------------------------------------------------------------------------------------- |
+| [`01_base_seed.sql`](../../database/mysql/seeds/01_base_seed.sql)       | Shared    | 2 events, 3 members, 9 budget categories. Stand-ins until Features 1 and 3 have their own seeds |
+| [`02_vendors_seed.sql`](../../database/mysql/seeds/02_vendors_seed.sql) | Feature 5 | 10 vendors, plus the expenses and payments linked to them                                       |
 
 The data:
 
@@ -116,11 +116,11 @@ The data:
 - **Event 2, Sam's 30th Birthday.** It exists to test that one event can't see another's data.
 - **Fake Cognito users:**
 
-  | User | Role |
-  | --- | --- |
-  | `user-maya` | Owner of event 1 |
-  | `user-eli` | Co-planner of event 1 |
-  | `user-sam` | Owner of event 2 only, so `user-sam` should get a 403 on event 1 |
+  | User        | Role                                                             |
+  | ----------- | ---------------------------------------------------------------- |
+  | `user-maya` | Owner of event 1                                                 |
+  | `user-eli`  | Co-planner of event 1                                            |
+  | `user-sam`  | Owner of event 2 only, so `user-sam` should get a 403 on event 1 |
 
 Each seed file starts with a comment listing what it contains and the results you should expect. For example, `02_vendors_seed.sql` lists every vendor's paid total, balance and next due date.
 
@@ -206,15 +206,15 @@ Then run `npm run db:seed`.
 
 ## Troubleshooting
 
-| Problem                                        | Fix                                                                                                                                                                |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Cannot connect to the Docker daemon`          | Start Docker Desktop, then retry.                                                                                                                                  |
-| `port is already allocated` / port 3307 in use | Something else is on 3307. Find it with `lsof -iTCP:3307 -sTCP:LISTEN` (macOS/Linux). If it's an old `eventwise-mysql` container, run `docker compose down` first. |
-| New or changed tables are missing              | The schema only runs on first start. Run `npm run db:reset`, or `docker compose down -v && docker compose up -d`.                                                  |
-| Status stays `starting` or becomes `unhealthy` | Check `docker compose logs mysql`. An SQL error in the schema file stops the init, so fix the SQL and then reset with `down -v`.                                   |
-| `Access denied for user 'eventwise'`           | Check you're using port **3307** and password `localpass`. If you changed the credentials in `docker-compose.yml`, reset with `down -v` so the user is recreated.  |
-| App can't connect on `localhost`               | Use `127.0.0.1`. Some clients turn `localhost` into a Unix socket connection instead of TCP.                                                                       |
-| `db:seed` says `No such container`             | MySQL isn't running. Run `npm run db:up` first.                                                                                                                     |
+| Problem                                                     | Fix                                                                                                                                                                           |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Cannot connect to the Docker daemon`                       | Start Docker Desktop, then retry.                                                                                                                                             |
+| `port is already allocated` / port 3307 in use              | Something else is on 3307. Find it with `lsof -iTCP:3307 -sTCP:LISTEN` (macOS/Linux). If it's an old `eventwise-mysql` container, run `docker compose down` first.            |
+| New or changed tables are missing                           | The schema only runs on first start. Run `npm run db:reset`, or `docker compose down -v && docker compose up -d`.                                                             |
+| Status stays `starting` or becomes `unhealthy`              | Check `docker compose logs mysql`. An SQL error in the schema file stops the init, so fix the SQL and then reset with `down -v`.                                              |
+| `Access denied for user 'eventwise'`                        | Check you're using port **3307** and password `localpass`. If you changed the credentials in `docker-compose.yml`, reset with `down -v` so the user is recreated.             |
+| App can't connect on `localhost`                            | Use `127.0.0.1`. Some clients turn `localhost` into a Unix socket connection instead of TCP.                                                                                  |
+| `db:seed` says `No such container`                          | MySQL isn't running. Run `npm run db:up` first.                                                                                                                               |
 | Seed fails with `ERROR 1452 … foreign key constraint fails` | A row points to something that doesn't exist yet. Check the file's number puts it after the files it depends on, and that it only uses the base seed's events and categories. |
-| Seed fails with `ERROR 1062 Duplicate entry`   | The file's reset block doesn't delete everything it inserts. Add the missing `DELETE`.                                                                              |
-| Seed fails with `ERROR 3819 Check constraint … is violated` | The seed row breaks a rule in the schema, for example a Researching vendor with a quote. Fix the row.                                                     |
+| Seed fails with `ERROR 1062 Duplicate entry`                | The file's reset block doesn't delete everything it inserts. Add the missing `DELETE`.                                                                                        |
+| Seed fails with `ERROR 3819 Check constraint … is violated` | The seed row breaks a rule in the schema, for example a Researching vendor with a quote. Fix the row.                                                                         |
