@@ -1,3 +1,5 @@
+import "./shared/config/environment";
+import { closeDatabasePool } from "./shared/db/pool";
 import { createServer, type Server } from "node:http";
 import { sendJson, type ErrorResponse, type HealthResponse } from "./shared/utils/http";
 
@@ -25,6 +27,11 @@ if (require.main === module) {
   });
   server.listen(port, host, () => console.log(`EventWise backend listening on http://${host}:${port}`));
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.on(signal, () => server.close());
+    process.on(signal, () => server.close(() => {
+      void closeDatabasePool().catch(() => {
+        console.error("Unable to close database connections cleanly");
+        process.exitCode = 1;
+      });
+    }));
   }
 }
