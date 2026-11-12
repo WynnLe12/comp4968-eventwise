@@ -26,8 +26,8 @@ test("health endpoint returns JSON with an OK status", async () => {
   assert.deepEqual(await response.json(), { status: "ok" });
 });
 
-test("unimplemented business endpoints return 404", async () => {
-  const response = await fetch(`${baseUrl}/events`);
+test("event detail routes remain unimplemented", async () => {
+  const response = await fetch(`${baseUrl}/events/42`);
   assert.equal(response.status, 404);
   assert.deepEqual(await response.json(), { error: "Not found" });
 });

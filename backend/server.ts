@@ -10,13 +10,24 @@ import { verifyToken } from "./shared/auth/verifyToken";
 
 import { createEventHandler, type CreateEventDependencies } from "./event-service/handlers/createEventHandler";
 
-export function createAppServer(eventDependencies: Partial<CreateEventDependencies> = {}): Server {
+import { listEventsHandler, type ListEventsDependencies } from "./event-service/handlers/listEventsHandler";
+
+export function createAppServer(
+  eventDependencies: Partial<CreateEventDependencies> = {},
+  listDependencies: Partial<ListEventsDependencies> = {},
+): Server {
   const handleCreateEvent = createEventHandler(eventDependencies);
+  const handleListEvents = listEventsHandler(listDependencies);
   return createServer((request, response) => {
     const path = request.url?.split("?")[0];
 
     if (request.method === "POST" && path === "/events") {
       void handleCreateEvent(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && path === "/events") {
+      void handleListEvents(request, response);
       return;
     }
 

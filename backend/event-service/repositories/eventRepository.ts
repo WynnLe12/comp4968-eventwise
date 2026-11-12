@@ -16,10 +16,33 @@ export interface EventRecord extends EventInput {
   updated_at: Date;
 }
 
+export interface ListedEvent extends EventRecord {
+  role: "OWNER" | "CO_PLANNER";
+}
+
 export class InvalidTemplateError extends Error {}
 
 export class EventRepository {
   constructor(private readonly pool: Pick<Pool, "getConnection"> = db) {}
+
+  async list(cognitoSub: string): Promise<ListedEvent[]> {
+    const connection = await this.pool.getConnection();
+    try {
+      const [events] = await connection.execute<(RowDataPacket & ListedEvent)[]>(
+        `SELECT CAST(e.event_id AS CHAR) AS event_id, CAST(e.template_id AS CHAR) AS template_id,
+          e.name, DATE_FORMAT(e.event_date, '%Y-%m-%d') AS event_date, e.venue,
+          CAST(e.total_budget AS CHAR) AS total_budget, e.created_at, e.updated_at, m.role
+         FROM events e
+         INNER JOIN event_members m ON m.event_id = e.event_id
+         WHERE m.cognito_sub = ?
+         ORDER BY e.event_date IS NULL, e.event_date, e.event_id`,
+        [cognitoSub],
+      );
+      return events;
+    } finally {
+      connection.release();
+    }
+  }
 
   async create(input: EventInput, cognitoSub: string): Promise<EventRecord> {
     const connection = await this.pool.getConnection();

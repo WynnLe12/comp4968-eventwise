@@ -1,4 +1,4 @@
-import { EventRepository, InvalidTemplateError, type EventInput, type EventRecord } from "../repositories/eventRepository";
+import { EventRepository, InvalidTemplateError, type EventInput, type EventRecord, type ListedEvent } from "../repositories/eventRepository";
 
 export class EventValidationError extends Error {}
 
@@ -52,7 +52,13 @@ export function validateEventInput(body: unknown): EventInput {
 }
 
 export class EventService {
-  constructor(private readonly repository: Pick<EventRepository, "create"> = new EventRepository()) {}
+  constructor(private readonly repository: Pick<EventRepository, "create"> & Partial<Pick<EventRepository, "list">> = new EventRepository()) {}
+
+  async list(cognitoSub: string): Promise<ListedEvent[]> {
+    if (!cognitoSub || cognitoSub.length > 128) throw new Error("Verified Cognito identity is required");
+    if (!this.repository.list) throw new Error("Event listing repository is not configured");
+    return this.repository.list(cognitoSub);
+  }
 
   async create(body: unknown, cognitoSub: string): Promise<EventRecord> {
     if (!cognitoSub || cognitoSub.length > 128) throw new Error("Verified Cognito identity is required");
