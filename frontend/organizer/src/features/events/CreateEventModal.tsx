@@ -57,7 +57,7 @@ export function CreateEventModal({ onClose }: { onClose: () => void }) {
     <Modal title="Create a new event" onClose={onClose} footer={
       <>
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
-        <button className="btn btn-primary" type="submit" form={formId} disabled aria-describedby={`${formId}-status`}>Create event</button>
+        <button className="btn btn-primary" type="submit" form={formId} disabled>Create event</button>
       </>
     }>
       <form id={formId} onSubmit={event => event.preventDefault()}>
@@ -83,14 +83,12 @@ export function CreateEventModal({ onClose }: { onClose: () => void }) {
         </label>
         <label className="field"><span>Total budget</span>
           <input name="totalBudget" inputMode="decimal" required value={draft.totalBudget}
-            onChange={event => update("totalBudget", event.target.value)} placeholder="0.00" aria-describedby={`${formId}-budget-help`} />
+            onChange={event => update("totalBudget", event.target.value)} placeholder="0.00" />
         </label>
-        <p id={`${formId}-budget-help`} className="modal-copy">Enter a non-negative amount with up to two decimal places (maximum 9,999,999,999.99).</p>
         {draft.totalBudget !== "" && allocateBudget(draft.totalBudget, [{ templateCategoryId: "validation", defaultPercentage: "100" }]) === null
           && <p role="alert">Enter a valid budget, for example 2000.00.</p>}
         <section aria-label="Budget allocation preview" aria-live="polite">
-          <h3>Budget allocation preview</h3>
-          {!draft.templateId ? <p>Select an event type to see its budget categories.</p>
+          {!draft.templateId ? <p className="modal-copy">Select an event type to see its budget categories.</p>
             : detailErrorId === draft.templateId ? <div role="alert"><p>Couldn't load budget defaults.</p><Button variant="secondary" onClick={() => setDetailAttempt(value => value + 1)}>Retry budget defaults</Button></div>
             : !template ? <p role="status">Loading budget defaults...</p>
             : !validDefaults ? <p role="alert">Budget defaults are unavailable or do not total 100%. Please try another event type.</p>
@@ -105,7 +103,6 @@ export function CreateEventModal({ onClose }: { onClose: () => void }) {
               </table></div>
             </>}
         </section>
-        <p id={`${formId}-status`} className="modal-copy" role="status">You can preview your budget now. Creating events is not available yet.</p>
       </form>
     </Modal>
   );
