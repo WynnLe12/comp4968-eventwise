@@ -1,9 +1,10 @@
+import { CreateEventModal } from "../features/events/CreateEventModal";
 import type { ReactNode } from "react";
 import { Button, Field, Icon, Modal } from "./ui";
 
 export type ModalName = "template" | "expense" | "vendor" | "guest" | "event";
 
-type FormModal = Exclude<ModalName, "template">;
+type FormModal = Exclude<ModalName, "template" | "event">;
 
 const forms: Record<FormModal, { title: string; body: ReactNode; saved: string }> = {
   expense: {
@@ -78,29 +79,7 @@ const forms: Record<FormModal, { title: string; body: ReactNode; saved: string }
       </>
     ),
   },
-  event: {
-    title: "Create a new event",
-    saved: "Event created",
-    body: (
-      <>
-        <Field label="Event name" placeholder="e.g. Maya’s Birthday Dinner" />
-        <div className="form-row">
-          <Field label="Event type" placeholder="Select event type" />
-          <Field label="Event date" type="date" />
-        </div>
-        <Field label="Venue or location" placeholder="You can add this later" />
-        <Field label="Total budget" placeholder="$0.00" />
-        <label className="template-choice">
-          <Icon name="spark" />
-          <div>
-            <b>Start with a smart template</b>
-            <span>We’ll suggest a budget, tasks, and timeline based on your event type.</span>
-          </div>
-          <input type="checkbox" defaultChecked />
-        </label>
-      </>
-    ),
-  },
+
 };
 
 export function AppModal({
@@ -113,6 +92,7 @@ export function AppModal({
   onSaved: (message: string) => void;
 }) {
   if (!modal) return null;
+  if (modal === "event") return <CreateEventModal onClose={onClose} />;
 
   if (modal === "template") {
     return (
@@ -154,7 +134,7 @@ export function AppModal({
             Cancel
           </Button>
           <Button onClick={() => onSaved(saved)}>
-            {modal === "event" ? "Create event" : "Save"}
+            Save
           </Button>
         </>
       }
