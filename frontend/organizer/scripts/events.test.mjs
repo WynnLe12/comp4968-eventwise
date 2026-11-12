@@ -139,6 +139,7 @@ async function withListHook(run) {
       "aws-amplify/utils": { Hub: { listen: (channel, listener) => {
         assert.equal(channel, "auth"); onAuth = listener; return () => { unsubscribed = true; };
       } } },
+      "./hooks/useEventDetails": { useEventDetails: () => ({}) },
       "./services/eventApi": { EventSessionError, listEvents: (signal) => new Promise((resolve, reject) => requests.push({ resolve, reject, signal })) },
     });
     const render = () => {
@@ -261,7 +262,7 @@ const page = {
 const presentation = loadModule("../src/features/events/eventPresentation.ts", {});
 
 test("the existing switcher and profile show the selected event's name and actual role", () => {
-  let state = { events: [first, second], selectedEvent: second, status: "ready", selectEvent: () => {} };
+  let state = { events: [first, second], selectedEvent: second, eventDetails: second, detailsStatus: "ready", status: "ready", selectEvent: () => {} };
   const layout = loadModule("../src/components/layout.tsx", {
     react: React, "react/jsx-runtime": jsxRuntime,
     "../routes/navigation": { navGroups: [] }, "./ui": ui,
@@ -278,7 +279,7 @@ test("the existing switcher and profile show the selected event's name and actua
   const topbar = renderToStaticMarkup(React.createElement(layout.Topbar, { toggleMenu: () => {}, goAlerts: () => {}, exit: () => {} }));
   assert.match(topbar, /Signed-in user/);
   assert.match(topbar, /Co-planner/);
-  state = { ...state, events: [], selectedEvent: null, status: "empty" };
+  state = { ...state, events: [], selectedEvent: null, eventDetails: null, status: "empty" };
   const empty = renderToStaticMarkup(React.createElement(layout.Sidebar, { page: "dashboard", setPage: () => {}, open: false, close: () => {} }));
   assert.match(empty, /No events/);
   assert.match(empty, /disabled/);
@@ -286,7 +287,7 @@ test("the existing switcher and profile show the selected event's name and actua
 });
 
 test("event workspace renders loading, empty, retry, and unavailable states instead of mock feature data", () => {
-  let state = { status: "loading", error: "", refresh: () => {} };
+  let state = { status: "loading", detailsStatus: "ready", error: "", refresh: () => {} };
   const api = loadModule("../src/features/events/EventWorkspace.tsx", {
     "react/jsx-runtime": jsxRuntime,
     "../../components/page": page, "../../components/ui": ui,
@@ -523,4 +524,218 @@ test("the reused create modal starts blank, uses a real submit form, and display
   submission = { ...submission, loading: false, created: true, error: "Your event was created. Retry loading." };
   assert.match(render(), /Retry loading event/);
   assert.match(render(), /role="alert"/);
+});
+
+
+test("detail API requests the selected BIGINT ID with the access token and parses the single-event response", async () => {
+  const controller = new AbortController();
+  await withApi(async (url, options) => {
+    assert.equal(url, `/api/events/${first.event_id}`);
+    assert.equal(options.method, undefined);
+    assert.deepEqual(options.headers, { Authorization: "Bearer access-token-a" });
+    assert.equal(options.signal, controller.signal);
+    return Response.json({ ...first, template_id: "7", role: "CO_PLANNER", cognito_sub: "not-exposed" });
+  }, async (api) => {
+    assert.deepEqual(await api.getEventDetails(first.event_id, controller.signal), {
+      userId: "user-a", event: { ...first, template_id: "7", role: "CO_PLANNER" },
+    });
+  });
+});
+
+test("detail API maps 401, 403, 404 and server failures without exposing response internals", async () => {
+  for (const status of [401, 403, 404, 500]) {
+    await withApi(async () => Response.json({ error: "private SQL details" }, { status }), async (api) => {
+      await assert.rejects(api.getEventDetails("1"), (error) => {
+        assert.doesNotMatch(error.message, /private/);
+        if (status === 401) return error instanceof api.EventSessionError;
+        return error instanceof api.EventDetailsError && error.status === status;
+      });
+    });
+  }
+});
+
+test("detail API rejects invalid IDs, unexpected response envelopes, and mismatched events", async () => {
+  await withApi(async () => { assert.fail("fetch must not run"); }, async (api) => {
+    for (const id of ["0", "-1", "1.5", "18446744073709551616", "1/2"]) await assert.rejects(api.getEventDetails(id), api.EventDetailsError);
+  });
+  for (const body of [{ event: first }, [first], second, { ...first, role: "ADMIN" }]) {
+    await withApi(async () => Response.json(body), async (api) => { await assert.rejects(api.getEventDetails(first.event_id)); });
+  }
+  await withApi(async () => Response.json(first), async (api) => {
+    await assert.rejects(api.getEventDetails(first.event_id), /account changed/);
+  }, { getCurrentUser: async () => ({ userId: "user-b" }) });
+});
+
+async function withDetailsHook(run) {
+  const states = [];
+  const refs = [];
+  const effects = [];
+  const callbacks = [];
+  let stateIndex = 0, refIndex = 0, effectIndex = 0, callbackIndex = 0;
+  const scheduled = [];
+  const requests = [];
+  let onAuth;
+  let expired = 0;
+  let eventId = first.event_id;
+  let userId = "user-a";
+  class EventSessionError extends Error {}
+  class EventDetailsError extends Error {
+    constructor(status, message) { super(message); this.status = status; }
+  }
+  const api = loadModule("../src/features/events/hooks/useEventDetails.ts", {
+    react: {
+      useState: (initial) => {
+        const index = stateIndex++;
+        if (!(index in states)) states[index] = initial;
+        return [states[index], (value) => { states[index] = typeof value === "function" ? value(states[index]) : value; }];
+      },
+      useRef: (initial) => { const index = refIndex++; refs[index] ??= { current: initial }; return refs[index]; },
+      useCallback: (callback, deps) => {
+        const index = callbackIndex++;
+        if (!callbacks[index] || deps.some((dep, i) => dep !== callbacks[index].deps[i])) callbacks[index] = { callback, deps };
+        return callbacks[index].callback;
+      },
+      useEffect: (callback, deps) => {
+        const index = effectIndex++;
+        if (!effects[index] || deps.some((dep, i) => dep !== effects[index].deps[i])) scheduled.push(() => {
+          effects[index]?.cleanup?.(); effects[index] = { deps, cleanup: callback() };
+        });
+      },
+    },
+    "aws-amplify/utils": { Hub: { listen: (_channel, listener) => { onAuth = listener; return () => {}; } } },
+    "../services/eventApi": {
+      EventSessionError, EventDetailsError,
+      getEventDetails: (id, signal) => new Promise((resolve, reject) => requests.push({ id, signal, resolve, reject })),
+    },
+  });
+  const render = () => {
+    stateIndex = 0; refIndex = 0; effectIndex = 0; callbackIndex = 0;
+    const result = api.useEventDetails(eventId, userId, () => { expired++; });
+    while (scheduled.length) scheduled.shift()();
+    return result;
+  };
+  const cleanup = () => { for (const effect of effects) effect?.cleanup?.(); };
+  try {
+    render();
+    await run({ render, requests, cleanup, EventDetailsError, EventSessionError,
+      select: (id, user = userId) => { eventId = id; userId = user; },
+      settle: () => new Promise((resolve) => setImmediate(resolve)),
+      auth: (event) => onAuth({ payload: { event } }), expired: () => expired,
+    });
+  } finally { cleanup(); }
+}
+
+test("event details load and switching clears previous data before the next effect completes", async () => {
+  await withDetailsHook(async ({ render, requests, select, settle }) => {
+    assert.equal(render().detailsStatus, "loading");
+    requests[0].resolve({ userId: "user-a", event: first });
+    await settle();
+    assert.deepEqual(render().eventDetails, first);
+    select(second.event_id);
+    assert.equal(render().eventDetails, null);
+    assert.ok(requests[0].signal.aborted);
+    assert.equal(requests[1].id, second.event_id);
+    requests[1].resolve({ userId: "user-a", event: second });
+    await settle();
+    assert.deepEqual(render().eventDetails, second);
+  });
+});
+
+test("late responses and failures from a previous selected event cannot overwrite the current details", async () => {
+  await withDetailsHook(async ({ render, requests, select, settle }) => {
+    select(second.event_id);
+    render();
+    requests[1].resolve({ userId: "user-a", event: second });
+    await settle();
+    requests[0].resolve({ userId: "user-a", event: first });
+    await settle();
+    assert.deepEqual(render().eventDetails, second);
+    render().reloadDetails(); render();
+    select(first.event_id); render();
+    requests[3].resolve({ userId: "user-a", event: first });
+    await settle();
+    requests[2].reject(new Error("late old request"));
+    await settle();
+    assert.deepEqual(render().eventDetails, first);
+  });
+});
+
+test("detail authorization errors clear event data and support retry while 401 notifies authentication", async () => {
+  await withDetailsHook(async ({ render, requests, settle, EventDetailsError, EventSessionError, expired }) => {
+    requests[0].reject(new EventDetailsError(403, "You no longer have access"));
+    await settle();
+    assert.equal(render().detailsErrorStatus, 403);
+    assert.equal(render().eventDetails, null);
+    render().reloadDetails(); render();
+    requests[1].reject(new EventDetailsError(404, "Event no longer exists"));
+    await settle();
+    assert.equal(render().detailsErrorStatus, 404);
+    render().reloadDetails(); render();
+    requests[2].resolve({ userId: "user-a", event: first });
+    await settle();
+    assert.deepEqual(render().eventDetails, first);
+    render().reloadDetails(); render();
+    requests[3].reject(new EventSessionError("Please sign in"));
+    await settle();
+    assert.equal(render().eventDetails, null);
+    assert.equal(expired(), 1);
+  });
+});
+
+test("logout, account switching, and cleanup discard in-flight detail responses", async () => {
+  await withDetailsHook(async ({ render, requests, select, settle, auth, cleanup }) => {
+    auth("signedOut");
+    assert.ok(requests[0].signal.aborted);
+    requests[0].resolve({ userId: "user-a", event: first });
+    await settle();
+    assert.equal(render().eventDetails, null);
+    select(first.event_id, "user-b"); render();
+    requests[1].resolve({ userId: "user-b", event: { ...first, role: "CO_PLANNER" } });
+    await settle();
+    assert.equal(render().eventDetails.role, "CO_PLANNER");
+    select(null, null);
+    assert.equal(render().eventDetails, null);
+    assert.equal(render().detailsStatus, "idle");
+    select(second.event_id, "user-b"); render();
+    cleanup();
+    requests[2].resolve({ userId: "user-b", event: second });
+    await settle();
+    assert.equal(render().eventDetails, null);
+  });
+});
+
+test("the dashboard uses detail data and available template ID without fabricating statistics", () => {
+  const detailed = { ...first, name: "Detail response name", template_id: "7", total_budget: "456.78", venue: "Detail venue", role: "CO_PLANNER" };
+  const api = loadModule("../src/features/dashboard/Dashboard.tsx", {
+    "react/jsx-runtime": jsxRuntime, "../../components/ui": ui, "../../components/page": page,
+    "../events/EventsContext": { useEvents: () => ({ selectedEvent: second, eventDetails: detailed, openCreate: () => {} }) },
+    "../events/eventPresentation": presentation,
+  });
+  const html = renderToStaticMarkup(React.createElement(api.Dashboard, { go: () => {} }));
+  assert.match(html, /Detail response name/);
+  assert.match(html, /Detail venue/);
+  assert.match(html, /456.78/);
+  assert.match(html, /Template ID: 7/);
+  assert.match(html, /Co-planner/);
+  assert.doesNotMatch(html, /Second event|35000|120 guests|68%/);
+  assert.match(html, /Spending information is not available/);
+});
+
+
+test("detail loading and authorization errors hide dashboard content but keep event switching accessible", () => {
+  let state = { status: "ready", detailsStatus: "loading", detailsError: "", detailsErrorStatus: null, refresh: () => {}, reloadDetails: () => {} };
+  const api = loadModule("../src/features/events/EventWorkspace.tsx", {
+    "react/jsx-runtime": jsxRuntime, "../../components/page": page, "../../components/ui": ui,
+    "./EventsContext": { useEvents: () => state },
+  });
+  const render = (currentPage = "dashboard") => renderToStaticMarkup(React.createElement(api.EventWorkspace, { page: currentPage }, "EVENT CONTENT"));
+  assert.match(render(), /Loading event details/);
+  assert.doesNotMatch(render(), /EVENT CONTENT/);
+  for (const status of [403, 404]) {
+    state = { ...state, detailsStatus: "error", detailsErrorStatus: status, detailsError: "Select another event or refresh your events." };
+    assert.match(render(), /Refresh events/);
+    assert.match(render(), /role="alert"/);
+    assert.doesNotMatch(render(), /EVENT CONTENT/);
+    assert.match(render("events"), /EVENT CONTENT/);
+  }
 });

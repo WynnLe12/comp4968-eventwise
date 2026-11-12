@@ -5,7 +5,7 @@ import { eventDate, eventInitials, eventRole } from "../events/eventPresentation
 import type { Page } from "../../types";
 
 export function Dashboard({ go }: { go: (p: Page) => void }) {
-  const { selectedEvent, openCreate } = useEvents();
+  const { eventDetails: selectedEvent, openCreate } = useEvents();
   if (!selectedEvent) return null;
   return (
     <>
@@ -15,7 +15,7 @@ export function Dashboard({ go }: { go: (p: Page) => void }) {
           <div className="eyebrow">YOUR EVENT</div>
           <h2>{selectedEvent.name}</h2>
           <p>{selectedEvent.venue ?? "Venue not set"} / {eventDate(selectedEvent.event_date)}</p>
-          <div className="banner-meta"><span>{eventRole(selectedEvent.role)}</span></div>
+          <div className="banner-meta"><span>{eventRole(selectedEvent.role)}</span><span>{selectedEvent.template_id ? `Template ID: ${selectedEvent.template_id}` : "No template"}</span></div>
         </div>
         <div className="banner-art"><i /><i /><i /><span>{eventInitials(selectedEvent.name)}</span></div>
       </div>

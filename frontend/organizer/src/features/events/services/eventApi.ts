@@ -13,6 +13,18 @@ export interface OrganizerEvent {
 }
 
 export class EventSessionError extends Error {}
+export class EventDetailsError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
+
+async function authenticatedEventRequest() {
+  let identity: Awaited<ReturnType<typeof requireAuthSession>>;
+  try { identity = await requireAuthSession(); }
+  catch { throw new EventSessionError("Your session has expired. Please sign in again."); }
+  const token = identity.session.tokens?.accessToken;
+  if (!token) throw new EventSessionError("Please sign in again.");
+  return { ...identity, token };
+}
 
 export type CreatedEvent = Omit<OrganizerEvent, "role">;
 export interface CreateEventResult { userId: string; event: CreatedEvent }
@@ -84,11 +96,8 @@ export function parseEvents(body: unknown): OrganizerEvent[] {
 
 export async function createEvent(body: unknown, signal?: AbortSignal): Promise<CreateEventResult> {
   const payload = validateCreateEvent(body);
-  let identity: Awaited<ReturnType<typeof requireAuthSession>>;
-  try { identity = await requireAuthSession(); }
-  catch { throw new EventSessionError("Your session has expired. Please sign in again."); }
-  const token = identity.session.tokens?.accessToken;
-  if (!token) throw new EventSessionError("Please sign in again.");
+  const identity = await authenticatedEventRequest();
+  const { token } = identity;
   const response = await fetch("/api/events", {
     method: "POST", signal,
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token.toString()}` },
@@ -109,14 +118,8 @@ export async function createEvent(body: unknown, signal?: AbortSignal): Promise<
 }
 
 export async function listEvents(signal?: AbortSignal): Promise<{ userId: string; events: OrganizerEvent[] }> {
-  let identity: Awaited<ReturnType<typeof requireAuthSession>>;
-  try {
-    identity = await requireAuthSession();
-  } catch {
-    throw new EventSessionError("Your session has expired. Please sign in again.");
-  }
-  const token = identity.session.tokens?.accessToken;
-  if (!token) throw new EventSessionError("Please sign in again.");
+  const identity = await authenticatedEventRequest();
+  const { token } = identity;
   const response = await fetch("/api/events", {
     headers: { Authorization: `Bearer ${token.toString()}` }, signal,
   });
@@ -127,4 +130,25 @@ export async function listEvents(signal?: AbortSignal): Promise<{ userId: string
   const current = await getCurrentUser().catch(() => { throw new EventSessionError("Please sign in again."); });
   if (current.userId !== identity.user.userId) throw new Error("Your account changed. Please reload your events.");
   return { userId: current.userId, events };
+}
+
+
+export async function getEventDetails(eventId: string, signal?: AbortSignal): Promise<{ userId: string; event: OrganizerEvent }> {
+  if (typeof eventId !== "string" || !/^[0-9]+$/.test(eventId)) throw new EventDetailsError(400, "Select a valid event.");
+  const id = eventId.replace(/^0+/, "");
+  if (!id || id.length > 20 || BigInt(id) > 18446744073709551615n) throw new EventDetailsError(400, "Select a valid event.");
+  const identity = await authenticatedEventRequest();
+  const response = await fetch(`/api/events/${id}`, {
+    headers: { Authorization: `Bearer ${identity.token.toString()}` }, signal,
+  });
+  if (response.status === 401) throw new EventSessionError("Your session has expired. Please sign in again.");
+  if (response.status === 403) throw new EventDetailsError(403, "You no longer have access to this event. Select another event or refresh your event list.");
+  if (response.status === 404) throw new EventDetailsError(404, "This event no longer exists. Select another event or refresh your event list.");
+  if (!response.ok) throw new EventDetailsError(response.status, "Unable to load event details. Please try again.");
+  // GET by ID returns a single event with the requesting user's membership role.
+  const event = parseEvents([await response.json()])[0];
+  if (event.event_id !== id) throw new EventDetailsError(502, "Unable to load event details. Please try again.");
+  const current = await getCurrentUser().catch(() => { throw new EventSessionError("Please sign in again."); });
+  if (current.userId !== identity.user.userId) throw new EventDetailsError(409, "Your account changed. Please reload your events.");
+  return { userId: current.userId, event };
 }

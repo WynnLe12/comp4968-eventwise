@@ -2,8 +2,10 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { Hub } from "aws-amplify/utils";
 import { EventSessionError, listEvents, type OrganizerEvent } from "./services/eventApi";
 
-type EventState = { events: OrganizerEvent[]; selectedId: string | null; status: "loading" | "ready" | "empty" | "error"; error: string };
-const initialState: EventState = { events: [], selectedId: null, status: "loading", error: "" };
+import { useEventDetails } from "./hooks/useEventDetails";
+
+type EventState = { userId: string | null; events: OrganizerEvent[]; selectedId: string | null; status: "loading" | "ready" | "empty" | "error"; error: string };
+const initialState: EventState = { userId: null, events: [], selectedId: null, status: "loading", error: "" };
 
 export function useEventList(onSessionExpired: () => void) {
   const [state, setState] = useState<EventState>(initialState);
@@ -30,7 +32,7 @@ export function useEventList(onSessionExpired: () => void) {
       const previousId = preferredId ?? (selection.current?.userId === result.userId ? selection.current.id : null);
       const id = result.events.find((event) => event.event_id === previousId)?.event_id ?? result.events[0]?.event_id ?? null;
       selection.current = { userId: result.userId, id };
-      setState({ events: result.events, selectedId: id, status: result.events.length ? "ready" : "empty", error: "" });
+      setState({ userId: result.userId, events: result.events, selectedId: id, status: result.events.length ? "ready" : "empty", error: "" });
       return !preferred || (preferred.userId === result.userId && id === preferred.id);
     } catch (error) {
       if (current !== version.current) return false;
@@ -67,10 +69,11 @@ export function useEventList(onSessionExpired: () => void) {
   return { expireSession: () => sessionExpired.current(), ...state, selectedEvent: state.events.find((event) => event.event_id === state.selectedId) ?? null, selectEvent, refresh };
 }
 
-const EventsContext = createContext<(ReturnType<typeof useEventList> & { openCreate: () => void }) | null>(null);
+const EventsContext = createContext<(ReturnType<typeof useEventList> & ReturnType<typeof useEventDetails> & { openCreate: () => void }) | null>(null);
 export function EventsProvider({ children, onSessionExpired, onCreate }: { children: ReactNode; onSessionExpired: () => void; onCreate: () => void }) {
   const events = useEventList(onSessionExpired);
-  return <EventsContext.Provider value={{ ...events, openCreate: onCreate }}>{children}</EventsContext.Provider>;
+  const details = useEventDetails(events.selectedId, events.userId, onSessionExpired);
+  return <EventsContext.Provider value={{ ...events, ...details, openCreate: onCreate }}>{children}</EventsContext.Provider>;
 }
 export function useEvents() {
   const events = useContext(EventsContext);

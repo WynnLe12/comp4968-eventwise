@@ -32,7 +32,7 @@ export function Sidebar({
   open: boolean;
   close: () => void;
 }) {
-  const { events, selectedEvent, status, selectEvent } = useEvents();
+  const { events, selectedEvent, status, selectEvent, eventDetails, detailsStatus } = useEvents();
   return (
     <>
       {open && <div className="mobile-overlay" onClick={close} />}
@@ -44,15 +44,15 @@ export function Sidebar({
           </button>
         </div>
         <div className="event-switcher">
-          <div className="event-thumb">{selectedEvent ? eventInitials(selectedEvent.name) : "?"}</div>
+          <div className="event-thumb">{selectedEvent ? eventInitials(eventDetails?.name ?? selectedEvent.name) : "?"}</div>
           <div>
             <label htmlFor="current-event"><small>Current event</small></label>
             <select id="current-event" value={selectedEvent?.event_id ?? ""} disabled={status !== "ready"}
               onChange={(event) => selectEvent(event.target.value)}>
               {!selectedEvent && <option value="">{status === "loading" ? "Loading events..." : status === "error" ? "Events unavailable" : "No events"}</option>}
-              {events.map((event) => <option key={event.event_id} value={event.event_id}>{event.name}</option>)}
+              {events.map((event) => <option key={event.event_id} value={event.event_id}>{event.event_id === eventDetails?.event_id ? eventDetails.name : event.name}</option>)}
             </select>
-            <span>{selectedEvent ? eventRole(selectedEvent.role) : "No event selected"}</span>
+            <span>{eventDetails ? eventRole(eventDetails.role) : selectedEvent ? detailsStatus === "loading" ? "Loading role..." : "Event unavailable" : "No event selected"}</span>
           </div>
           <Icon name="down" size={15} />
         </div>
@@ -107,16 +107,16 @@ export function Topbar({
 }) {
   const [profileOpen, setProfileOpen] = useState(false);
   const { profile, loading } = useUserProfile();
-  const { selectedEvent } = useEvents();
+  const { selectedEvent, eventDetails, detailsStatus } = useEvents();
   return (
     <header className="topbar">
       <button className="menu-button" onClick={toggleMenu} aria-label="Open menu">
         <Icon name="menu" />
       </button>
       <div className="top-event">
-        <span>{selectedEvent?.name ?? "No event selected"}</span>
+        <span>{eventDetails?.name ?? (selectedEvent ? detailsStatus === "loading" ? "Loading event..." : "Event unavailable" : "No event selected")}</span>
         <i />
-        <b>{selectedEvent ? eventDate(selectedEvent.event_date) : ""}</b>
+        <b>{eventDetails ? eventDate(eventDetails.event_date) : ""}</b>
       </div>
       <div className="top-actions">
         <button className="search-button">
@@ -133,7 +133,7 @@ export function Topbar({
             <span>{loading ? "..." : profile?.initials ?? "?"}</span>
             <div>
               <b>{loading ? "Loading..." : profile?.displayName ?? "Account"}</b>
-              <small>{selectedEvent ? eventRole(selectedEvent.role) : "No event selected"}</small>
+              <small>{eventDetails ? eventRole(eventDetails.role) : selectedEvent ? detailsStatus === "loading" ? "Loading role..." : "Event unavailable" : "No event selected"}</small>
             </div>
             <Icon name="down" size={14} />
           </button>
