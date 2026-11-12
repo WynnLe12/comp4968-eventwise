@@ -25,7 +25,7 @@ function service(auth = {}, authConfigurationError = "") {
   });
 }
 
-const operations = ["signUp", "confirmSignUp", "resendSignUpCode", "signIn", "confirmSignIn", "signOut", "getCurrentUser", "fetchAuthSession", "resetPassword", "confirmResetPassword"];
+const operations = ["signUp", "confirmSignUp", "resendSignUpCode", "signIn", "confirmSignIn", "signOut", "getCurrentUser", "fetchUserAttributes", "fetchAuthSession", "resetPassword", "confirmResetPassword"];
 
 test("service forwards Amplify inputs and preserves next-step results", async () => {
   for (const name of operations) {
@@ -34,7 +34,7 @@ test("service forwards Amplify inputs and preserves next-step results", async ()
     let calls = 0;
     const api = service({ [name]: async (...args) => {
       calls++;
-      assert.deepEqual(args, ["signOut", "getCurrentUser", "fetchAuthSession"].includes(name) ? [] : [input]);
+      assert.deepEqual(args, ["signOut", "getCurrentUser", "fetchUserAttributes", "fetchAuthSession"].includes(name) ? [] : [input]);
       return output;
     } });
     assert.equal(await api[name](input), output);
@@ -102,4 +102,106 @@ test("valid configuration uses the pool region and public client ID", () => {
   const result = configuration({ VITE_AWS_REGION: "us-west-2", VITE_COGNITO_USER_POOL_ID: "us-west-2_example", VITE_COGNITO_CLIENT_ID: "example" });
   assert.equal(result.authConfigurationError, "");
   assert.deepEqual(result.calls, [{ Auth: { Cognito: { userPoolId: "us-west-2_example", userPoolClientId: "example" } } }]);
+});
+
+
+test("profile uses given/family names first, then the full name attribute", () => {
+  const api = service();
+  assert.deepEqual(api.formatUserProfile({ given_name: "  Alex ", family_name: " Rivera ", name: "Other name", email: "alex@example.com" }, "username"), { displayName: "Alex Rivera", initials: "AR" });
+  assert.deepEqual(api.formatUserProfile({ name: "  Alex Morgan Rivera  " }, "username"), { displayName: "Alex Morgan Rivera", initials: "AR" });
+  assert.deepEqual(api.formatUserProfile({ given_name: "Alex" }, "username"), { displayName: "Alex", initials: "A" });
+  assert.deepEqual(api.formatUserProfile({ given_name: "Alex", name: "Alex Rivera" }, "username"), { displayName: "Alex Rivera", initials: "AR" });
+});
+
+test("profile falls back to email or Cognito username and handles whitespace", () => {
+  const api = service();
+  assert.deepEqual(api.formatUserProfile({ given_name: " ", family_name: "", name: " ", email: "alex.rivera@example.com" }, "username"), { displayName: "alex.rivera@example.com", initials: "AR" });
+  assert.deepEqual(api.formatUserProfile({}, "alex"), { displayName: "alex", initials: "A" });
+  assert.deepEqual(api.formatUserProfile({}, ""), { displayName: "Account", initials: "A" });
+});
+
+test("profile loads attributes through Amplify for the current signed-in user", async () => {
+  const api = service({
+    getCurrentUser: async () => ({ username: "cognito-username", signInDetails: { loginId: "alex@example.com" } }),
+    fetchUserAttributes: async () => ({ given_name: "Alex", family_name: "Rivera" }),
+  });
+  assert.deepEqual(await api.getUserProfile(), { displayName: "Alex Rivera", initials: "AR" });
+  const fallback = service({ getCurrentUser: async () => ({ username: "cognito-username" }), fetchUserAttributes: async () => ({}) });
+  assert.deepEqual(await fallback.getUserProfile(), { displayName: "cognito-username", initials: "CU" });
+});
+
+test("profile failures propagate to the UI's neutral fallback", async () => {
+  const failure = new Error("Unable to fetch attributes");
+  const api = service({ getCurrentUser: async () => ({ username: "alex" }), fetchUserAttributes: async () => { throw failure; } });
+  await assert.rejects(api.getUserProfile(), (error) => error === failure);
+  const signedOut = service({ getCurrentUser: async () => { throw failure; } });
+  await assert.rejects(signedOut.getUserProfile(), (error) => error === failure);
+});
+
+
+test("profile lifecycle clears on logout/switching and ignores stale or unmounted requests", async () => {
+  const previousWindow = globalThis.window;
+  const values = [];
+  const requests = [];
+  let effect;
+  let onAuth;
+  let onFocus;
+  let unsubscribed = false;
+  globalThis.window = {
+    addEventListener: (event, callback) => { assert.equal(event, "focus"); onFocus = callback; },
+    removeEventListener: (event, callback) => { assert.equal(event, "focus"); assert.equal(callback, onFocus); },
+  };
+  try {
+    const api = loadModule("../src/features/auth/hooks/useUserProfile.ts", {
+      react: {
+        useState: (initial) => {
+          const index = values.length;
+          values.push(initial);
+          return [initial, (next) => { values[index] = next; }];
+        },
+        useEffect: (callback) => { effect = callback; },
+      },
+      "aws-amplify/utils": { Hub: { listen: (channel, callback) => {
+        assert.equal(channel, "auth"); onAuth = callback;
+        return () => { unsubscribed = true; };
+      } } },
+      "../services/authService": { getUserProfile: () => new Promise((resolve, reject) => { requests.push({ resolve, reject }); }) },
+    });
+    api.useUserProfile();
+    const cleanup = effect();
+    const settle = () => new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(values, [null, true]);
+    onAuth({ payload: { event: "signedOut" } });
+    requests[0].resolve({ displayName: "Old user", initials: "OU" });
+    await settle();
+    assert.deepEqual(values, [null, false]);
+
+    onAuth({ payload: { event: "signedIn" } });
+    const current = { displayName: "Current user", initials: "CU" };
+    requests[1].resolve(current);
+    await settle();
+    assert.deepEqual(values, [current, false]);
+
+    onAuth({ payload: { event: "signedIn" } });
+    assert.deepEqual(values, [null, true]);
+    requests[2].reject(new Error("Authentication failed"));
+    await settle();
+    assert.deepEqual(values, [null, false]);
+
+    onFocus();
+    requests[3].resolve(current);
+    await settle();
+    onAuth({ payload: { event: "tokenRefresh_failure" } });
+    assert.deepEqual(values, [null, false]);
+
+    onAuth({ payload: { event: "signedIn" } });
+    cleanup();
+    requests[4].resolve({ displayName: "Late user", initials: "LU" });
+    await settle();
+    assert.equal(values[0], null);
+    assert.ok(unsubscribed);
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  }
 });

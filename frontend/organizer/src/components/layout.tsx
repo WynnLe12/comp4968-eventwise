@@ -2,6 +2,7 @@ import { useState } from "react";
 import { navGroups } from "../routes/navigation";
 import type { Page } from "../types";
 import { Icon } from "./ui";
+import { useUserProfile } from "../features/auth/hooks/useUserProfile";
 
 export function Brand() {
   return (
@@ -104,6 +105,7 @@ export function Topbar({
   exit: () => void;
 }) {
   const [profileOpen, setProfileOpen] = useState(false);
+  const { profile, loading } = useUserProfile();
   return (
     <header className="topbar">
       <button className="menu-button" onClick={toggleMenu} aria-label="Open menu">
@@ -126,9 +128,9 @@ export function Topbar({
         </button>
         <div className="profile-wrap">
           <button className="profile" onClick={() => setProfileOpen(!profileOpen)}>
-            <span>MB</span>
+            <span>{loading ? "..." : profile?.initials ?? "?"}</span>
             <div>
-              <b>Maya Bennett</b>
+              <b>{loading ? "Loading..." : profile?.displayName ?? "Account"}</b>
               <small>Owner</small>
             </div>
             <Icon name="down" size={14} />

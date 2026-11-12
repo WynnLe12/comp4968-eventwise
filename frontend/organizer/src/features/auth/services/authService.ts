@@ -36,6 +36,37 @@ export async function getCurrentUser() {
   requireConfiguration();
   return auth.getCurrentUser();
 }
+export async function fetchUserAttributes() {
+  requireConfiguration();
+  return auth.fetchUserAttributes();
+}
+
+export interface UserProfile {
+  displayName: string;
+  initials: string;
+}
+
+export function formatUserProfile(
+  attributes: { given_name?: string; family_name?: string; name?: string; email?: string },
+  username: string,
+): UserProfile {
+  const parts = [attributes.given_name?.trim(), attributes.family_name?.trim()].filter(Boolean);
+  const fullName = parts.length === 2 ? parts.join(" ") : attributes.name?.trim() || parts.join(" ");
+  const displayName = fullName || attributes.email?.trim() || username.trim() || "Account";
+  const initialWords = fullName
+    ? fullName.split(/\s+/)
+    : displayName.split("@")[0].split(/[\s._+-]+/).filter(Boolean);
+  const first = Array.from(initialWords[0] ?? "")[0] ?? "?";
+  const last = initialWords.length > 1 ? Array.from(initialWords[initialWords.length - 1])[0] : "";
+  return { displayName, initials: `${first}${last}`.toLocaleUpperCase() };
+}
+
+export async function getUserProfile(): Promise<UserProfile> {
+  const user = await getCurrentUser();
+  const attributes = await fetchUserAttributes();
+  return formatUserProfile(attributes, user.signInDetails?.loginId || user.username);
+}
+
 export async function fetchAuthSession() {
   requireConfiguration();
   return auth.fetchAuthSession();
