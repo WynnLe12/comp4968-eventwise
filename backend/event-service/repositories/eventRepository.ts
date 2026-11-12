@@ -20,10 +20,34 @@ export interface ListedEvent extends EventRecord {
   role: "OWNER" | "CO_PLANNER";
 }
 
+export interface EventWithMembership extends EventRecord {
+  role: ListedEvent["role"] | null;
+}
+
 export class InvalidTemplateError extends Error {}
 
 export class EventRepository {
   constructor(private readonly pool: Pick<Pool, "getConnection"> = db) {}
+
+  async getById(eventId: string, cognitoSub: string): Promise<EventWithMembership | undefined> {
+    const connection = await this.pool.getConnection();
+    try {
+      // A left join distinguishes a missing event from an existing event without access.
+      // Only the requesting user's membership can be joined.
+      const [events] = await connection.execute<(RowDataPacket & EventWithMembership)[]>(
+        `SELECT CAST(e.event_id AS CHAR) AS event_id, CAST(e.template_id AS CHAR) AS template_id,
+          e.name, DATE_FORMAT(e.event_date, '%Y-%m-%d') AS event_date, e.venue,
+          CAST(e.total_budget AS CHAR) AS total_budget, e.created_at, e.updated_at, m.role
+         FROM events e
+         LEFT JOIN event_members m ON m.event_id = e.event_id AND m.cognito_sub = ?
+         WHERE e.event_id = ?`,
+        [cognitoSub, eventId],
+      );
+      return events[0];
+    } finally {
+      connection.release();
+    }
+  }
 
   async list(cognitoSub: string): Promise<ListedEvent[]> {
     const connection = await this.pool.getConnection();

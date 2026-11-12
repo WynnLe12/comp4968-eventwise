@@ -1,6 +1,19 @@
 import { EventRepository, InvalidTemplateError, type EventInput, type EventRecord, type ListedEvent } from "../repositories/eventRepository";
 
 export class EventValidationError extends Error {}
+export class EventNotFoundError extends Error {}
+export class EventAccessDeniedError extends Error {}
+
+export function validateEventId(eventId: unknown): string {
+  if (typeof eventId !== "string" || !/^[0-9]+$/.test(eventId)) {
+    throw new EventValidationError("eventId must be a positive unsigned BIGINT");
+  }
+  const normalized = eventId.replace(/^0+/, "");
+  if (!normalized || normalized.length > 20 || BigInt(normalized) > 18446744073709551615n) {
+    throw new EventValidationError("eventId must be between 1 and 18446744073709551615");
+  }
+  return normalized;
+}
 
 function invalid(message: string): never {
   throw new EventValidationError(message);
@@ -52,7 +65,19 @@ export function validateEventInput(body: unknown): EventInput {
 }
 
 export class EventService {
-  constructor(private readonly repository: Pick<EventRepository, "create"> & Partial<Pick<EventRepository, "list">> = new EventRepository()) {}
+  constructor(private readonly repository: Pick<EventRepository, "create"> & Partial<Pick<EventRepository, "list" | "getById">> = new EventRepository()) {}
+
+  async getById(eventId: string, cognitoSub: string): Promise<ListedEvent> {
+    if (!cognitoSub || cognitoSub.length > 128) throw new Error("Verified Cognito identity is required");
+    const id = validateEventId(eventId);
+    if (!this.repository.getById) throw new Error("Event detail repository is not configured");
+    const event = await this.repository.getById(id, cognitoSub);
+    if (!event) throw new EventNotFoundError("Event not found");
+    if (event.role !== "OWNER" && event.role !== "CO_PLANNER") {
+      throw new EventAccessDeniedError("You do not have access to this event");
+    }
+    return { ...event, role: event.role };
+  }
 
   async list(cognitoSub: string): Promise<ListedEvent[]> {
     if (!cognitoSub || cognitoSub.length > 128) throw new Error("Verified Cognito identity is required");

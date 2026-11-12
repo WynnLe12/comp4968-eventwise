@@ -1,6 +1,6 @@
 # Events API
 
-`POST /events` and `GET /events` are implemented. Existing health and auth routes are preserved.
+`POST /events`, `GET /events`, and `GET /events/:eventId` are implemented. Existing health and auth routes are preserved.
 
 The handler verifies a Cognito **access** token using the shared verifier. The service validates input; the repository owns parameterized SQL and a transaction containing both inserts. Ownership always comes from the verified token's `sub`.
 
@@ -26,7 +26,7 @@ Expect HTTP 201 and the created event directly, including `event_id`, timestamps
 
 Only `name` is required. `template_id`, `event_date`, and `venue` default to null; `total_budget` defaults to zero. A provided template must exist. Name/venue limits are 150/255 characters. Budget accepts a number or decimal string, between 0 and 9999999999.99, with at most two fractional digits. Dates must be real calendar dates between years 1000 and 9999. Unknown fields, including identity and ownership fields, are rejected.
 
-Check negative cases: omit the Authorization header, use an invalid/expired token (401), supply an empty name or negative budget (400), supply a nonexistent template (400), malformed JSON (400), or a non-JSON content type (415). Oversized bodies return 413. Unexpected database failures return a generic 500 and roll back the transaction. Event detail, PATCH, and DELETE routes remain unimplemented.
+Check negative cases: omit the Authorization header, use an invalid/expired token (401), supply an empty name or negative budget (400), supply a nonexistent template (400), malformed JSON (400), or a non-JSON content type (415). Oversized bodies return 413. Unexpected database failures return a generic 500 and roll back the transaction. PATCH and DELETE routes remain unimplemented.
 
 ## List events
 
@@ -38,7 +38,20 @@ Invoke-RestMethod -Method Get -Uri 'http://127.0.0.1:3000/events' -Headers @{ Au
 
 Expect HTTP 200 with a direct array of event objects, each containing your `role` (`OWNER` or `CO_PLANNER`). Only your memberships are returned; identity query parameters are ignored. Dates and amounts use the same representation as creation. Events sort by date ascending, undated events last, then event ID for ties. No memberships returns `[]`.
 
-To test isolation, create separate events while signed in as two different users, then list using each user's access token. Each must see only their own memberships. A co-planner membership added to an existing event should expose that event with `CO_PLANNER` to that user and `OWNER` to its owner. Missing/invalid/expired access tokens return 401; database failures return a generic 500. No detail or editing endpoint is added.
+To test isolation, create separate events while signed in as two different users, then list using each user's access token. Each must see only their own memberships. A co-planner membership added to an existing event should expose that event with `CO_PLANNER` to that user and `OWNER` to its owner. Missing/invalid/expired access tokens return 401; database failures return a generic 500. Editing endpoints remain unimplemented.
+
+## Get event by ID
+
+Use an event ID returned by creation or listing, keeping it as a string:
+
+```powershell
+$eventId = '42'
+Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:3000/events/$eventId" -Headers @{ Authorization = "Bearer $env:ACCESS_TOKEN" }
+```
+
+Expect HTTP 200 with a single event object and your `role` (`OWNER` or `CO_PLANNER`). Response fields and string representations match listing. No other user's membership fields are included. User IDs in query parameters or the body cannot grant access.
+
+Verify with an owner's token and a co-planner's token (200), then an unrelated user's token for that same event (403). Use a confirmed nonexistent event ID for 404. IDs must be positive decimal integers up to `18446744073709551615`; invalid IDs such as `0`, `-1`, `1.5`, or `18446744073709551616` return 400. Leading zeros are normalized. Missing/invalid/expired tokens return 401 before ID validation, and unexpected database failures return a generic 500. PATCH and DELETE remain unimplemented.
 
 ## Automated tests
 
@@ -52,8 +65,8 @@ The default suite mocks successful token verification and database connections; 
 
 ```powershell
 $env:EVENTWISE_MYSQL_TEST = '1'
-node --env-file=.env --test dist/tests/createEvent.mysql.test.js dist/tests/listEvents.mysql.test.js
+node --env-file=.env --test dist/tests/createEvent.mysql.test.js dist/tests/listEvents.mysql.test.js dist/tests/getEvent.mysql.test.js
 Remove-Item Env:EVENTWISE_MYSQL_TEST
 ```
 
-These confirm creation, rollback after a membership constraint failure, and listing isolation and roles for two users with private and shared events. No schema changes or AWS infrastructure are needed.
+These confirm creation, rollback after a membership constraint failure, listing isolation and roles for two users with private and shared events, and detail access for owners/co-planners versus unrelated users or nonexistent events. No schema changes or AWS infrastructure are needed.
