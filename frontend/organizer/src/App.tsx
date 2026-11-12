@@ -6,7 +6,7 @@ import { AppModal, type ModalName } from "./components/AppModal";
 import { Sidebar, Topbar } from "./components/layout";
 import { LoadingState } from "./components/page";
 import { PublicApp } from "./features/auth/PublicPage";
-import { EventsProvider } from "./features/events/EventsContext";
+import { EventsProvider, useEvents } from "./features/events/EventsContext";
 import { EventWorkspace } from "./features/events/EventWorkspace";
 import { pagePath } from "./routes/navigation";
 import type { Page, PublicPage } from "./types";
@@ -53,8 +53,23 @@ function PublicRoute({ page, authenticated, onAuthenticated }: {
   );
 }
 
+function WorkspaceCreateEvent({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { refresh, expireSession } = useEvents();
+  const navigate = useNavigate();
+  return <AppModal modal={open ? "event" : null} onClose={onClose} onSaved={onClose}
+    onEventSessionExpired={expireSession}
+    onEventCreated={async ({ userId, event }) => {
+      const loaded = await refresh({ userId, id: event.event_id });
+      if (loaded) navigate("/app/dashboard");
+      return loaded;
+    }} />;
+}
+
 function WorkspaceLayout({ onSignOut, onSessionExpired }: { onSignOut: () => void; onSessionExpired: () => void }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const openCreate = useCallback(() => setCreateOpen(true), []);
+  const closeCreate = useCallback(() => setCreateOpen(false), []);
   const location = useLocation();
   const navigate = useNavigate();
   const currentPage = (location.pathname.split("/").at(-1) || "dashboard") as Page;
@@ -62,7 +77,7 @@ function WorkspaceLayout({ onSignOut, onSessionExpired }: { onSignOut: () => voi
   const goToPage = (page: Page) => navigate(pagePath(page));
 
   return (
-    <EventsProvider onSessionExpired={onSessionExpired}>
+    <EventsProvider onSessionExpired={onSessionExpired} onCreate={openCreate}>
       <div className="app-shell">
         <Sidebar
           page={currentPage}
@@ -83,6 +98,7 @@ function WorkspaceLayout({ onSignOut, onSessionExpired }: { onSignOut: () => voi
           </main>
         </div>
       </div>
+      <WorkspaceCreateEvent open={createOpen} onClose={closeCreate} />
     </EventsProvider>
   );
 }

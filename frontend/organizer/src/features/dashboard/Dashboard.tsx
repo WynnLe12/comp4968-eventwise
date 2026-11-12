@@ -5,11 +5,11 @@ import { eventDate, eventInitials, eventRole } from "../events/eventPresentation
 import type { Page } from "../../types";
 
 export function Dashboard({ go }: { go: (p: Page) => void }) {
-  const { selectedEvent } = useEvents();
+  const { selectedEvent, openCreate } = useEvents();
   if (!selectedEvent) return null;
   return (
     <>
-      <PageHeader page="dashboard" action={<Button onClick={() => go("events")} icon="grid">View events</Button>} />
+      <PageHeader page="dashboard" action={<><Button variant="secondary" onClick={() => go("events")} icon="grid">View events</Button><Button onClick={openCreate} icon="plus">Create event</Button></>} />
       <div className="dashboard-banner">
         <div>
           <div className="eyebrow">YOUR EVENT</div>

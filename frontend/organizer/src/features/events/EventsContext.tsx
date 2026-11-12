@@ -17,7 +17,7 @@ export function useEventList(onSessionExpired: () => void) {
     selection.current = null;
     setState({ ...initialState, status: "empty" });
   }, []);
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (preferred?: { userId: string; id: string }): Promise<boolean> => {
     const current = ++version.current;
     pending.current?.abort();
     const controller = new AbortController();
@@ -25,17 +25,20 @@ export function useEventList(onSessionExpired: () => void) {
     setState(initialState);
     try {
       const result = await listEvents(controller.signal);
-      if (current !== version.current) return;
-      const previousId = selection.current?.userId === result.userId ? selection.current.id : null;
+      if (current !== version.current) return false;
+      const preferredId = preferred?.userId === result.userId ? preferred.id : null;
+      const previousId = preferredId ?? (selection.current?.userId === result.userId ? selection.current.id : null);
       const id = result.events.find((event) => event.event_id === previousId)?.event_id ?? result.events[0]?.event_id ?? null;
       selection.current = { userId: result.userId, id };
       setState({ events: result.events, selectedId: id, status: result.events.length ? "ready" : "empty", error: "" });
+      return !preferred || (preferred.userId === result.userId && id === preferred.id);
     } catch (error) {
-      if (current !== version.current) return;
+      if (current !== version.current) return false;
       selection.current = null;
       setState({ ...initialState, status: "error", error: error instanceof EventSessionError
         ? error.message : "Unable to load your events. Please try again." });
       if (error instanceof EventSessionError) sessionExpired.current();
+      return false;
     }
   }, []);
   useEffect(() => {
@@ -61,13 +64,13 @@ export function useEventList(onSessionExpired: () => void) {
     if (selection.current) selection.current.id = id;
     setState((previous) => ({ ...previous, selectedId: id }));
   };
-  return { ...state, selectedEvent: state.events.find((event) => event.event_id === state.selectedId) ?? null, selectEvent, refresh };
+  return { expireSession: () => sessionExpired.current(), ...state, selectedEvent: state.events.find((event) => event.event_id === state.selectedId) ?? null, selectEvent, refresh };
 }
 
-const EventsContext = createContext<ReturnType<typeof useEventList> | null>(null);
-export function EventsProvider({ children, onSessionExpired }: { children: ReactNode; onSessionExpired: () => void }) {
+const EventsContext = createContext<(ReturnType<typeof useEventList> & { openCreate: () => void }) | null>(null);
+export function EventsProvider({ children, onSessionExpired, onCreate }: { children: ReactNode; onSessionExpired: () => void; onCreate: () => void }) {
   const events = useEventList(onSessionExpired);
-  return <EventsContext.Provider value={events}>{children}</EventsContext.Provider>;
+  return <EventsContext.Provider value={{ ...events, openCreate: onCreate }}>{children}</EventsContext.Provider>;
 }
 export function useEvents() {
   const events = useContext(EventsContext);

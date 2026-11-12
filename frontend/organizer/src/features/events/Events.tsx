@@ -5,10 +5,10 @@ import { useEvents } from "./EventsContext";
 import { eventDate, eventInitials, eventRole } from "./eventPresentation";
 
 export function Events({ go }: { go: (p: Page) => void }) {
-  const { events, selectedEvent, selectEvent } = useEvents();
+  const { events, selectedEvent, selectEvent, openCreate } = useEvents();
   return (
     <>
-      <PageHeader page="events" />
+      <PageHeader page="events" action={<Button onClick={openCreate} icon="plus">Create event</Button>} />
       <div className="events-grid">
         {events.map((event) => (
           <Card key={event.event_id} className={`event-card${selectedEvent?.event_id === event.event_id ? " current" : ""}`}>
@@ -31,6 +31,10 @@ export function Events({ go }: { go: (p: Page) => void }) {
             </div>
           </Card>
         ))}
+        <button className="new-event-card" onClick={openCreate}>
+          <span><Icon name="plus" size={24} /></span><b>Create a new event</b>
+          <small>Start from a template or from scratch</small>
+        </button>
       </div>
     </>
   );
