@@ -134,9 +134,9 @@ export async function listEvents(signal?: AbortSignal): Promise<{ userId: string
 
 
 export async function getEventDetails(eventId: string, signal?: AbortSignal): Promise<{ userId: string; event: OrganizerEvent }> {
-  if (typeof eventId !== "string" || !/^[0-9]+$/.test(eventId)) throw new EventDetailsError(400, "Select a valid event.");
-  const id = eventId.replace(/^0+/, "");
-  if (!id || id.length > 20 || BigInt(id) > 18446744073709551615n) throw new EventDetailsError(400, "Select a valid event.");
+  let id: string;
+  try { id = requestEventId(eventId); }
+  catch { throw new EventDetailsError(400, "Select a valid event."); }
   const identity = await authenticatedEventRequest();
   const response = await fetch(`/api/events/${id}`, {
     headers: { Authorization: `Bearer ${identity.token.toString()}` }, signal,
@@ -150,5 +150,78 @@ export async function getEventDetails(eventId: string, signal?: AbortSignal): Pr
   if (event.event_id !== id) throw new EventDetailsError(502, "Unable to load event details. Please try again.");
   const current = await getCurrentUser().catch(() => { throw new EventSessionError("Please sign in again."); });
   if (current.userId !== identity.user.userId) throw new EventDetailsError(409, "Your account changed. Please reload your events.");
+  return { userId: current.userId, event };
+}
+
+
+function requestEventId(eventId: string): string {
+  if (typeof eventId !== "string" || !/^[0-9]+$/.test(eventId)) throw new EventValidationError("Select a valid event.");
+  const id = eventId.replace(/^0+/, "");
+  if (!id || id.length > 20 || BigInt(id) > 18446744073709551615n) throw new EventValidationError("Select a valid event.");
+  return id;
+}
+
+export type EventPatch = Partial<CreateEventInput>;
+export type EventEditDraft = Record<keyof CreateEventInput, string>;
+export interface UpdateEventResult { userId: string; event: OrganizerEvent }
+export class EventUpdateError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
+
+export function eventEditDraft(event: OrganizerEvent): EventEditDraft {
+  return { name: event.name, template_id: event.template_id ?? "", event_date: event.event_date ?? "", venue: event.venue ?? "", total_budget: event.total_budget };
+}
+
+export function validateEventPatch(body: unknown): EventPatch {
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new EventValidationError("Enter the event details to update.");
+  const fields = body as Record<string, unknown>;
+  const keys = Object.keys(fields);
+  if (!keys.length) throw new EventValidationError("No changes to save.");
+  if (keys.some((key) => fields[key] === undefined)) throw new EventValidationError("Enter a value for each changed field.");
+  const validated = validateCreateEvent({ name: "Event", ...fields });
+  return Object.fromEntries(keys.map((key) => [key, validated[key as keyof CreateEventInput]]));
+}
+
+export function buildEventPatch(original: OrganizerEvent, draft: EventEditDraft): EventPatch {
+  const initial = eventEditDraft(original);
+  const changed: Record<string, string | null> = {};
+  for (const field of ["name", "template_id", "event_date", "venue", "total_budget"] as const) {
+    if (draft[field] === initial[field]) continue;
+    const value = draft[field].trim();
+    changed[field] = ["template_id", "event_date", "venue"].includes(field) && !value ? null : value;
+  }
+  if (!Object.keys(changed).length) return {};
+  const validated = validateEventPatch(changed);
+  // Differences in whitespace or decimal formatting alone do not require a write.
+  const decimal = (value: string) => { const [whole, fraction = ""] = value.split("."); return `${whole}.${fraction.padEnd(2, "0")}`; };
+  return Object.fromEntries(Object.entries(validated).filter(([field, value]) => field === "total_budget"
+    ? decimal(value as string) !== decimal(original.total_budget)
+    : value !== original[field as keyof CreateEventInput]));
+}
+
+export async function updateEvent(eventId: string, body: unknown, signal?: AbortSignal, expectedUserId?: string): Promise<UpdateEventResult> {
+  const id = requestEventId(eventId);
+  const payload = validateEventPatch(body);
+  const identity = await authenticatedEventRequest();
+  if (expectedUserId && identity.user.userId !== expectedUserId) throw new EventUpdateError(409, "Your account changed. Please reload your events.");
+  const response = await fetch(`/api/events/${id}`, {
+    method: "PATCH", signal,
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${identity.token.toString()}` },
+    body: JSON.stringify(payload),
+  });
+  if (response.status === 401) throw new EventSessionError("Your session has expired. Please sign in again.");
+  if (response.status === 403) throw new EventUpdateError(403, "Only the current event owner can save changes. Close the editor and refresh your events.");
+  if (response.status === 404) throw new EventUpdateError(404, "This event no longer exists. Close the editor and refresh your events.");
+  if (response.status === 400) {
+    const error = await response.json().catch(() => null) as { error?: string } | null;
+    throw new EventUpdateError(400, error?.error === "template_id does not exist"
+      ? "That template does not exist. Check its ID or clear the template field."
+      : "Check your changed event details and try again.");
+  }
+  if (!response.ok) throw new EventUpdateError(response.status, "Unable to save your event. Please try again.");
+  const event = parseEvents([await response.json()])[0];
+  if (event.event_id !== id) throw new EventUpdateError(502, "Unable to confirm the saved event. Refresh your events before retrying.");
+  const current = await getCurrentUser().catch(() => { throw new EventSessionError("Please sign in again."); });
+  if (current.userId !== identity.user.userId) throw new EventUpdateError(409, "Your account changed. Please reload your events.");
   return { userId: current.userId, event };
 }

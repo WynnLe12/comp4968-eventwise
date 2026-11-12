@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { Hub } from "aws-amplify/utils";
 import { EventSessionError, listEvents, type OrganizerEvent } from "./services/eventApi";
 
+import { EditEventModal } from "./components/EditEventModal";
 import { useEventDetails } from "./hooks/useEventDetails";
 
 type EventState = { userId: string | null; events: OrganizerEvent[]; selectedId: string | null; status: "loading" | "ready" | "empty" | "error"; error: string };
@@ -66,14 +67,37 @@ export function useEventList(onSessionExpired: () => void) {
     if (selection.current) selection.current.id = id;
     setState((previous) => ({ ...previous, selectedId: id }));
   };
-  return { expireSession: () => sessionExpired.current(), ...state, selectedEvent: state.events.find((event) => event.event_id === state.selectedId) ?? null, selectEvent, refresh };
+  const isCurrentEvent = useCallback((userId: string, id: string) => selection.current?.userId === userId && selection.current.id === id, []);
+  return { isCurrentEvent, expireSession: () => sessionExpired.current(), ...state, selectedEvent: state.events.find((event) => event.event_id === state.selectedId) ?? null, selectEvent, refresh };
 }
 
-const EventsContext = createContext<(ReturnType<typeof useEventList> & ReturnType<typeof useEventDetails> & { openCreate: () => void }) | null>(null);
+const EventsContext = createContext<(ReturnType<typeof useEventList> & ReturnType<typeof useEventDetails> & { openCreate: () => void; openEdit: () => void }) | null>(null);
 export function EventsProvider({ children, onSessionExpired, onCreate }: { children: ReactNode; onSessionExpired: () => void; onCreate: () => void }) {
   const events = useEventList(onSessionExpired);
   const details = useEventDetails(events.selectedId, events.userId, onSessionExpired);
-  return <EventsContext.Provider value={{ ...events, ...details, openCreate: onCreate }}>{children}</EventsContext.Provider>;
+  const [editing, setEditing] = useState<{ userId: string; event: OrganizerEvent } | null>(null);
+  const visible = editing && events.isCurrentEvent(editing.userId, editing.event.event_id)
+    && (!details.eventDetails || details.eventDetails.role === "OWNER");
+  useEffect(() => { if (editing && !visible) setEditing(null); }, [editing, visible]);
+  const openEdit = () => {
+    if (events.userId && details.eventDetails?.role === "OWNER") {
+      setEditing({ userId: events.userId, event: details.eventDetails });
+    }
+  };
+  return <EventsContext.Provider value={{ ...events, ...details, openCreate: onCreate, openEdit }}>
+    {children}
+    {editing && visible && <EditEventModal
+      key={`${editing.userId}/${editing.event.event_id}`} event={editing.event} userId={editing.userId}
+      isCurrent={() => events.isCurrentEvent(editing.userId, editing.event.event_id)}
+      onClose={() => setEditing(null)} onComplete={() => setEditing(null)} onSessionExpired={onSessionExpired}
+      onUpdated={async (result) => {
+        if (!events.isCurrentEvent(editing.userId, editing.event.event_id) || result.userId !== editing.userId) return false;
+        const refreshed = await events.refresh({ userId: editing.userId, id: editing.event.event_id });
+        if (refreshed && events.isCurrentEvent(editing.userId, editing.event.event_id)) details.reloadDetails();
+        return refreshed;
+      }}
+    />}
+  </EventsContext.Provider>;
 }
 export function useEvents() {
   const events = useContext(EventsContext);

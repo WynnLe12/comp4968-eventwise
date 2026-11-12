@@ -10,7 +10,7 @@ Start the existing Docker MySQL database and Node backend with their existing en
 6. Stop the backend: expect an error state and Try again. Restart it and retry; the API data should return.
 7. Expire/remove the session or simulate a 401 response: event state must clear and the app must require sign-in again. Cognito credentials are cleared before returning to login.
 8. Sign out during a slow request, then sign in as another account. Old results and selection must not reappear. Returning focus to the window refreshes events; a selection is retained only for the same account and only if membership still exists.
-9. Navigate to budget, guests, vendors, and other unconnected event sections. They show an unavailable state rather than old sample data. Routes and navigation remain available; those feature components are unchanged. Event editing is outside this integration.
+9. Navigate to budget, guests, vendors, and other unconnected event sections. They show an unavailable state rather than old sample data. Routes and navigation remain available; those feature components are unchanged. Editing is available to event owners through the dashboard.
 
 The dashboard retains its banner, summary card grid, and section cards. Only values supplied by the event APIs are shown; guest counts, spending, planning progress, vendors, tasks, and milestones are not inferred or filled with mock data. Selection is kept in memory only and resets when signing out or changing accounts.
 
@@ -51,3 +51,17 @@ Local automated tests cover API request/response shapes, validation, safe errors
 8. Create an event through the existing form. After the list refresh selects it, verify its detail request completes before dashboard data appears.
 
 Automated tests cover request/response shape, exact string IDs/budgets, role and template display, 401/403/404, stale requests, account changes, loading/error UI, and the existing list/create behavior. These tests use mocked API/auth responses; the live flow still requires the checks above.
+
+
+## Edit Event (owners only)
+
+1. Start the existing local services, sign in as an OWNER, select an event, and wait for its detail request to finish. Choose **Edit event** in the dashboard header. The modal should contain the real name, template ID, calendar date, venue, and total budget from GET by ID, with no mock defaults.
+2. Change only the name and save. Inspect Network: PATCH `/api/events/{eventId}` must contain only `name`, authenticated by the Cognito access token. Neither user identity nor membership/ownership/timestamps are sent. Expect HTTP 200, then refreshed GET list/details. The same event remains selected and its new name appears in the switcher.
+3. Reopen without changing anything: Save is disabled. Changing whitespace or decimal formatting alone must not send an update. Change values and choose Cancel: no PATCH is sent, and reopening restores server values.
+4. Clear template, date, or venue: each changed blank optional field sends null. Name and budget cannot be cleared. Validate overlong names/venues, nonexistent template IDs, invalid dates, negative budgets, and budgets with more than two fractional digits. Errors remain in the modal without exposing server internals.
+5. With a CO_PLANNER account, verify no Edit action appears. The backend remains the authority: if ownership changes after the modal opens, a 403 blocks additional saves and asks the user to close the editor and refresh. Test 404 similarly for an event removed after loading.
+6. Under throttling, double-click Save and try closing during the request. Only one PATCH is sent, controls remain disabled, and cancellation cannot interrupt the pending save. If PATCH succeeds but refreshing fails, any Retry loading action must reload data rather than repeat PATCH.
+7. Test a server/network error and retry, plus a 401 to confirm the existing authentication flow runs. Network errors can make a save result uncertain; refresh before repeating a write.
+8. Switch events or accounts while a throttled save is in flight. The old editor closes; late results must not select the previous event or overwrite the new selection. Closing/unmounting aborts the browser request, though a write already received by the backend may still complete.
+
+Focused tests cover changed-field construction, schema validation, authenticated PATCH payloads, safe status messages, expected-account guards, owner-only actions, actual prefilled values, cancellation, duplicate guards, refresh-only retry, and stale responses. Live browser/Cognito checks remain manual. No event deletion is implemented.

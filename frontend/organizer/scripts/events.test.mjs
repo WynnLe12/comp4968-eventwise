@@ -139,6 +139,7 @@ async function withListHook(run) {
       "aws-amplify/utils": { Hub: { listen: (channel, listener) => {
         assert.equal(channel, "auth"); onAuth = listener; return () => { unsubscribed = true; };
       } } },
+      "./components/EditEventModal": { EditEventModal: () => null },
       "./hooks/useEventDetails": { useEventDetails: () => ({}) },
       "./services/eventApi": { EventSessionError, listEvents: (signal) => new Promise((resolve, reject) => requests.push({ resolve, reject, signal })) },
     });
@@ -254,7 +255,7 @@ const ui = {
   Button: ({ children, onClick }) => React.createElement("button", { onClick }, children),
 };
 const page = {
-  PageHeader: ({ page }) => React.createElement("h1", null, page),
+  PageHeader: ({ page, action }) => React.createElement("header", null, React.createElement("h1", null, page), action),
   LoadingState: ({ label }) => React.createElement("p", null, label),
   EmptyState: ({ title, message, action }) => React.createElement("section", null, title, message, action),
   StatCard: ({ label, value, detail }) => React.createElement("div", null, label, value, detail),
@@ -738,4 +739,234 @@ test("detail loading and authorization errors hide dashboard content but keep ev
     assert.doesNotMatch(render(), /EVENT CONTENT/);
     assert.match(render("events"), /EVENT CONTENT/);
   }
+});
+
+
+test("edit API PATCHes only changed allowed fields with the current access token", async () => {
+  const changed = { ...first, name: "Renamed event", venue: null };
+  await withApi(async (url, options) => {
+    assert.equal(url, `/api/events/${first.event_id}`);
+    assert.equal(options.method, "PATCH");
+    assert.deepEqual(options.headers, { "Content-Type": "application/json", Authorization: "Bearer access-token-a" });
+    assert.deepEqual(JSON.parse(options.body), { name: "Renamed event", venue: null });
+    return Response.json(changed);
+  }, async (api) => {
+    const draft = { ...api.eventEditDraft(first), name: "Renamed event", venue: "" };
+    const patch = api.buildEventPatch(first, draft);
+    assert.deepEqual(await api.updateEvent(first.event_id, patch, undefined, "user-a"), { userId: "user-a", event: changed });
+  });
+});
+
+test("edit draft preserves actual values and unchanged fields including decimal formatting are omitted", async () => {
+  await withApi(async () => { assert.fail("No request expected"); }, async (api) => {
+    const draft = api.eventEditDraft(first);
+    assert.deepEqual(draft, { name: first.name, template_id: "", event_date: "2028-02-29", venue: "Garden", total_budget: "123.45" });
+    assert.deepEqual(api.buildEventPatch(first, draft), {});
+    assert.deepEqual(api.buildEventPatch(first, { ...draft, name: ` ${first.name} ` }), {});
+    assert.deepEqual(api.buildEventPatch({ ...first, total_budget: "123.40" }, { ...draft, total_budget: "123.4" }), {});
+    assert.deepEqual(api.buildEventPatch(first, { ...draft, event_date: "", venue: "", template_id: "7" }), { template_id: "7", event_date: null, venue: null });
+    await assert.rejects(api.updateEvent(first.event_id, {}), api.EventValidationError);
+  });
+});
+
+test("edit validation rejects invalid/protected fields and event IDs before requests", async () => {
+  const invalid = [null, [], {}, { name: " " }, { name: null }, { name: "x".repeat(151) },
+    { template_id: "0" }, { template_id: "18446744073709551616" }, { event_date: "2027-02-29" },
+    { event_date: "2028-04-31" }, { event_date: "0999-01-01" }, { venue: "x".repeat(256) },
+    { total_budget: null }, { total_budget: "-1" }, { total_budget: "0.001" }, { total_budget: "10000000000" },
+    { event_id: "1" }, { cognito_sub: "attacker" }, { role: "OWNER" }, { updated_at: "2028-01-01" }];
+  await withApi(async () => { assert.fail("fetch must not run"); }, async (api) => {
+    for (const patch of invalid) await assert.rejects(api.updateEvent(first.event_id, patch), api.EventValidationError);
+    for (const id of ["0", "-1", "1.5", "18446744073709551616"]) await assert.rejects(api.updateEvent(id, { name: "New" }), api.EventValidationError);
+  });
+});
+
+test("edit API maps 400/401/403/404/500 safely and rejects account changes before PATCH", async () => {
+  for (const status of [400, 401, 403, 404, 500]) {
+    await withApi(async () => Response.json({ error: "private SQL details" }, { status }), async (api) => {
+      await assert.rejects(api.updateEvent(first.event_id, { name: "New" }), (error) => {
+        assert.doesNotMatch(error.message, /private/);
+        return status === 401 ? error instanceof api.EventSessionError : error instanceof api.EventUpdateError && error.status === status;
+      });
+    });
+  }
+  await withApi(async () => Response.json({ error: "template_id does not exist" }, { status: 400 }), async (api) => {
+    await assert.rejects(api.updateEvent(first.event_id, { template_id: "7" }), /template does not exist/);
+  });
+  await withApi(async () => { assert.fail("fetch must not run for another account"); }, async (api) => {
+    await assert.rejects(api.updateEvent(first.event_id, { name: "New" }, undefined, "user-b"), /account changed/);
+  });
+});
+
+async function withEditHook(run, original = first) {
+  const states = [], refs = [], effects = [];
+  let stateIndex = 0, refIndex = 0, effectIndex = 0;
+  const scheduled = [], requests = [];
+  let onAuth, completed = 0, closed = 0, expired = 0, refreshed = 0;
+  let current = true, refreshSuccess = true;
+  class EventSessionError extends Error {}
+  class EventValidationError extends Error {}
+  class EventUpdateError extends Error {
+    constructor(status, message) { super(message); this.status = status; }
+  }
+  const options = {
+    userId: "user-a", isCurrent: () => current,
+    onUpdated: async (result) => { assert.equal(result.userId, "user-a"); refreshed++; return refreshSuccess; },
+    onComplete: () => { completed++; }, onClose: () => { closed++; }, onSessionExpired: () => { expired++; },
+  };
+  const api = loadModule("../src/features/events/hooks/useEditEvent.ts", {
+    react: {
+      useState: (initial) => {
+        const index = stateIndex++;
+        if (!(index in states)) states[index] = initial;
+        return [states[index], (value) => { states[index] = value; }];
+      },
+      useRef: (initial) => { const index = refIndex++; refs[index] ??= { current: initial }; return refs[index]; },
+      useEffect: (callback, deps) => {
+        const index = effectIndex++;
+        if (!effects[index] || deps.some((dep, i) => dep !== effects[index].deps[i])) scheduled.push(() => {
+          effects[index]?.cleanup?.(); effects[index] = { deps, cleanup: callback() };
+        });
+      },
+    },
+    "aws-amplify/utils": { Hub: { listen: (_channel, callback) => { onAuth = callback; return () => {}; } } },
+    "../services/eventApi": {
+      EventSessionError, EventValidationError, EventUpdateError,
+      buildEventPatch: (_event, draft) => draft,
+      updateEvent: (id, patch, signal, userId) => new Promise((resolve, reject) => requests.push({ id, patch, signal, userId, resolve, reject })),
+    },
+  });
+  const render = () => {
+    stateIndex = 0; refIndex = 0; effectIndex = 0;
+    const result = api.useEditEvent(original, options);
+    while (scheduled.length) scheduled.shift()();
+    return result;
+  };
+  const cleanup = () => { for (const effect of effects) effect?.cleanup?.(); };
+  try {
+    render();
+    await run({ render, requests, cleanup, auth: (event) => onAuth({ payload: { event } }),
+      counts: () => ({ completed, closed, expired, refreshed }), setCurrent: (value) => { current = value; },
+      setRefreshSuccess: (value) => { refreshSuccess = value; }, EventSessionError, EventUpdateError,
+    });
+  } finally { cleanup(); }
+}
+
+test("edit saves once, prevents duplicate clicks, and refreshes before closing", async () => {
+  await withEditHook(async ({ render, requests, counts }) => {
+    const pending = render().submit({ name: "New" });
+    await render().submit({ name: "New" });
+    render().close();
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].id, first.event_id);
+    assert.equal(requests[0].userId, "user-a");
+    assert.equal(render().loading, true);
+    assert.equal(counts().closed, 0);
+    requests[0].resolve({ userId: "user-a", event: { ...first, name: "New" } });
+    await pending;
+    assert.equal(counts().refreshed, 1);
+    assert.equal(counts().completed, 1);
+  });
+});
+
+test("cancel and unchanged values send no PATCH, and co-planners cannot submit", async () => {
+  await withEditHook(async ({ render, requests, counts }) => {
+    render().close();
+    assert.equal(counts().closed, 1);
+    await render().submit({});
+    assert.match(render().error, /No changes/);
+    assert.equal(requests.length, 0);
+  });
+  await withEditHook(async ({ render, requests }) => {
+    await render().submit({ name: "New" });
+    assert.equal(requests.length, 0);
+    assert.equal(render().blocked, true);
+  }, second);
+});
+
+test("saved changes retry refresh only without repeating PATCH", async () => {
+  await withEditHook(async ({ render, requests, counts, setRefreshSuccess }) => {
+    setRefreshSuccess(false);
+    const pending = render().submit({ name: "New" });
+    requests[0].resolve({ userId: "user-a", event: first });
+    await pending;
+    assert.equal(render().saved, true);
+    assert.match(render().error, /changes were saved/);
+    setRefreshSuccess(true);
+    await render().submit({ name: "Different" });
+    assert.equal(requests.length, 1);
+    assert.equal(counts().refreshed, 2);
+    assert.equal(counts().completed, 1);
+  });
+});
+
+test("edit 403/404 block more saves, while 401 notifies authentication and server errors stay safe", async () => {
+  for (const status of [403, 404]) await withEditHook(async ({ render, requests, EventUpdateError }) => {
+    const pending = render().submit({ name: "New" });
+    requests[0].reject(new EventUpdateError(status, "Not allowed"));
+    await pending;
+    assert.equal(render().blocked, true);
+    await render().submit({ name: "Retry" });
+    assert.equal(requests.length, 1);
+  });
+  await withEditHook(async ({ render, requests, counts, EventSessionError }) => {
+    let pending = render().submit({ name: "New" });
+    requests[0].reject(new Error("private SQL details"));
+    await pending;
+    assert.doesNotMatch(render().error, /private/);
+    pending = render().submit({ name: "New" });
+    requests[1].reject(new EventSessionError("Sign in again"));
+    await pending;
+    assert.equal(counts().expired, 1);
+  });
+});
+
+test("switching events/accounts prevents late edit results from refreshing or replacing current data", async () => {
+  await withEditHook(async ({ render, requests, counts, setCurrent }) => {
+    const pending = render().submit({ name: "New" });
+    setCurrent(false);
+    requests[0].resolve({ userId: "user-a", event: first });
+    await pending;
+    assert.equal(counts().refreshed, 0);
+    assert.equal(counts().completed, 0);
+  });
+  await withEditHook(async ({ render, requests, counts, auth }) => {
+    const pending = render().submit({ name: "New" });
+    auth("signedOut");
+    assert.ok(requests[0].signal.aborted);
+    requests[0].resolve({ userId: "user-a", event: first });
+    await pending;
+    assert.equal(counts().closed, 1);
+    assert.equal(counts().refreshed, 0);
+  });
+});
+
+test("only OWNER details display an Edit action, and the edit form uses real prefilled values", async () => {
+  let event = first;
+  const dashboard = loadModule("../src/features/dashboard/Dashboard.tsx", {
+    "react/jsx-runtime": jsxRuntime, "../../components/ui": ui, "../../components/page": page,
+    "../events/EventsContext": { useEvents: () => ({ eventDetails: event, openCreate: () => {}, openEdit: () => {} }) },
+    "../events/eventPresentation": presentation,
+  });
+  assert.match(renderToStaticMarkup(React.createElement(dashboard.Dashboard, { go: () => {} })), /Edit event/);
+  event = second;
+  assert.doesNotMatch(renderToStaticMarkup(React.createElement(dashboard.Dashboard, { go: () => {} })), /Edit event/);
+  await withApi(async () => { assert.fail(); }, async (api) => {
+    const Field = loadModule("../src/components/ui/Field.tsx", { "react/jsx-runtime": jsxRuntime }).Field;
+    const Button = loadModule("../src/components/ui/Button.tsx", { "react/jsx-runtime": jsxRuntime, "./Icon": { Icon: ui.Icon } }).Button;
+    const modal = loadModule("../src/features/events/components/EditEventModal.tsx", {
+      react: React, "react/jsx-runtime": jsxRuntime,
+      "../../../components/ui": { ...ui, Field, Button, Modal: ({ title, children, footer }) => React.createElement("div", null, title, children, footer) },
+      "../services/eventApi": api,
+      "../hooks/useEditEvent": { useEditEvent: () => ({ loading: false, saved: false, blocked: false, error: "", submit: () => {}, close: () => {} }) },
+    });
+    const html = renderToStaticMarkup(React.createElement(modal.EditEventModal, { event: first }));
+    assert.match(html, /value="First event"/);
+    assert.match(html, /value="2028-02-29"/);
+    assert.match(html, /value="Garden"/);
+    assert.match(html, /value="123.45"/);
+    assert.match(html, /form="edit-event-form"/);
+    assert.match(html, /disabled/); // unchanged Save is disabled
+    assert.equal(renderToStaticMarkup(React.createElement(modal.EditEventModal, { event: second })), "");
+  });
 });
