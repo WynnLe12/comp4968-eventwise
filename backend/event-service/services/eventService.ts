@@ -64,8 +64,35 @@ export function validateEventInput(body: unknown): EventInput {
   };
 }
 
+export function validateEventPatch(body: unknown): Partial<EventInput> {
+  if (!body || typeof body !== "object" || Array.isArray(body)) invalid("Body must be a JSON object");
+  const fields = body as Record<string, unknown>;
+  const keys = Object.keys(fields);
+  if (!keys.length) invalid("At least one event field is required");
+  // Reuse creation's schema checks without applying its defaults to omitted fields.
+  const validated = validateEventInput({ name: "Event", ...fields });
+  return Object.fromEntries(keys.map((key) => [key, validated[key as keyof EventInput]]));
+}
+
 export class EventService {
-  constructor(private readonly repository: Pick<EventRepository, "create"> & Partial<Pick<EventRepository, "list" | "getById">> = new EventRepository()) {}
+  constructor(private readonly repository: Pick<EventRepository, "create"> & Partial<Pick<EventRepository, "list" | "getById" | "update">> = new EventRepository()) {}
+
+  async update(eventId: string, body: unknown, cognitoSub: string): Promise<ListedEvent> {
+    if (!cognitoSub || cognitoSub.length > 128) throw new Error("Verified Cognito identity is required");
+    const id = validateEventId(eventId);
+    const patch = validateEventPatch(body);
+    if (!this.repository.update) throw new Error("Event update repository is not configured");
+    try {
+      const event = await this.repository.update(id, patch, cognitoSub, (current) => {
+        if (!current) throw new EventNotFoundError("Event not found");
+        if (current.role !== "OWNER") throw new EventAccessDeniedError("Only the event owner can update this event");
+      });
+      return { ...event, role: "OWNER" };
+    } catch (error) {
+      if (error instanceof InvalidTemplateError) throw new EventValidationError(error.message);
+      throw error;
+    }
+  }
 
   async getById(eventId: string, cognitoSub: string): Promise<ListedEvent> {
     if (!cognitoSub || cognitoSub.length > 128) throw new Error("Verified Cognito identity is required");

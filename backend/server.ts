@@ -14,14 +14,18 @@ import { listEventsHandler, type ListEventsDependencies } from "./event-service/
 
 import { getEventHandler, type GetEventDependencies } from "./event-service/handlers/getEventHandler";
 
+import { updateEventHandler, type UpdateEventDependencies } from "./event-service/handlers/updateEventHandler";
+
 export function createAppServer(
   eventDependencies: Partial<CreateEventDependencies> = {},
   listDependencies: Partial<ListEventsDependencies> = {},
   getDependencies: Partial<GetEventDependencies> = {},
+  updateDependencies: Partial<UpdateEventDependencies> = {},
 ): Server {
   const handleCreateEvent = createEventHandler(eventDependencies);
   const handleListEvents = listEventsHandler(listDependencies);
   const handleGetEvent = getEventHandler(getDependencies);
+  const handleUpdateEvent = updateEventHandler(updateDependencies);
   return createServer((request, response) => {
     const path = request.url?.split("?")[0];
 
@@ -38,6 +42,11 @@ export function createAppServer(
     const eventMatch = /^\/events\/([^/]+)$/.exec(path ?? "");
     if (request.method === "GET" && eventMatch) {
       void handleGetEvent(request, response, eventMatch[1]);
+      return;
+    }
+
+    if (request.method === "PATCH" && eventMatch) {
+      void handleUpdateEvent(request, response, eventMatch[1]);
       return;
     }
 

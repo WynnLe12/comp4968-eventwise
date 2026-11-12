@@ -26,8 +26,8 @@ test("health endpoint returns JSON with an OK status", async () => {
   assert.deepEqual(await response.json(), { status: "ok" });
 });
 
-test("event editing routes remain unimplemented", async () => {
-  const response = await fetch(`${baseUrl}/events/42`, { method: "PATCH" });
+test("event deletion routes remain unimplemented", async () => {
+  const response = await fetch(`${baseUrl}/events/42`, { method: "DELETE" });
   assert.equal(response.status, 404);
   assert.deepEqual(await response.json(), { error: "Not found" });
 });
