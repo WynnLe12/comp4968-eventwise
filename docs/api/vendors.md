@@ -29,8 +29,8 @@ Every route that returns a vendor returns this shape:
 
 ```json
 {
-  "id": 17,
-  "eventId": 42,
+  "id": "17",
+  "eventId": "42",
   "name": "The Willow House",
   "category": "Venue & Catering",
   "contactName": "Grace Hill",
@@ -53,8 +53,8 @@ Every route that returns a vendor returns this shape:
 
 | Field            | Type           | Editable          | Notes                                                                       |
 | ---------------- | -------------- | ----------------- | --------------------------------------------------------------------------- |
-| `id`             | number         | no                | `vendors.vendor_id`                                                         |
-| `eventId`        | number         | no                | Comes from the URL; ignored in a request body                               |
+| `id`             | string         | no                | `vendors.vendor_id`                                                         |
+| `eventId`        | string         | no                | Comes from the URL; ignored in a request body                               |
 | `name`           | string         | **yes, required** | Business name, 1–150 characters                                             |
 | `category`       | string \| null | yes               | Up to 100 characters, free text (e.g. "Photography")                        |
 | `contactName`    | string \| null | yes               | Up to 150 characters                                                        |
@@ -74,7 +74,7 @@ Every route that returns a vendor returns this shape:
 ### Formats
 
 - **Names** are camelCase in JSON. The database uses snake_case, and the backend converts between them.
-- **IDs** are numbers (`BIGINT UNSIGNED`). Path parameters arrive as strings, and the backend handles that.
+- **IDs** are strings of digits (`"17"`), like every EventWise API, so `BIGINT UNSIGNED` values stay exact. Compare them as strings; don't convert them to numbers.
 - **Money** is a string with exactly 2 decimals in responses, such as `"12800.00"`. MySQL `DECIMAL(12,2)` keeps it exact. Convert to a number only for display. Requests can send a string (`"500"`, `"500.5"`, `"500.50"`) or a number (`500`). Strings are recommended because they avoid floating-point surprises.
 - **Dates** are `YYYY-MM-DD`. **Timestamps** are ISO 8601 in UTC.
 - **Empty values**: an empty or whitespace-only string is saved as `null`. Text fields are trimmed.
@@ -154,7 +154,7 @@ The error goes under the field the request changed: setting a contract on a decl
 
 The UI runs the same checks for instant feedback (on blur and on submit), but the server is the final check.
 
-The `vendors` table also has CHECK constraints for the status rules, as a safety net behind the API. If one of them ever rejects a row (MySQL error 3819), the API still returns `422 VALIDATION_FAILED` with the matching field, never a 500.
+The `vendors` table also has CHECK constraints for the status rules, as a safety net behind the API. If one of them ever rejects a row (MySQL error 3819), the API still returns `422 VALIDATION_ERROR` with the matching field, never a 500.
 
 **Moving back to Researching:** the UI confirms first when the vendor has a quote or a cancelled contract, because the server will clear those values.
 
@@ -180,8 +180,8 @@ Every error from the Lambda uses this shape:
 ```json
 {
   "error": {
-    "code": "VALIDATION_FAILED",
-    "message": "Some fields need fixing.",
+    "code": "VALIDATION_ERROR",
+    "message": "Check the submitted fields.",
     "fields": { "email": "Enter a valid email address" }
   }
 }
@@ -191,13 +191,13 @@ Every error from the Lambda uses this shape:
 
 | Status | `code`               | When                                                                   | Frontend shows                                     |
 | ------ | -------------------- | ---------------------------------------------------------------------- | -------------------------------------------------- |
-| 400    | `INVALID_JSON`       | The request body isn't valid JSON                                      | Error toast                                        |
+| 400    | `BAD_REQUEST`        | The request body isn't valid JSON                                      | Error toast                                        |
 | 401    | — (from API Gateway) | No token, or an expired or invalid token                               | Login page                                         |
-| 403    | `NOT_EVENT_MEMBER`   | Signed in, but not a member of this event (or the event doesn't exist) | No-access state                                    |
-| 404    | `VENDOR_NOT_FOUND`   | The vendor doesn't exist, or it belongs to another event               | Toast, then reload the list                        |
+| 403    | `FORBIDDEN`          | Signed in, but not a member of this event (or the event doesn't exist) | No-access state                                    |
+| 404    | `NOT_FOUND`          | The vendor doesn't exist, or it belongs to another event               | Toast, then reload the list                        |
 | 409    | `SIGNED_CONTRACT`    | DELETE on a booked vendor with a signed contract                       | Mark-as-cancelled modal                            |
 | 409    | `HAS_EXPENSES`       | DELETE on a vendor with linked expenses                                | View-expenses modal                                |
-| 422    | `VALIDATION_FAILED`  | A field is invalid, or the status combination isn't allowed            | Inline errors from `fields`; banner with `message` |
+| 422    | `VALIDATION_ERROR`   | A field is invalid, or the status combination isn't allowed            | Inline errors from `fields`; banner with `message` |
 | 500    | `INTERNAL_ERROR`     | Anything unexpected                                                    | Error toast; form stays open with input kept       |
 
 Notes:
@@ -219,8 +219,8 @@ POST /events/42/vendors
 
 ```json
 {
-  "id": 23,
-  "eventId": 42,
+  "id": "23",
+  "eventId": "42",
   "name": "Rosewood Rentals",
   "category": null,
   "contactName": null,
@@ -269,8 +269,8 @@ POST /events/42/vendors
 ```json
 {
   "error": {
-    "code": "VALIDATION_FAILED",
-    "message": "Some fields need fixing.",
+    "code": "VALIDATION_ERROR",
+    "message": "Check the submitted fields.",
     "fields": {
       "name": "Business name is required",
       "email": "Enter a valid email address",
@@ -325,8 +325,8 @@ DELETE /events/42/vendors/17
 
 An expense can link to at most one vendor (`expenses.vendor_id`, nullable), and that vendor must belong to the same event.
 
-- The expenses API (Shinyoung) calls the vendor module's `assertVendorInEvent(eventId, vendorId)` before it creates or updates an expense.
-- A vendor from another event, or one that doesn't exist, returns `422 VALIDATION_FAILED` from the **expense** route with `"fields": { "vendorId": "Choose a vendor from this event" }`.
+- The expenses API (Shinyoung) checks this itself: its repository looks the vendor up by `vendor_id` and `event_id` inside the same transaction that saves the expense. The vendor module doesn't need to export a check.
+- A vendor from another event, or one that doesn't exist, returns `422 VALIDATION_ERROR` from the **expense** route with `"fields": { "vendorId": "Choose a vendor from this event." }`.
 - The database backs this up: `expenses` has a composite foreign key `(vendor_id, event_id) → vendors(vendor_id, event_id)` with `ON DELETE RESTRICT`. If that key rejects an expense (MySQL error 1452), the expense route returns the same 422.
 - The same foreign key stops a vendor with expenses from being deleted. If an expense is added between the vendor API's check and the delete, MySQL error 1451 is returned as `409 HAS_EXPENSES`.
 - The expense form's vendor dropdown should be filled from `GET /events/{eventId}/vendors`.
@@ -350,11 +350,11 @@ These vendor changes are already in `eventwise_schema.sql` and the EERD (marked 
 | Decision                                                                                | Why                                                                                         |
 | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | camelCase JSON field names                                                              | Matches TypeScript conventions, so the frontend's `Vendor` type uses the JSON directly      |
-| IDs are numbers                                                                         | `BIGINT UNSIGNED` comes back from mysql2 as a JavaScript number, exact far beyond our data  |
+| IDs are strings (`"17"`)                                                                | Matches the other EventWise APIs and the shared MySQL pool, which keeps `BIGINT` exact      |
 | Money is a 2-decimal string in responses; requests accept a string or a number          | Keeps `DECIMAL` values exact. Convert to a number only for display                          |
 | Status values are UPPERCASE, matching the database ENUMs, with the UI labels in §2      | No translation layer between the database and the API, so no mapping bugs                   |
 | `quoteAmount`                                                                           | Matches the `quote_amount` column                                                           |
 | Search, filters, sorting and summary metrics are done in the browser from the full list | An event has tens of vendors, not thousands, and the summary must ignore filters anyway     |
 | Unknown and read-only fields in a request body are ignored, not rejected                | The frontend can send back a whole vendor object without stripping fields first             |
 | `category` is free text, not a fixed list                                               | The category filter is built from the categories the event's vendors actually use           |
-| Error shape and codes as in §6, including the 401 body coming from API Gateway          | One error format for every route; the frontend switches on the status code and `error.code` |
+| Error shape and codes as in §6, including the 401 body coming from API Gateway          | Same shape and shared codes as the expenses API, so the frontend has one error list         |

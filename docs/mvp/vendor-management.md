@@ -101,7 +101,7 @@ The Event API enforces these on every create and update. CHECK constraints on th
 - Email must be a valid format when it's provided.
 - Quote amount and contract total can't be negative and have at most two decimal places.
 - Errors appear inline below each field, from the API's `error.fields`. Errors for the whole form appear in a banner above it.
-- The server rejects invalid records with `422 VALIDATION_FAILED`.
+- The server rejects invalid records with `422 VALIDATION_ERROR`.
 
 ### Actions menu (kebab)
 
@@ -182,12 +182,12 @@ When both conflicts apply, the signed-contract conflict wins.
 
   | Status | Code                              |
   | ------ | --------------------------------- |
-  | 400    | `INVALID_JSON`                    |
+  | 400    | `BAD_REQUEST`                     |
   | 401    | From API Gateway                  |
-  | 403    | `NOT_EVENT_MEMBER`                |
-  | 404    | `VENDOR_NOT_FOUND`                |
+  | 403    | `FORBIDDEN`                       |
+  | 404    | `NOT_FOUND`                       |
   | 409    | `SIGNED_CONTRACT`, `HAS_EXPENSES` |
-  | 422    | `VALIDATION_FAILED`               |
+  | 422    | `VALIDATION_ERROR`                |
   | 500    | `INTERNAL_ERROR`                  |
 
   The [API contract](../api/vendors.md) has the details.
@@ -197,4 +197,4 @@ When both conflicts apply, the signed-contract conflict wins.
   - The `vendor_payment_totals` view: paid total (with refunds subtracted) and next due date. The vendor API and the payment alerts both use it.
   - `expenses.(vendor_id, event_id)` is a foreign key to `vendors` with `ON DELETE RESTRICT`.
   - No `payment_due_date` on vendors. Due dates come from expenses.
-- **Expense link:** expense create and update call `assertVendorInEvent`, and map MySQL error 1452 to a 422 (expenses API).
+- **Expense link:** the expenses repository checks the vendor is in the same event inside its own transaction, and returns 422 (expenses API).
