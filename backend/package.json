@@ -14,8 +14,7 @@
     "test": "npm run build && node --test \"dist/tests/**/*.test.js\"",
     "db:up": "docker compose -f ../docker-compose.yml up -d --wait",
     "db:seed": "node ../scripts/db-seed.mjs",
-    "db:reset": "docker compose -f ../docker-compose.yml down -v && npm run db:up && npm run db:seed",
-    "test:vendors:db": "npm run build && node dist/verification/vendors-mysql.js"
+    "db:reset": "docker compose -f ../docker-compose.yml down -v && npm run db:up && npm run db:seed"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
