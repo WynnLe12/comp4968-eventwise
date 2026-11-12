@@ -1,4 +1,10 @@
-import { useId, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from "react";
+import {
+  useId,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type SelectHTMLAttributes,
+  type TextareaHTMLAttributes,
+} from "react";
 
 function FieldMessage({ id, error, hint }: { id: string; error?: string; hint?: ReactNode }) {
   if (error) {
@@ -67,6 +73,28 @@ export function SelectField({ label, error, hint, options, ...selectProps }: Sel
           </option>
         ))}
       </select>
+      <FieldMessage id={messageId} error={error} hint={hint} />
+    </label>
+  );
+}
+
+type TextAreaFieldProps = {
+  label: string;
+  error?: string;
+  hint?: ReactNode;
+} & Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "children">;
+
+export function TextAreaField({ label, error, hint, ...textareaProps }: TextAreaFieldProps) {
+  const messageId = useId();
+  const hasMessage = Boolean(error || hint);
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <textarea
+        {...textareaProps}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={hasMessage ? messageId : undefined}
+      />
       <FieldMessage id={messageId} error={error} hint={hint} />
     </label>
   );

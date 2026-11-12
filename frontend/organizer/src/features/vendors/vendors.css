@@ -408,6 +408,19 @@
   color: #aaa4b5;
   font-weight: 600;
 }
+.drawer-section > .detail-empty {
+  margin: 0;
+  color: #aaa4b5;
+  font-size: 14px;
+  font-weight: 600;
+}
+.vendor-notes {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .drawer-section-title {
   display: flex;
   align-items: flex-start;

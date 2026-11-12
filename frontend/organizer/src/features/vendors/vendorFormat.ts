@@ -1,4 +1,4 @@
-import type { BookingStatus, Vendor } from "../../types";
+import type { BookingStatus, Money, Vendor } from "../../types";
 
 const currencyFormat = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -9,9 +9,9 @@ const currencyFormat = new Intl.NumberFormat("en-US", {
 
 const dueDateFormat = new Intl.DateTimeFormat("en-US", { month: "short", day: "2-digit" });
 
-/** "$1,800.00", or "—" when there is no value. */
-export function currency(value: number | null) {
-  return value === null ? "—" : currencyFormat.format(value);
+/** "$1,800.00" for an API money string ("1800.00"), or "—" when there is no value. */
+export function currency(value: Money | null) {
+  return value === null ? "—" : currencyFormat.format(Number(value));
 }
 
 /** "Jul 10" for an ISO date, or "None". */
@@ -41,13 +41,19 @@ export function avatarTone(vendorId: string) {
 }
 
 export function bookingTone(status: BookingStatus) {
-  if (status === "booked") return "success";
-  if (status === "declined") return "danger";
+  if (status === "BOOKED") return "success";
+  if (status === "DECLINED") return "danger";
   return "warning";
 }
 
-/** Card footer: "Paid" once a contract is fully paid, otherwise the next due date. */
+/** Card footer: the next due date, or "Paid" once the contract is fully paid (or overpaid). */
 export function nextDueLabel(vendor: Vendor) {
-  if (vendor.contractTotal !== null && vendor.balance === 0) return "Paid";
-  return dueDateLabel(vendor.nextDueDate);
+  if (vendor.nextDueDate) return dueDateLabel(vendor.nextDueDate);
+  if (vendor.balance !== null && Number(vendor.balance) <= 0) return "Paid";
+  return "None";
+}
+
+/** True when the vendor has been paid more than its contract total. */
+export function isOverpaid(vendor: Vendor) {
+  return vendor.balance !== null && Number(vendor.balance) < 0;
 }

@@ -137,7 +137,6 @@ export function VendorActions({
     action();
   };
 
-  const state = { bookingStatus: vendor.bookingStatus, contractStatus: vendor.contractStatus };
 
   return (
     <div className="vendor-menu-wrap" ref={wrapRef} onClick={(event) => event.stopPropagation()}>
@@ -215,7 +214,7 @@ export function VendorActions({
                     <MenuItem
                       key={status}
                       checked={vendor.bookingStatus === status}
-                      disabledReason={bookingOptionDisabledReason(status, state)}
+                      disabledReason={bookingOptionDisabledReason(status, vendor)}
                       onSelect={run(() => onBookingStatus(status))}
                     >
                       {bookingLabels[status]}
@@ -226,7 +225,7 @@ export function VendorActions({
                     <MenuItem
                       key={status}
                       checked={vendor.contractStatus === status}
-                      disabledReason={contractOptionDisabledReason(status, state)}
+                      disabledReason={contractOptionDisabledReason(status, vendor)}
                       onSelect={run(() => onContractStatus(status))}
                     >
                       {contractLabels[status]}

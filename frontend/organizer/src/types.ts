@@ -34,35 +34,59 @@ export interface Guest {
   meal: string;
 }
 
-export type BookingStatus = "researching" | "quoted" | "booked" | "declined";
-export type ContractStatus = "none" | "sent" | "signed" | "cancelled";
+// ---------------------------------------------------------------------------
+// Vendors: the JSON shape in docs/api/vendors.md (Feature 5 API contract)
+// ---------------------------------------------------------------------------
 
-/** Fields the organizer can edit. These are the only fields create/update accept. */
-export interface VendorStoredFields {
-  eventId: string;
+export type BookingStatus = "RESEARCHING" | "QUOTED" | "BOOKED" | "DECLINED";
+export type ContractStatus = "NOT_STARTED" | "PENDING" | "SIGNED" | "CANCELLED";
+
+/** Money as the API sends it: a string with exactly 2 decimals ("12800.00"), so DECIMAL values stay exact. */
+export type Money = string;
+
+/** The fields a client may send in POST and PATCH. Empty text is null. */
+export interface VendorFields {
   name: string;
-  category: string;
-  contactName: string;
-  email: string;
-  phone: string;
-  quoteAmount: number | null;
-  contractTotal: number | null;
+  category: string | null;
+  contactName: string | null;
+  email: string | null;
+  phone: string | null;
+  quoteAmount: Money | null;
+  contractTotal: Money | null;
   bookingStatus: BookingStatus;
   contractStatus: ContractStatus;
+  notes: string | null;
 }
+
+export type VendorField = keyof VendorFields;
+
+/** Field name -> message, from a 422 response's `error.fields`. */
+export type VendorFieldErrors = Partial<Record<VendorField, string>>;
 
 /**
- * A vendor as returned by the service. paidTotal, balance and nextDueDate are
- * computed by the server from the vendor's expenses; the UI only displays them.
+ * A vendor as the API returns it. IDs are strings of digits; compare them as strings.
+ * paidTotal, balance and nextDueDate are calculated by the server from the vendor's
+ * expenses; the UI only displays them.
  */
-export interface Vendor extends VendorStoredFields {
+export interface Vendor extends VendorFields {
   id: string;
-  paidTotal: number;
-  /** null when the vendor has no contract total. */
-  balance: number | null;
-  /** ISO date (YYYY-MM-DD) of the next unpaid expense, or null. */
+  eventId: string;
+  /** Never null: "0.00" with no payments. */
+  paidTotal: Money;
+  /** contractTotal - paidTotal; null with no contract total, negative when overpaid. */
+  balance: Money | null;
+  /** YYYY-MM-DD of the earliest linked expense that isn't fully paid, or null. */
   nextDueDate: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
-export type VendorCreateInput = VendorStoredFields;
-export type VendorUpdateInput = Partial<Omit<VendorStoredFields, "eventId">>;
+/** POST body: only `name` is required; money may be a string or a number. */
+export type VendorCreateInput = Partial<Omit<VendorFields, "quoteAmount" | "contractTotal">> & {
+  name: string;
+  quoteAmount?: Money | number | null;
+  contractTotal?: Money | number | null;
+};
+
+/** PATCH body: only the fields that change. */
+export type VendorUpdateInput = Partial<VendorCreateInput>;

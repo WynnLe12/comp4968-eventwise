@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 import { Badge, Icon } from "../../components/ui";
-import { bookingLabels, contractLabels } from "../../services/vendorRules";
+import { bookingLabels, contractLabels, moneyToNumber } from "../../services/vendorRules";
 import type { Vendor } from "../../types";
-import { avatarTone, bookingTone, currency, initials, nextDueLabel } from "./vendorFormat";
+import { avatarTone, bookingTone, currency, initials, isOverpaid, nextDueLabel } from "./vendorFormat";
 
 export function VendorAvatar({ vendor }: { vendor: Vendor }) {
   return (
@@ -22,11 +22,13 @@ export function VendorCard({
   /** The kebab menu, rendered in the card's top-right corner. */
   actions: ReactNode;
 }) {
-  const hasContract = vendor.contractTotal !== null;
+  const contractTotal = moneyToNumber(vendor.contractTotal);
+  const hasContract = contractTotal !== null;
   const paidPercent =
-    hasContract && vendor.contractTotal! > 0
-      ? Math.min((vendor.paidTotal / vendor.contractTotal!) * 100, 100)
+    contractTotal !== null && contractTotal > 0
+      ? Math.min(Math.max((Number(vendor.paidTotal) / contractTotal) * 100, 0), 100)
       : 0;
+  const overpaid = isOverpaid(vendor);
   const hasContact = Boolean(vendor.contactName || vendor.email || vendor.phone);
 
   return (
@@ -79,7 +81,7 @@ export function VendorCard({
 
       <div className={`vendor-contract-status${hasContact ? "" : " no-contact"}`}>
         <Icon name="file" size={15} />
-        {contractLabels[vendor.contractStatus]}
+        Contract {contractLabels[vendor.contractStatus].toLowerCase()}
       </div>
 
       <div className="vendor-amounts">
@@ -88,8 +90,8 @@ export function VendorCard({
           <b>{currency(vendor.contractTotal ?? vendor.quoteAmount)}</b>
         </div>
         <div>
-          <small>Balance</small>
-          <b>{hasContract ? currency(vendor.balance) : "—"}</b>
+          <small>{overpaid ? "Overpaid" : "Balance"}</small>
+          <b>{overpaid ? currency(String(-Number(vendor.balance))) : currency(vendor.balance)}</b>
         </div>
       </div>
 

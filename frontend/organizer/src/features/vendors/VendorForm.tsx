@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Button, Field, Icon, Modal, SelectField } from "../../components/ui";
+import { Button, Field, Icon, Modal, SelectField, TextAreaField } from "../../components/ui";
 import {
+  applyStatusRules,
   BOOKING_STATUSES,
   bookingLabels,
   bookingOptionDisabledReason,
@@ -8,23 +9,31 @@ import {
   contractLabels,
   contractOptionDisabledReason,
   emailError,
-  FIELD_LIMITS,
   hasActiveContract,
+  MAX_LENGTH,
+  moneyTextError,
   nameError,
-  parseAmount,
   researchingNeedsConfirmation,
-  type VendorField,
+  textError,
+  toMoney,
 } from "../../services/vendorRules";
-import type { BookingStatus, ContractStatus, Vendor, VendorStoredFields } from "../../types";
+import type {
+  BookingStatus,
+  ContractStatus,
+  Vendor,
+  VendorField,
+  VendorFieldErrors,
+  VendorFields,
+  VendorUpdateInput,
+} from "../../types";
 
-export type VendorFormInput = Omit<VendorStoredFields, "eventId">;
-
-/** What the page returns when a save fails: shown in the banner, and inline when a field is named. */
+/** What the page returns when a save fails: the banner message, plus inline messages by field. */
 export interface VendorFormSubmitError {
   message: string;
-  field?: VendorField;
+  fields?: VendorFieldErrors;
 }
 
+/** What the inputs hold: always text, so typing is never interrupted. */
 interface FormValues {
   name: string;
   category: string;
@@ -35,42 +44,105 @@ interface FormValues {
   contractTotal: string;
   bookingStatus: BookingStatus;
   contractStatus: ContractStatus;
+  notes: string;
 }
 
-type ValidatedField = "name" | "email" | "quoteAmount" | "contractTotal";
-type FormErrors = Partial<Record<VendorField, string>>;
+/** A new vendor starts as Researching with no contract. */
+const NEW_VENDOR: VendorFields = {
+  name: "",
+  category: null,
+  contactName: null,
+  email: null,
+  phone: null,
+  quoteAmount: null,
+  contractTotal: null,
+  bookingStatus: "RESEARCHING",
+  contractStatus: "NOT_STARTED",
+  notes: null,
+};
 
-function initialValues(vendor: Vendor | null): FormValues {
+const FIELD_ORDER: VendorField[] = [
+  "name",
+  "category",
+  "contactName",
+  "email",
+  "phone",
+  "quoteAmount",
+  "contractTotal",
+  "contractStatus",
+  "bookingStatus",
+  "notes",
+];
+
+function savedFields(vendor: Vendor | null): VendorFields {
+  if (!vendor) return NEW_VENDOR;
+  const fields = {} as Record<string, unknown>;
+  for (const key of FIELD_ORDER) fields[key] = vendor[key];
+  return fields as unknown as VendorFields;
+}
+
+function initialValues(saved: VendorFields): FormValues {
   return {
-    name: vendor?.name ?? "",
-    category: vendor?.category ?? "",
-    contactName: vendor?.contactName ?? "",
-    email: vendor?.email ?? "",
-    phone: vendor?.phone ?? "",
-    quoteAmount: vendor?.quoteAmount == null ? "" : String(vendor.quoteAmount),
-    contractTotal: vendor?.contractTotal == null ? "" : String(vendor.contractTotal),
-    // New vendors start as Researching with no contract.
-    bookingStatus: vendor?.bookingStatus ?? "researching",
-    contractStatus: vendor?.contractStatus ?? "none",
+    name: saved.name,
+    category: saved.category ?? "",
+    contactName: saved.contactName ?? "",
+    email: saved.email ?? "",
+    phone: saved.phone ?? "",
+    quoteAmount: saved.quoteAmount ?? "",
+    contractTotal: saved.contractTotal ?? "",
+    bookingStatus: saved.bookingStatus,
+    contractStatus: saved.contractStatus,
+    notes: saved.notes ?? "",
   };
 }
 
-function validate(field: ValidatedField, values: FormValues) {
+/** The vendor the form describes, in the API's shape: trimmed, empty text as null, money as "0.00". */
+function toFields(values: FormValues): VendorFields {
+  const text = (value: string) => value.trim() || null;
+  const money = (value: string) => toMoney(value) ?? null;
+  return {
+    name: values.name.trim(),
+    category: text(values.category),
+    contactName: text(values.contactName),
+    email: text(values.email),
+    phone: text(values.phone),
+    quoteAmount: money(values.quoteAmount),
+    contractTotal: values.contractStatus === "NOT_STARTED" ? null : money(values.contractTotal),
+    bookingStatus: values.bookingStatus,
+    contractStatus: values.contractStatus,
+    notes: text(values.notes),
+  };
+}
+
+/** POST sends every field; PATCH sends only the fields that changed. */
+function requestBody(fields: VendorFields, saved: VendorFields, isNew: boolean): VendorUpdateInput {
+  if (isNew) return fields;
+  const changes: Record<string, unknown> = {};
+  for (const key of FIELD_ORDER) {
+    if (fields[key] !== saved[key]) changes[key] = fields[key];
+  }
+  return changes as VendorUpdateInput;
+}
+
+function fieldError(field: VendorField, values: FormValues) {
   switch (field) {
     case "name":
       return nameError(values.name);
     case "email":
       return emailError(values.email);
+    case "category":
+    case "contactName":
+    case "phone":
+    case "notes":
+      return textError(field, values[field].trim());
     case "quoteAmount":
-      return parseAmount(values.quoteAmount, "Quote amount").error;
+      return moneyTextError(values.quoteAmount);
     case "contractTotal":
-      return values.contractStatus === "none"
-        ? ""
-        : parseAmount(values.contractTotal, "Contract total").error;
+      return values.contractStatus === "NOT_STARTED" ? "" : moneyTextError(values.contractTotal);
+    default:
+      return "";
   }
 }
-
-const VALIDATED_FIELDS: ValidatedField[] = ["name", "email", "quoteAmount", "contractTotal"];
 
 export function VendorForm({
   formId,
@@ -80,10 +152,11 @@ export function VendorForm({
   formId: string;
   /** The vendor being edited, or null when adding. */
   vendor: Vendor | null;
-  onSubmit: (input: VendorFormInput) => Promise<VendorFormSubmitError | null>;
+  onSubmit: (body: VendorUpdateInput) => Promise<VendorFormSubmitError | null>;
 }) {
-  const [values, setValues] = useState<FormValues>(() => initialValues(vendor));
-  const [errors, setErrors] = useState<FormErrors>({});
+  const [saved] = useState(() => savedFields(vendor));
+  const [values, setValues] = useState<FormValues>(() => initialValues(saved));
+  const [errors, setErrors] = useState<VendorFieldErrors>({});
   const [banner, setBanner] = useState("");
   const [statusNote, setStatusNote] = useState("");
   const [confirmResearching, setConfirmResearching] = useState(false);
@@ -101,30 +174,33 @@ export function VendorForm({
     setErrors((current) => ({ ...current, [field]: "" }));
   };
 
-  const validateOnBlur = (field: ValidatedField) =>
-    setErrors((current) => ({ ...current, [field]: validate(field, values) }));
+  const validateOnBlur = (field: VendorField) =>
+    setErrors((current) => ({ ...current, [field]: fieldError(field, values) }));
 
   const changeQuote = (text: string) => {
     set("quoteAmount", text);
-    if (text.trim() !== "" && values.bookingStatus === "researching") {
-      set("bookingStatus", "quoted");
+    if (text.trim() !== "" && values.bookingStatus === "RESEARCHING") {
+      set("bookingStatus", "QUOTED");
       setStatusNote("Changed to Quoted because a quote was entered.");
     }
   };
 
   const changeContractStatus = (next: ContractStatus) => {
     set("contractStatus", next);
-    if (next === "none") set("contractTotal", "");
-    if (next === "signed" && values.bookingStatus !== "booked") {
-      set("bookingStatus", "booked");
+    if (next === "NOT_STARTED") set("contractTotal", "");
+    if (next === "SIGNED" && values.bookingStatus === "QUOTED") {
+      set("bookingStatus", "BOOKED");
       setStatusNote("Changed to Booked because the contract is signed.");
     }
   };
 
   const changeBookingStatus = (next: BookingStatus) => {
     if (
-      next === "researching" &&
-      researchingNeedsConfirmation(values.quoteAmount.trim() !== "", values.contractStatus)
+      next === "RESEARCHING" &&
+      researchingNeedsConfirmation({
+        quoteAmount: values.quoteAmount.trim() || null,
+        contractStatus: values.contractStatus,
+      })
     ) {
       setConfirmResearching(true);
       return;
@@ -136,9 +212,9 @@ export function VendorForm({
   const moveToResearching = () => {
     setValues((current) => ({
       ...current,
-      bookingStatus: "researching",
+      bookingStatus: "RESEARCHING",
       quoteAmount: "",
-      contractStatus: "none",
+      contractStatus: "NOT_STARTED",
       contractTotal: "",
     }));
     setErrors((current) => ({ ...current, quoteAmount: "", contractTotal: "" }));
@@ -146,60 +222,61 @@ export function VendorForm({
     setConfirmResearching(false);
   };
 
+  const showErrors = (nextErrors: VendorFieldErrors, message: string) => {
+    setErrors(nextErrors);
+    setBanner(message);
+    setFocusErrors((count) => count + 1);
+  };
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (submitting.current) return;
 
-    const nextErrors: FormErrors = {};
-    for (const field of VALIDATED_FIELDS) nextErrors[field] = validate(field, values);
-    setErrors(nextErrors);
-    if (Object.values(nextErrors).some(Boolean)) {
-      setBanner("Please fix the highlighted fields and try again.");
-      setFocusErrors((count) => count + 1);
+    // Same checks as the server, so most problems show up without a request.
+    const nextErrors: VendorFieldErrors = {};
+    for (const field of FIELD_ORDER) {
+      const message = fieldError(field, values);
+      if (message) nextErrors[field] = message;
+    }
+    const fields = toFields(values);
+    const body = requestBody(fields, saved, vendor === null);
+    if (!Object.keys(nextErrors).length) {
+      Object.assign(nextErrors, applyStatusRules(saved, body as Partial<VendorFields>).fields);
+    }
+    if (Object.keys(nextErrors).length) {
+      showErrors(nextErrors, "Please fix the highlighted fields and try again.");
       return;
     }
 
+    setErrors({});
     setBanner("");
     submitting.current = true;
-    const failure = await onSubmit({
-      name: values.name.trim(),
-      category: values.category.trim(),
-      contactName: values.contactName.trim(),
-      email: values.email.trim(),
-      phone: values.phone.trim(),
-      quoteAmount: parseAmount(values.quoteAmount, "Quote amount").value,
-      contractTotal:
-        values.contractStatus === "none"
-          ? null
-          : parseAmount(values.contractTotal, "Contract total").value,
-      bookingStatus: values.bookingStatus,
-      contractStatus: values.contractStatus,
-    });
+    const failure = await onSubmit(body);
     submitting.current = false;
 
     // On failure everything the user typed stays in place.
     if (failure) {
-      setBanner(failure.message);
-      if (failure.field) setErrors((current) => ({ ...current, [failure.field!]: failure.message }));
+      if (failure.fields && Object.keys(failure.fields).length) showErrors(failure.fields, failure.message);
+      else setBanner(failure.message);
     }
   };
 
-  const statusState = { bookingStatus: values.bookingStatus, contractStatus: values.contractStatus };
-  const noContract = values.contractStatus === "none";
+  const formState = toFields(values);
+  const noContract = values.contractStatus === "NOT_STARTED";
 
   const bookingHint =
     statusNote ||
-    (values.contractStatus === "signed"
+    (values.contractStatus === "SIGNED"
       ? "Cancel the contract first to change the booking status."
       : hasActiveContract(values.contractStatus)
         ? "Cancel the contract first to move back to Researching or decline."
         : undefined);
 
   const contractHint =
-    values.bookingStatus === "researching"
+    values.bookingStatus === "RESEARCHING"
       ? "Add a quote first to add a contract."
-      : values.bookingStatus === "declined" && values.contractStatus !== "cancelled"
-        ? "Declined vendors can't take on a contract."
+      : values.bookingStatus === "DECLINED" && !hasActiveContract(values.contractStatus)
+        ? "Declined vendors can't take on an active contract."
         : undefined;
 
   return (
@@ -219,7 +296,7 @@ export function VendorForm({
         onChange={(event) => set("name", event.target.value)}
         onBlur={() => validateOnBlur("name")}
         error={errors.name}
-        maxLength={FIELD_LIMITS.name}
+        maxLength={MAX_LENGTH.name}
         autoComplete="organization"
         required
       />
@@ -230,8 +307,9 @@ export function VendorForm({
           placeholder="e.g. Catering"
           value={values.category}
           onChange={(event) => set("category", event.target.value)}
+          onBlur={() => validateOnBlur("category")}
           error={errors.category}
-          maxLength={FIELD_LIMITS.category}
+          maxLength={MAX_LENGTH.category}
         />
         <Field
           label="Contact name"
@@ -239,8 +317,9 @@ export function VendorForm({
           placeholder="Full name"
           value={values.contactName}
           onChange={(event) => set("contactName", event.target.value)}
+          onBlur={() => validateOnBlur("contactName")}
           error={errors.contactName}
-          maxLength={FIELD_LIMITS.contactName}
+          maxLength={MAX_LENGTH.contactName}
           autoComplete="name"
         />
       </div>
@@ -254,7 +333,7 @@ export function VendorForm({
           onChange={(event) => set("email", event.target.value)}
           onBlur={() => validateOnBlur("email")}
           error={errors.email}
-          maxLength={FIELD_LIMITS.email}
+          maxLength={MAX_LENGTH.email}
           autoComplete="email"
         />
         <Field
@@ -264,8 +343,9 @@ export function VendorForm({
           placeholder="(555) 000-0000"
           value={values.phone}
           onChange={(event) => set("phone", event.target.value)}
+          onBlur={() => validateOnBlur("phone")}
           error={errors.phone}
-          maxLength={FIELD_LIMITS.phone}
+          maxLength={MAX_LENGTH.phone}
           autoComplete="tel"
         />
       </div>
@@ -303,8 +383,8 @@ export function VendorForm({
           hint={contractHint}
           options={CONTRACT_STATUSES.map((status) => ({
             value: status,
-            label: status === "none" ? "No contract" : contractLabels[status],
-            disabled: Boolean(contractOptionDisabledReason(status, statusState)),
+            label: contractLabels[status],
+            disabled: Boolean(contractOptionDisabledReason(status, formState)),
           }))}
         />
         <SelectField
@@ -317,10 +397,21 @@ export function VendorForm({
           options={BOOKING_STATUSES.map((status) => ({
             value: status,
             label: bookingLabels[status],
-            disabled: Boolean(bookingOptionDisabledReason(status, statusState)),
+            disabled: Boolean(bookingOptionDisabledReason(status, formState)),
           }))}
         />
       </div>
+      <TextAreaField
+        label="Notes"
+        name="notes"
+        rows={3}
+        placeholder="Anything to remember about this vendor"
+        value={values.notes}
+        onChange={(event) => set("notes", event.target.value)}
+        onBlur={() => validateOnBlur("notes")}
+        error={errors.notes}
+        maxLength={MAX_LENGTH.notes}
+      />
 
       {confirmResearching && (
         <Modal
@@ -338,7 +429,7 @@ export function VendorForm({
           <p className="modal-copy">
             Moving {values.name.trim() || "this vendor"} back to Researching clears its quote
             amount
-            {values.contractStatus === "cancelled" ? " and the cancelled contract details" : ""}.
+            {values.contractStatus === "CANCELLED" ? " and the cancelled contract details" : ""}.
           </p>
         </Modal>
       )}

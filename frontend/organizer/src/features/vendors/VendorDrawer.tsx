@@ -4,7 +4,7 @@ import { Badge, Button, Icon } from "../../components/ui";
 import { bookingLabels, contractLabels } from "../../services/vendorRules";
 import type { Vendor } from "../../types";
 import { VendorAvatar } from "./VendorCard";
-import { bookingTone, currency, dueDateLabel } from "./vendorFormat";
+import { bookingTone, currency, dueDateLabel, isOverpaid } from "./vendorFormat";
 
 /**
  * Read-only vendor details. Payment figures come from the server (calculated from
@@ -120,6 +120,15 @@ export function VendorDrawer({
           </dl>
         </section>
 
+        <section className="drawer-section" aria-labelledby="vendor-drawer-notes">
+          <h3 id="vendor-drawer-notes">Notes</h3>
+          {vendor.notes ? (
+            <p className="vendor-notes">{vendor.notes}</p>
+          ) : (
+            <p className="detail-empty">No notes yet</p>
+          )}
+        </section>
+
         <section className="drawer-section" aria-labelledby="vendor-drawer-payments">
           <div className="drawer-section-title">
             <div>
@@ -140,8 +149,12 @@ export function VendorDrawer({
               <dd>{currency(vendor.paidTotal)}</dd>
             </div>
             <div>
-              <dt>Balance</dt>
-              <dd>{currency(vendor.balance)}</dd>
+              <dt>{isOverpaid(vendor) ? "Overpaid" : "Balance"}</dt>
+              <dd>
+                {isOverpaid(vendor)
+                  ? currency(String(-Number(vendor.balance)))
+                  : currency(vendor.balance)}
+              </dd>
             </div>
             <div>
               <dt>Next due date</dt>

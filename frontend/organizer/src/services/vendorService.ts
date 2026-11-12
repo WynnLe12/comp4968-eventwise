@@ -1,65 +1,80 @@
 /**
  * Vendor service backed by in-memory mock data.
  *
- * It has the same shape as the future Event API client (list/get/create/update/remove)
- * and behaves like it: validation failures reject with a 422-style error, blocked
- * deletions reject with a typed 409-style conflict, and a failed request never
- * changes stored data. Swap the bodies for `apiRequest` calls when the API is ready.
+ * Each function matches one route in docs/api/vendors.md and behaves like it:
+ * same JSON shape (uppercase statuses, money strings, null for empty text), same
+ * automatic status changes, 422 with per-field messages, 409 SIGNED_CONTRACT /
+ * HAS_EXPENSES on delete, 403 for events you aren't a member of, 404 for unknown
+ * vendors. A failed request never changes stored data.
+ *
+ * To wire the real API, replace each body with the request in its comment and turn
+ * the `{ error: { code, message, fields } }` body into the matching error class below.
  */
-import { CURRENT_EVENT_ID, vendorsSeed } from "../data/mockData";
-import type { Vendor, VendorCreateInput, VendorStoredFields, VendorUpdateInput } from "../types";
-import { mockRequest, mockScenario } from "./mockClient";
 import {
-  amountValueError,
-  applyAutomaticTransitions,
-  deleteConflictFor,
-  emailError,
-  FIELD_LIMITS,
-  nameError,
-  statusViolation,
-  type VendorDeleteConflict,
-  type VendorField,
-} from "./vendorRules";
+  CURRENT_EVENT_ID,
+  type MockVendorExpenses,
+  type MockVendorRecord,
+  vendorsSeed,
+} from "../data/mockData";
+import type {
+  Money,
+  Vendor,
+  VendorCreateInput,
+  VendorFieldErrors,
+  VendorFields,
+  VendorUpdateInput,
+} from "../types";
+import { mockRequest, mockScenario } from "./mockClient";
+import { applyStatusRules, MONEY_FIELDS, validateFields, type VendorDeleteConflict } from "./vendorRules";
 
 export type { VendorDeleteConflict } from "./vendorRules";
 
+/** Any non-2xx response. `code` is the API's `error.code` (absent for API Gateway's 401). */
 export class VendorServiceError extends Error {
   constructor(
     message: string,
     public readonly status: number,
+    public readonly code?: string,
   ) {
     super(message);
     this.name = "VendorServiceError";
   }
 }
 
-/** 422: the record breaks a validation or status rule. */
+/** 422 VALIDATION_ERROR: `fields` maps each invalid field to the message shown under it. */
 export class VendorValidationError extends VendorServiceError {
   constructor(
     message: string,
-    public readonly field?: VendorField,
+    public readonly fields: VendorFieldErrors,
   ) {
-    super(message, 422);
+    super(message, 422, "VALIDATION_ERROR");
     this.name = "VendorValidationError";
   }
 }
 
-/** 409: the vendor can't be deleted. */
+/** 409 SIGNED_CONTRACT or HAS_EXPENSES from DELETE. */
 export class VendorDeleteConflictError extends VendorServiceError {
   constructor(
     message: string,
     public readonly conflict: VendorDeleteConflict,
   ) {
-    super(message, 409);
+    super(message, 409, conflict);
     this.name = "VendorDeleteConflictError";
   }
 }
 
-let vendors: Vendor[] = structuredClone(vendorsSeed);
-const accessibleEvents = new Set([CURRENT_EVENT_ID]);
+// ---------------------------------------------------------------------------
+// Mock store
+// ---------------------------------------------------------------------------
 
-const STORED_FIELDS = [
-  "eventId",
+let records: MockVendorRecord[] = vendorsSeed.map((seed) => structuredClone(seed.record));
+const expensesByVendor = new Map<string, MockVendorExpenses>(
+  vendorsSeed.map((seed) => [seed.record.id, { ...seed.expenses }]),
+);
+const memberOf = new Set([CURRENT_EVENT_ID]);
+let lastVendorId = Math.max(...records.map((record) => Number(record.id)));
+
+const EDITABLE_FIELDS = [
   "name",
   "category",
   "contactName",
@@ -69,152 +84,190 @@ const STORED_FIELDS = [
   "contractTotal",
   "bookingStatus",
   "contractStatus",
-] as const satisfies readonly VendorField[];
+  "notes",
+] as const satisfies readonly (keyof VendorFields)[];
 
-const EMPTY_VENDOR: VendorStoredFields = {
-  eventId: "",
+const NEW_VENDOR: VendorFields = {
   name: "",
-  category: "",
-  contactName: "",
-  email: "",
-  phone: "",
+  category: null,
+  contactName: null,
+  email: null,
+  phone: null,
   quoteAmount: null,
   contractTotal: null,
-  bookingStatus: "researching",
-  contractStatus: "none",
+  bookingStatus: "RESEARCHING",
+  contractStatus: "NOT_STARTED",
+  notes: null,
 };
 
-/** Keeps only stored fields; computed fields (paidTotal, balance, ...) are ignored. */
-function pickStoredFields(input: object): Partial<VendorStoredFields> {
-  const source = input as Record<string, unknown>;
-  const picked: Record<string, unknown> = {};
-  for (const field of STORED_FIELDS) {
-    if (source[field] !== undefined) picked[field] = source[field];
-  }
-  return picked as Partial<VendorStoredFields>;
-}
+const NO_EXPENSES: MockVendorExpenses = { paidTotal: "0.00", nextDueDate: null, expenseCount: 0 };
 
-function assertEventAccess(eventId: string) {
-  if (mockScenario() === "forbidden" || !accessibleEvents.has(eventId)) {
-    throw new VendorServiceError("You don't have access to this event.", 403);
-  }
-}
-
-/** Merges changes onto a record, applies automatic transitions, and validates the result. */
-function buildRecord(changes: Partial<VendorStoredFields>, existing: VendorStoredFields) {
-  const merged: VendorStoredFields = { ...existing, ...changes };
-  for (const field of ["name", "category", "contactName", "email", "phone"] as const) {
-    merged[field] = String(merged[field] ?? "").trim();
-  }
-
-  const fieldErrors: [VendorField, string][] = [
-    ["name", nameError(merged.name)],
-    ["email", emailError(merged.email)],
-    ["quoteAmount", amountValueError(merged.quoteAmount, "Quote amount")],
-    ["contractTotal", amountValueError(merged.contractTotal, "Contract total")],
-  ];
-  for (const field of ["category", "contactName", "email", "phone"] as const) {
-    if (merged[field].length > FIELD_LIMITS[field]) {
-      fieldErrors.push([field, `Keep this under ${FIELD_LIMITS[field]} characters.`]);
+/**
+ * Like the server's cleanInput: keeps only editable fields, trims strings, turns empty
+ * strings into null and money numbers into strings. Everything else is ignored.
+ */
+function cleanInput(body: object): Partial<VendorFields> {
+  const source = body as Record<string, unknown>;
+  const changes: Record<string, unknown> = {};
+  for (const key of EDITABLE_FIELDS) {
+    if (!Object.hasOwn(source, key)) continue;
+    let value = source[key];
+    if (typeof value === "string") {
+      value = value.trim() || null;
+    } else if (
+      typeof value === "number" &&
+      Number.isFinite(value) &&
+      (MONEY_FIELDS as readonly string[]).includes(key)
+    ) {
+      value = String(value);
     }
+    changes[key] = value;
   }
-  const firstError = fieldErrors.find(([, message]) => message);
-  if (firstError) throw new VendorValidationError(firstError[1], firstError[0]);
-
-  const record = applyAutomaticTransitions(merged, changes);
-  const violation = statusViolation(record);
-  if (violation) throw new VendorValidationError(violation.message, violation.field);
-  return record;
+  return changes as Partial<VendorFields>;
 }
 
-/** Stand-in for the server's expense roll-up. The UI never computes these. */
-function withComputedFields(record: VendorStoredFields, id: string, existing?: Vendor): Vendor {
-  const paidTotal = existing?.paidTotal ?? 0;
-  const balance =
-    record.contractTotal === null ? null : Math.max(record.contractTotal - paidTotal, 0);
+/** Stores money with exactly 2 decimals, the way MySQL DECIMAL(12,2) returns it. */
+function storedMoney(value: Money | null): Money | null {
+  return value === null ? null : Number(value).toFixed(2);
+}
+
+function cents(value: Money) {
+  return Math.round(Number(value) * 100);
+}
+
+/** Validates and returns the fields to save, or throws 422 with every problem by field. */
+function prepare(current: VendorFields, body: object): VendorFields {
+  const { next, fields: ruleErrors } = applyStatusRules(current, cleanInput(body));
+  const fields: VendorFieldErrors = { ...ruleErrors, ...validateFields(next) };
+  if (Object.keys(fields).length > 0) {
+    throw new VendorValidationError("Check the submitted fields.", fields);
+  }
   return {
-    ...record,
-    id,
-    paidTotal,
-    balance,
-    nextDueDate: balance !== null && balance > 0 ? (existing?.nextDueDate ?? null) : null,
+    ...next,
+    quoteAmount: storedMoney(next.quoteAmount),
+    contractTotal: storedMoney(next.contractTotal),
   };
 }
 
-function findVendor(id: string) {
-  const vendor = vendors.find((item) => item.id === id);
-  if (!vendor) throw new VendorServiceError("This vendor no longer exists.", 404);
-  return vendor;
+/** Stand-in for the server's vendor query, which reads the totals from vendor_payment_totals. */
+function toVendor(record: MockVendorRecord): Vendor {
+  const expenses = expensesByVendor.get(record.id) ?? NO_EXPENSES;
+  const balance =
+    record.contractTotal === null
+      ? null
+      : ((cents(record.contractTotal) - cents(expenses.paidTotal)) / 100).toFixed(2);
+  return {
+    ...record,
+    paidTotal: expenses.paidTotal,
+    balance,
+    nextDueDate: expenses.nextDueDate,
+  };
 }
 
-function newVendorId() {
-  return `vendor-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+function editableFields(record: MockVendorRecord): VendorFields {
+  const fields = {} as Record<string, unknown>;
+  for (const key of EDITABLE_FIELDS) fields[key] = record[key];
+  return fields as unknown as VendorFields;
 }
+
+function requireMember(eventId: string) {
+  if (mockScenario() === "forbidden" || !memberOf.has(eventId)) {
+    throw new VendorServiceError("You don't have access to this event.", 403, "FORBIDDEN");
+  }
+}
+
+/** A vendor from another event is a 404, so the API never reveals that it exists. */
+function findRecord(eventId: string, vendorId: string) {
+  const record = records.find((item) => item.id === vendorId && item.eventId === eventId);
+  if (!record) throw new VendorServiceError("This vendor no longer exists.", 404, "NOT_FOUND");
+  return record;
+}
+
+function failIfSaveErrorScenario() {
+  if (mockScenario() === "save-error") {
+    throw new VendorServiceError("Something went wrong. Please try again.", 500, "INTERNAL_ERROR");
+  }
+}
+
+function now() {
+  return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
 
 export const vendorService = {
+  /** GET /events/{eventId}/vendors -> 200, sorted by name. */
   list: (eventId: string) =>
     mockRequest(() => {
-      assertEventAccess(eventId);
+      requireMember(eventId);
       if (mockScenario() === "error") {
-        throw new VendorServiceError("We couldn't load your vendors. Please try again.", 500);
+        throw new VendorServiceError("We couldn't load your vendors. Please try again.", 500, "INTERNAL_ERROR");
       }
       if (mockScenario() === "empty") return [];
-      return vendors.filter((vendor) => vendor.eventId === eventId);
+      return records
+        .filter((record) => record.eventId === eventId)
+        .map(toVendor)
+        .sort((a, b) => a.name.localeCompare(b.name));
     }),
 
-  get: (id: string) =>
+  /** GET /events/{eventId}/vendors/{vendorId} -> 200. */
+  get: (eventId: string, vendorId: string) =>
     mockRequest(() => {
-      const vendor = findVendor(id);
-      assertEventAccess(vendor.eventId);
-      return vendor;
+      requireMember(eventId);
+      return toVendor(findRecord(eventId, vendorId));
     }),
 
-  create: (input: VendorCreateInput) =>
+  /** POST /events/{eventId}/vendors -> 201. The event comes from the URL, never the body. */
+  create: (eventId: string, input: VendorCreateInput) =>
     mockRequest(() => {
-      const changes = pickStoredFields(input);
-      assertEventAccess(changes.eventId ?? "");
-      if (mockScenario() === "save-error") {
-        throw new VendorServiceError("Something went wrong while saving. Please try again.", 500);
-      }
-      const record = buildRecord(changes, EMPTY_VENDOR);
-      const vendor = withComputedFields(record, newVendorId());
-      vendors = [...vendors, vendor];
-      return vendor;
+      requireMember(eventId);
+      failIfSaveErrorScenario();
+      const fields = prepare(NEW_VENDOR, input);
+      const timestamp = now();
+      lastVendorId += 1;
+      const record: MockVendorRecord = {
+        ...fields,
+        id: String(lastVendorId),
+        eventId,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      records = [...records, record];
+      return toVendor(record);
     }),
 
-  update: (id: string, input: VendorUpdateInput) =>
+  /** PATCH /events/{eventId}/vendors/{vendorId} with only the changed fields -> 200. */
+  update: (eventId: string, vendorId: string, input: VendorUpdateInput) =>
     mockRequest(() => {
-      const existing = findVendor(id);
-      assertEventAccess(existing.eventId);
-      if (mockScenario() === "save-error") {
-        throw new VendorServiceError("Something went wrong while saving. Please try again.", 500);
-      }
-      // A vendor can't be moved to another event through an update.
-      const { eventId: _ignored, ...changes } = pickStoredFields(input);
-      const record = buildRecord(changes, existing);
-      const vendor = withComputedFields(record, id, existing);
-      vendors = vendors.map((item) => (item.id === id ? vendor : item));
-      return vendor;
+      requireMember(eventId);
+      const existing = findRecord(eventId, vendorId);
+      failIfSaveErrorScenario();
+      const fields = prepare(editableFields(existing), input);
+      const record: MockVendorRecord = { ...existing, ...fields, updatedAt: now() };
+      records = records.map((item) => (item.id === vendorId ? record : item));
+      return toVendor(record);
     }),
 
-  remove: (id: string) =>
+  /** DELETE /events/{eventId}/vendors/{vendorId} -> 204. The first conflict that applies wins. */
+  remove: (eventId: string, vendorId: string) =>
     mockRequest(() => {
-      const vendor = findVendor(id);
-      assertEventAccess(vendor.eventId);
-      const conflict = deleteConflictFor(vendor);
-      if (conflict === "signed-contract") {
+      requireMember(eventId);
+      const record = findRecord(eventId, vendorId);
+      if (record.bookingStatus === "BOOKED" && record.contractStatus === "SIGNED") {
         throw new VendorDeleteConflictError(
-          `${vendor.name} is booked with a signed contract and can't be deleted.`,
-          conflict,
+          "This vendor is booked with a signed contract. Mark it as cancelled instead.",
+          "SIGNED_CONTRACT",
         );
       }
-      if (conflict === "recorded-expenses") {
+      if ((expensesByVendor.get(vendorId) ?? NO_EXPENSES).expenseCount > 0) {
         throw new VendorDeleteConflictError(
-          `${vendor.name} has expenses recorded and can't be deleted.`,
-          conflict,
+          "This vendor has expenses. Remove or move them to another vendor first.",
+          "HAS_EXPENSES",
         );
       }
-      vendors = vendors.filter((item) => item.id !== id);
-      return { id };
+      records = records.filter((item) => item.id !== vendorId);
+      expensesByVendor.delete(vendorId);
     }),
 };

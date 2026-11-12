@@ -8,8 +8,8 @@ import { pagePath } from "../../routes/navigation";
 import {
   BOOKING_STATUSES,
   bookingLabels,
-  deleteConflictFor,
-  RESET_TO_RESEARCHING,
+  contractStatusChange,
+  predictDeleteConflict,
   researchingNeedsConfirmation,
   type VendorDeleteConflict,
 } from "../../services/vendorRules";
@@ -19,11 +19,17 @@ import {
   VendorServiceError,
   VendorValidationError,
 } from "../../services/vendorService";
-import type { BookingStatus, ContractStatus, Vendor, VendorUpdateInput } from "../../types";
+import type {
+  BookingStatus,
+  ContractStatus,
+  Vendor,
+  VendorCreateInput,
+  VendorUpdateInput,
+} from "../../types";
 import { VendorActions } from "./VendorActions";
 import { VendorCard } from "./VendorCard";
 import { VendorDrawer } from "./VendorDrawer";
-import { VendorForm, type VendorFormInput, type VendorFormSubmitError } from "./VendorForm";
+import { VendorForm, type VendorFormSubmitError } from "./VendorForm";
 import "./vendors.css";
 
 export type ToastTone = "success" | "error";
@@ -34,6 +40,11 @@ const VENDOR_FORM_ID = "vendor-form";
 
 function errorMessage(reason: unknown, fallback: string) {
   return reason instanceof Error && reason.message ? reason.message : fallback;
+}
+
+/** 404 NOT_FOUND: the vendor was deleted elsewhere (or belongs to another event). */
+function isNotFound(reason: unknown) {
+  return reason instanceof VendorServiceError && reason.status === 404;
 }
 
 function sortVendors(list: Vendor[], sort: SortKey) {
@@ -47,8 +58,12 @@ function sortVendors(list: Vendor[], sort: SortKey) {
       }
     } else if (sort === "balance") {
       // Largest outstanding balance first; vendors without a contract go last.
-      const diff = (b.balance ?? -1) - (a.balance ?? -1);
-      if (diff !== 0) return diff;
+      if (a.balance !== b.balance) {
+        if (a.balance === null) return 1;
+        if (b.balance === null) return -1;
+        const diff = Number(b.balance) - Number(a.balance);
+        if (diff !== 0) return diff;
+      }
     }
     return a.name.localeCompare(b.name);
   });
@@ -84,10 +99,11 @@ export function Vendors({
   // Summary metrics always use every vendor of the event, never the filtered list.
   const metrics = useMemo(
     () => ({
-      booked: vendors.filter((v) => v.bookingStatus === "booked").length,
+      booked: vendors.filter((v) => v.bookingStatus === "BOOKED").length,
       quotes: vendors.filter((v) => v.quoteAmount !== null).length,
-      signed: vendors.filter((v) => v.contractStatus === "signed").length,
-      upcoming: vendors.filter((v) => v.nextDueDate !== null && (v.balance ?? 0) > 0).length,
+      signed: vendors.filter((v) => v.contractStatus === "SIGNED").length,
+      // nextDueDate is only set while a linked expense still has money owing.
+      upcoming: vendors.filter((v) => v.nextDueDate !== null).length,
     }),
     [vendors],
   );
@@ -95,17 +111,20 @@ export function Vendors({
   const tabCounts = useMemo(() => {
     const counts: Record<BookingFilter, number> = {
       all: vendors.length,
-      researching: 0,
-      quoted: 0,
-      booked: 0,
-      declined: 0,
+      RESEARCHING: 0,
+      QUOTED: 0,
+      BOOKED: 0,
+      DECLINED: 0,
     };
     for (const vendor of vendors) counts[vendor.bookingStatus] += 1;
     return counts;
   }, [vendors]);
 
   const categories = useMemo(
-    () => [...new Set(vendors.map((v) => v.category).filter(Boolean))].sort(),
+    () =>
+      [...new Set(vendors.map((v) => v.category))]
+        .filter((category): category is string => Boolean(category))
+        .sort(),
     [vendors],
   );
   // If the selected category disappears (vendor edited or deleted), fall back to all.
@@ -117,7 +136,7 @@ export function Vendors({
       (vendor) =>
         (!needle ||
           vendor.name.toLowerCase().includes(needle) ||
-          vendor.contactName.toLowerCase().includes(needle)) &&
+          (vendor.contactName ?? "").toLowerCase().includes(needle)) &&
         (bookingFilter === "all" || vendor.bookingStatus === bookingFilter) &&
         (activeCategory === "all" || vendor.category === activeCategory),
     );
@@ -143,14 +162,26 @@ export function Vendors({
     navigate(`${pagePath("expenses")}?vendorId=${encodeURIComponent(vendor.id)}`);
   };
 
-  const saveVendor = async (input: VendorFormInput): Promise<VendorFormSubmitError | null> => {
+  /** Shared failure handling for 404 NOT_FOUND: toast, then reload the list (API contract 6). */
+  const handleNotFound = (reason: unknown) => {
+    if (!isNotFound(reason)) return false;
+    setSelectedId(null);
+    setEditing(undefined);
+    setDeleting(null);
+    setResearchTarget(null);
+    onToast(errorMessage(reason, "This vendor no longer exists."), "error");
+    reload();
+    return true;
+  };
+
+  const saveVendor = async (body: VendorUpdateInput): Promise<VendorFormSubmitError | null> => {
     setSaving(true);
     try {
       if (editing) {
-        replaceVendor(await vendorService.update(editing.id, input));
+        replaceVendor(await vendorService.update(CURRENT_EVENT_ID, editing.id, body));
         onToast("Vendor updated");
       } else {
-        const created = await vendorService.create({ ...input, eventId: CURRENT_EVENT_ID });
+        const created = await vendorService.create(CURRENT_EVENT_ID, body as VendorCreateInput);
         update((list) => [...list, created]);
         onToast("Vendor added");
       }
@@ -158,8 +189,9 @@ export function Vendors({
       return null;
     } catch (reason) {
       if (reason instanceof VendorValidationError) {
-        return { message: reason.message, field: reason.field };
+        return { message: reason.message, fields: reason.fields };
       }
+      if (handleNotFound(reason)) return null;
       const message = errorMessage(reason, "We couldn't save this vendor. Please try again.");
       onToast(message, "error");
       return { message };
@@ -171,11 +203,16 @@ export function Vendors({
   const applyUpdate = async (vendor: Vendor, input: VendorUpdateInput, successMessage: string) => {
     setSaving(true);
     try {
-      replaceVendor(await vendorService.update(vendor.id, input));
+      replaceVendor(await vendorService.update(CURRENT_EVENT_ID, vendor.id, input));
       onToast(successMessage);
       return true;
     } catch (reason) {
-      onToast(errorMessage(reason, "We couldn't update this vendor. Please try again."), "error");
+      if (handleNotFound(reason)) return false;
+      const message =
+        reason instanceof VendorValidationError
+          ? (Object.values(reason.fields)[0] ?? reason.message)
+          : errorMessage(reason, "We couldn't update this vendor. Please try again.");
+      onToast(message, "error");
       return false;
     } finally {
       setSaving(false);
@@ -184,10 +221,7 @@ export function Vendors({
 
   const changeBookingStatus = (vendor: Vendor, status: BookingStatus) => {
     if (status === vendor.bookingStatus) return;
-    if (
-      status === "researching" &&
-      researchingNeedsConfirmation(vendor.quoteAmount !== null, vendor.contractStatus)
-    ) {
+    if (status === "RESEARCHING" && researchingNeedsConfirmation(vendor)) {
       setResearchTarget(vendor);
       return;
     }
@@ -196,38 +230,36 @@ export function Vendors({
 
   const changeContractStatus = (vendor: Vendor, status: ContractStatus) => {
     if (status === vendor.contractStatus) return;
-    void applyUpdate(
-      vendor,
-      { contractStatus: status, ...(status === "none" ? { contractTotal: null } : {}) },
-      "Contract status updated",
-    );
+    void applyUpdate(vendor, contractStatusChange(status), "Contract status updated");
   };
 
   const confirmResearching = async () => {
     if (!researchTarget) return;
-    if (await applyUpdate(researchTarget, RESET_TO_RESEARCHING, "Booking status updated")) {
+    // The server clears the quote and contract itself when a vendor moves back to Researching.
+    if (await applyUpdate(researchTarget, { bookingStatus: "RESEARCHING" }, "Booking status updated")) {
       setResearchTarget(null);
     }
   };
 
   // Protected vendors go straight to the explanation; the rest get a confirmation.
   const startDelete = (vendor: Vendor) =>
-    setDeleting({ vendor, conflict: deleteConflictFor(vendor) });
+    setDeleting({ vendor, conflict: predictDeleteConflict(vendor) });
 
   const confirmDelete = async () => {
     if (!deleting) return;
     const { vendor } = deleting;
     setSaving(true);
     try {
-      await vendorService.remove(vendor.id);
+      await vendorService.remove(CURRENT_EVENT_ID, vendor.id);
       update((list) => list.filter((item) => item.id !== vendor.id));
       if (selectedId === vendor.id) setSelectedId(null);
       setDeleting(null);
       onToast("Vendor deleted");
     } catch (reason) {
+      // The server is the real check: a 409 switches the dialog to the explanation.
       if (reason instanceof VendorDeleteConflictError) {
         setDeleting({ vendor, conflict: reason.conflict });
-      } else {
+      } else if (!handleNotFound(reason)) {
         onToast(errorMessage(reason, "We couldn't delete this vendor. Please try again."), "error");
       }
     } finally {
@@ -239,7 +271,7 @@ export function Vendors({
     if (!deleting) return;
     const done = await applyUpdate(
       deleting.vendor,
-      { contractStatus: "cancelled", bookingStatus: "declined" },
+      { contractStatus: "CANCELLED", bookingStatus: "DECLINED" },
       "Vendor marked as cancelled",
     );
     if (done) setDeleting(null);
@@ -456,7 +488,7 @@ export function Vendors({
         >
           <p className="modal-copy">
             Moving {researchTarget.name} back to Researching clears its quote amount
-            {researchTarget.contractStatus === "cancelled" ? " and the cancelled contract details" : ""}
+            {researchTarget.contractStatus === "CANCELLED" ? " and the cancelled contract details" : ""}
             .
           </p>
         </Modal>
@@ -494,7 +526,7 @@ function DeleteVendorModal({
   onMarkCancelled: () => void;
   onViewExpenses: () => void;
 }) {
-  if (conflict === "signed-contract") {
+  if (conflict === "SIGNED_CONTRACT") {
     return (
       <Modal
         title={`${vendor.name} can't be deleted`}
@@ -522,7 +554,7 @@ function DeleteVendorModal({
     );
   }
 
-  if (conflict === "recorded-expenses") {
+  if (conflict === "HAS_EXPENSES") {
     return (
       <Modal
         title={`${vendor.name} can't be deleted`}
@@ -539,8 +571,8 @@ function DeleteVendorModal({
         <div className="vendor-conflict">
           <Icon name="receipt" size={20} />
           <p className="modal-copy">
-            {vendor.name} has expenses recorded against it. Remove its payments and upcoming
-            expenses first, then you can delete the vendor.
+            {vendor.name} has expenses linked to it. Remove those expenses or move them to
+            another vendor first, then you can delete it.
           </p>
         </div>
       </Modal>
