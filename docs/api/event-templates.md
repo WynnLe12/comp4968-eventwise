@@ -57,7 +57,8 @@ Feature 1 will consume the selected template ID. Coordinate allocation calculati
 transactional category initialization with Minh; neither is implemented here.
 The Templates Tab loads the list and selected template details from these APIs.
 Both requests support loading, error/retry and empty states; requests are cancelled
-when their component unmounts. No event creation or allocation preview is implemented.
+when their component unmounts. The separate Create Event dialog supports allocation
+preview; event persistence is not implemented.
 
 Start the backend on port 3000 with DB_* exported, and run `npm run dev` in
 `frontend/organizer`. The Vite development server forwards `/api/*` to
@@ -70,4 +71,31 @@ seeded types and use “View budget defaults” to inspect persisted categories/
 If the backend is unavailable, expect an error with Retry, not mock fallback data.
 A list response with `templates: []` shows an empty state; details with
 `categories: []` show “No budget defaults yet”. This integration does not apply seeds.
-The existing Create Event and Budget reset dialogs remain separate prototype flows.
+The Budget reset dialog remains a separate prototype flow. See the Create Event
+frontend handoff below for the template selector and allocation preview.
+
+## Create Event frontend handoff
+
+`CreateEventModal` is now used for the Event dialog. It owns controlled fields
+`name`, `templateId`, `eventDate`, `venue`, `totalBudget` (`CreateEventDraft`).
+The required event type select loads the template list; selecting it fetches defaults.
+Budget preview is read-only and responds to type and total changes. Failed requests
+can be retried and stale requests are cancelled. Missing/invalid defaults do not produce
+an allocation. Amounts use integer cents with a deterministic largest-remainder rule,
+ties resolved by template order. This provisional rule must be agreed with Minh before
+backend integration. Zero is valid; money is limited to DECIMAL(12,2).
+
+Wynn should wire the form submission to POST /events, validating fields and taking
+ownership identity from authenticated context. No POST request currently occurs and
+the Create event button is deliberately disabled. On integration, enable submission
+only with valid fields/defaults, handle pending/error/success, and return the created
+event ID to selected-event state. Empty dates/venues should be normalized according
+to the agreed Event API contract. The backend must reload defaults and calculate
+amounts itself, then insert event/member/budget categories in one transaction using
+the agreed Budget initializer. Do not trust preview amounts as persisted input.
+
+Check the pure allocation utility with:
+`node --test tests/budgetPreview.test.mjs` from `frontend/organizer`.
+For manual testing open My events → Create event, select each type and enter a budget;
+verify amounts sum to the input, including 0 and 0.01. Rapidly switch types, retry failed
+requests, and cancel/reopen the dialog to verify a clean draft. This does not save data.
