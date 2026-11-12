@@ -6,6 +6,8 @@ import { AppModal, type ModalName } from "./components/AppModal";
 import { Sidebar, Topbar } from "./components/layout";
 import { LoadingState } from "./components/page";
 import { PublicApp } from "./features/auth/PublicPage";
+import { EventsProvider } from "./features/events/EventsContext";
+import { EventWorkspace } from "./features/events/EventWorkspace";
 import { pagePath } from "./routes/navigation";
 import type { Page, PublicPage } from "./types";
 
@@ -51,7 +53,7 @@ function PublicRoute({ page, authenticated, onAuthenticated }: {
   );
 }
 
-function WorkspaceLayout({ onSignOut }: { onSignOut: () => void }) {
+function WorkspaceLayout({ onSignOut, onSessionExpired }: { onSignOut: () => void; onSessionExpired: () => void }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
@@ -60,26 +62,28 @@ function WorkspaceLayout({ onSignOut }: { onSignOut: () => void }) {
   const goToPage = (page: Page) => navigate(pagePath(page));
 
   return (
-    <div className="app-shell">
-      <Sidebar
-        page={currentPage}
-        setPage={goToPage}
-        open={sidebarOpen}
-        close={() => setSidebarOpen(false)}
-      />
-      <div className="app-main">
-        <Topbar
-          toggleMenu={() => setSidebarOpen(true)}
-          goAlerts={() => goToPage("alerts")}
-          exit={onSignOut}
+    <EventsProvider onSessionExpired={onSessionExpired}>
+      <div className="app-shell">
+        <Sidebar
+          page={currentPage}
+          setPage={goToPage}
+          open={sidebarOpen}
+          close={() => setSidebarOpen(false)}
         />
-        <main className="page-content">
-          <Suspense fallback={<LoadingState />}>
-            <Outlet />
-          </Suspense>
-        </main>
+        <div className="app-main">
+          <Topbar
+            toggleMenu={() => setSidebarOpen(true)}
+            goAlerts={() => goToPage("alerts")}
+            exit={onSignOut}
+          />
+          <main className="page-content">
+            <EventWorkspace page={currentPage}>
+              <Suspense fallback={<LoadingState />}><Outlet /></Suspense>
+            </EventWorkspace>
+          </main>
+        </div>
       </div>
-    </div>
+    </EventsProvider>
   );
 }
 
@@ -94,6 +98,25 @@ export default function App() {
   const toastTimer = useRef<number | undefined>(undefined);
   const navigate = useNavigate();
   const go = (page: Page) => navigate(pagePath(page));
+
+  const onEventSessionExpired = useCallback(async () => {
+    if (signOutPending.current) return;
+    signOutPending.current = true;
+    ++sessionVersion.current;
+    setSigningOut(true);
+    try {
+      await cognitoSignOut();
+      setToast("Your session has expired. Please sign in again.");
+    } catch {
+      setToast("Your session is unavailable. Please sign in again.");
+    } finally {
+      signOutPending.current = false;
+      setAuthenticated(false);
+      setCheckingSession(false);
+      setSigningOut(false);
+      navigate("/login", { replace: true });
+    }
+  }, [navigate]);
 
   const openModal = useCallback((name: ModalName) => setModal(name), []);
   const closeModal = useCallback(() => setModal(null), []);
@@ -199,12 +222,12 @@ export default function App() {
         <Route
           path="/app"
           element={
-            authenticated ? <WorkspaceLayout onSignOut={signOut} /> : <Navigate to="/login" replace />
+            authenticated ? <WorkspaceLayout onSignOut={signOut} onSessionExpired={onEventSessionExpired} /> : <Navigate to="/login" replace />
           }
         >
           <Route index element={<Navigate to="dashboard" replace />} />
           <Route path="dashboard" element={<Dashboard go={go} />} />
-          <Route path="events" element={<Events onCreate={() => openModal("event")} go={go} />} />
+          <Route path="events" element={<Events go={go} />} />
           <Route path="budget" element={<Budget openReset={() => openModal("template")} />} />
           <Route path="expenses" element={<Expenses onAdd={() => openModal("expense")} />} />
           <Route path="vendors" element={<Vendors onAdd={() => openModal("vendor")} />} />
