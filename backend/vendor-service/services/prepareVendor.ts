@@ -1,6 +1,6 @@
 // Turns a request body into the vendor that will be saved: clean the input,
 // apply the status rules, then validate the result. Pure: no database, no AWS.
-// The vendor service (step 6) throws a 422 VALIDATION_FAILED with 'fields' when ok is false.
+// The vendor service throws a 422 VALIDATION_ERROR with 'fields' when ok is false.
 import type { FieldErrors, VendorDraft, VendorFields } from "../types";
 import { applyStatusRules } from "./statusRules";
 import { cleanInput, validateFields } from "./validation";
