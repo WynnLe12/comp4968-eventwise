@@ -962,6 +962,7 @@ test("only OWNER details display an Edit action, and the edit form uses real pre
       react: React, "react/jsx-runtime": jsxRuntime,
       "../../../components/ui": { ...ui, Field, Button, Modal: ({ title, children, footer }) => React.createElement("div", null, title, children, footer) },
       "../services/eventApi": api,
+      "../../../services/eventTemplates": { listEventTemplates: async () => [] },
       "../hooks/useEditEvent": { useEditEvent: () => ({ loading: false, saved: false, blocked: false, error: "", submit: () => {}, close: () => {} }) },
     });
     const html = renderToStaticMarkup(React.createElement(modal.EditEventModal, { event: first }));
@@ -1047,4 +1048,164 @@ test("template and event clients share the configured API base and preserve temp
     assert.deepEqual(await client.getEventTemplate("42"), previewTemplate);
     assert.deepEqual(calls, ["https://example.invalid/api/event-templates", "https://example.invalid/api/event-templates/42"]);
   } finally { globalThis.fetch = previous; }
+});
+
+
+function findElement(element, type) {
+  if (!element || typeof element !== "object") return null;
+  if (Array.isArray(element)) {
+    for (const child of element) { const found = findElement(child, type); if (found) return found; }
+    return null;
+  }
+  return element.type === type ? element : findElement(element.props?.children, type);
+}
+
+async function withEditTemplateForm(api, original, submit, run) {
+  const states = [], effects = [], requests = [];
+  let stateIndex = 0, effectIndex = 0;
+  const scheduled = [];
+  const Field = loadModule("../src/components/ui/Field.tsx", { "react/jsx-runtime": jsxRuntime }).Field;
+  const Button = loadModule("../src/components/ui/Button.tsx", { "react/jsx-runtime": jsxRuntime, "./Icon": { Icon: ui.Icon } }).Button;
+  const modal = loadModule("../src/features/events/components/EditEventModal.tsx", {
+    react: {
+      useState: (initial) => {
+        const index = stateIndex++;
+        if (!(index in states)) states[index] = typeof initial === "function" ? initial() : initial;
+        return [states[index], (value) => { states[index] = typeof value === "function" ? value(states[index]) : value; }];
+      },
+      useEffect: (callback, deps) => {
+        const index = effectIndex++;
+        if (!effects[index] || deps.some((dep, i) => dep !== effects[index].deps[i])) scheduled.push(() => {
+          effects[index]?.cleanup?.(); effects[index] = { deps, cleanup: callback() };
+        });
+      },
+    },
+    "react/jsx-runtime": jsxRuntime,
+    "../../../components/ui": { ...ui, Field, Button, Modal: ({ children, footer }) => React.createElement("div", null, children, footer) },
+    "../services/eventApi": api,
+    "../../../services/eventTemplates": { listEventTemplates: (signal) => new Promise((resolve, reject) => requests.push({ signal, resolve, reject })) },
+    "../hooks/useEditEvent": { useEditEvent: () => ({ loading: false, saved: false, blocked: false, error: "", submit, close: () => {} }) },
+  });
+  const render = () => {
+    stateIndex = 0; effectIndex = 0;
+    const result = modal.EditEventModal({ event: original });
+    while (scheduled.length) scheduled.shift()();
+    return result;
+  };
+  const cleanup = () => { for (const effect of effects) effect?.cleanup?.(); };
+  try {
+    render();
+    await run({ render, requests, cleanup, settle: () => new Promise((resolve) => setImmediate(resolve)) });
+  } finally { cleanup(); }
+}
+const editTemplateCatalog = [
+  { templateId: "701", templateKey: "first-type", name: "API event type A", description: null },
+  { templateId: "902", templateKey: "second-type", name: "API event type B", description: null },
+];
+
+test("Edit preselects the saved template and changing the dropdown PATCHes its real ID only", async () => {
+  const original = { ...first, template_id: "701" };
+  let inFlight;
+  let count = 0;
+  await withApi(async (url, options) => {
+    count++;
+    assert.equal(url, `/api/events/${original.event_id}`);
+    assert.equal(options.method, "PATCH");
+    assert.deepEqual(JSON.parse(options.body), { template_id: "902" });
+    return Response.json({ ...original, template_id: "902" });
+  }, async (api) => {
+    await withEditTemplateForm(api, original, (draft) => {
+      const patch = api.buildEventPatch(original, draft);
+      if (Object.keys(patch).length) inFlight = api.updateEvent(original.event_id, patch);
+    }, async ({ render, requests, settle }) => {
+      assert.equal(findElement(render(), "select").props.disabled, true);
+      requests[0].resolve(editTemplateCatalog);
+      await settle();
+      let element = render();
+      let select = findElement(element, "select");
+      assert.equal(select.props.value, "701");
+      const html = renderToStaticMarkup(element);
+      assert.match(html, /value="701" selected=""/);
+      assert.match(html, /API event type A/);
+      assert.match(html, /API event type B/);
+      assert.doesNotMatch(html, /Event type \(template ID\)/);
+      findElement(element, "form").props.onSubmit({ preventDefault() {} });
+      assert.equal(count, 0); // all fields, including the preselected template, are unchanged
+      select.props.onChange({ target: { value: "902" } });
+      element = render();
+      assert.equal(findElement(element, "select").props.value, "902");
+      findElement(element, "form").props.onSubmit({ preventDefault() {} });
+      await inFlight;
+      assert.equal(count, 1);
+    });
+  });
+});
+
+test("Edit keeps unchanged templates through catalog errors and retries without resetting other fields", async () => {
+  const original = { ...first, template_id: "701" };
+  let inFlight;
+  await withApi(async (_url, options) => {
+    assert.deepEqual(JSON.parse(options.body), { name: "Renamed while catalog unavailable" });
+    return Response.json({ ...original, name: "Renamed while catalog unavailable" });
+  }, async (api) => {
+    await withEditTemplateForm(api, original, (draft) => {
+      inFlight = api.updateEvent(original.event_id, api.buildEventPatch(original, draft));
+    }, async ({ render, requests, settle }) => {
+      requests[0].reject(new Error("private catalog details"));
+      await settle();
+      let element = render();
+      assert.match(renderToStaticMarkup(element), /load event types/);
+      assert.doesNotMatch(renderToStaticMarkup(element), /private catalog details/);
+      assert.equal(findElement(element, "select").props.value, "701");
+      const form = findElement(element, "form");
+      const nameField = form.props.children.find((child) => child?.props?.label === "Event name");
+      nameField.props.onChange({ target: { value: "Renamed while catalog unavailable" } });
+      element = render();
+      findElement(element, "form").props.onSubmit({ preventDefault() {} });
+      await inFlight;
+      // Retry button is in the form error block; it reuses the same template API.
+      const alert = findElement(element, "form").props.children.find((child) => child?.props?.role === "alert");
+      alert.props.children[1].props.onClick();
+      render();
+      assert.ok(requests[0].signal.aborted);
+      requests[1].resolve(editTemplateCatalog);
+      await settle();
+      element = render();
+      assert.equal(findElement(element, "select").props.value, "701");
+      assert.match(renderToStaticMarkup(element), /Renamed while catalog unavailable/);
+    });
+  });
+});
+
+test("Edit handles deleted templates and an empty catalog without silently clearing the saved ID", async () => {
+  const original = { ...first, template_id: "555" };
+  await withApi(async () => { assert.fail("No request expected"); }, async (api) => {
+    const drafts = [];
+    await withEditTemplateForm(api, original, (draft) => drafts.push(draft), async ({ render, requests, settle }) => {
+      requests[0].resolve([]);
+      await settle();
+      let element = render();
+      assert.equal(findElement(element, "select").props.value, "555");
+      assert.match(renderToStaticMarkup(element), /Current event type unavailable/);
+      assert.match(renderToStaticMarkup(element), /No event types are available/);
+      findElement(element, "form").props.onSubmit({ preventDefault() {} });
+      assert.deepEqual(api.buildEventPatch(original, drafts[0]), {});
+      findElement(element, "select").props.onChange({ target: { value: "" } });
+      element = render();
+      findElement(element, "form").props.onSubmit({ preventDefault() {} });
+      assert.deepEqual(api.buildEventPatch(original, drafts[1]), { template_id: null });
+    });
+  });
+});
+
+test("Edit aborts catalog loading when closed and ignores late results", async () => {
+  await withApi(async () => { assert.fail(); }, async (api) => {
+    await withEditTemplateForm(api, first, () => {}, async ({ render, requests, cleanup, settle }) => {
+      cleanup();
+      requests[0].resolve(editTemplateCatalog);
+      await settle();
+      assert.ok(requests[0].signal.aborted);
+      assert.equal(findElement(render(), "select").props.disabled, true);
+    });
+  });
 });

@@ -65,3 +65,13 @@ Automated tests cover request/response shape, exact string IDs/budgets, role and
 8. Switch events or accounts while a throttled save is in flight. The old editor closes; late results must not select the previous event or overwrite the new selection. Closing/unmounting aborts the browser request, though a write already received by the backend may still complete.
 
 Focused tests cover changed-field construction, schema validation, authenticated PATCH payloads, safe status messages, expected-account guards, owner-only actions, actual prefilled values, cancellation, duplicate guards, refresh-only retry, and stale responses. Live browser/Cognito checks remain manual. No event deletion is implemented.
+
+
+## Edit Event type dropdown
+
+1. Sign in as an OWNER, select an event, and open Edit event. Confirm the existing Event type field loads human-readable names from the same catalog service as Create Event. Its selected value must match the saved `template_id`.
+2. Save with no changes: no PATCH should be sent. Change only Event type and save; Network must show only `{ "template_id": "<selected API ID>" }` in PATCH. Existing name/date/venue/budget values remain intact, and normal list/detail refresh preserves selection.
+3. Choose No event type to explicitly clear the nullable field (`template_id: null`). No categories, expenses, vendors, guests, or allocations are recalculated or deleted; the backend still only updates the event row and its normal timestamp.
+4. Fail the template-list request: expect a generic error and Retry event types. The saved ID stays in the form; editing another field must not send or clear `template_id`. Retry should load names without resetting the draft.
+5. Simulate an empty catalog or a saved ID missing from its response. Expect an unavailable placeholder rather than a numeric-ID input or an invented name. The saved type stays unchanged unless a different available type or No event type is selected.
+6. Close while loading or switch events/accounts. The catalog request is aborted and late responses are ignored. CO_PLANNER controls, duplicate-save protection, and backend OWNER authorization retain their existing behavior.
