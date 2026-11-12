@@ -40,7 +40,8 @@ React frontends; AWS Amplify hosting; Amazon Cognito authentication; Amazon API 
 3. Install dependencies: `npm --prefix frontend/organizer ci` and `npm --prefix backend ci`.
 4. Start the frontend: `npm --prefix frontend/organizer run dev` (normally port 5173).
 5. In another terminal, start the backend: `npm --prefix backend run dev` (normally `http://127.0.0.1:3000`).
-6. Agree on API contracts and database migrations before connecting features. Use feature branches and pull requests; do not commit credentials or Terraform state.
+6. Optional, for database work: start local MySQL with `docker compose up -d`. See [docs/architecture/local-mysql-setup.md](docs/architecture/local-mysql-setup.md).
+7. Agree on API contracts and database migrations before connecting features. Use feature branches and pull requests; do not commit credentials or Terraform state.
 
 ## TypeScript setup and validation
 

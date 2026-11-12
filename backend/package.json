@@ -3,13 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "type": "commonjs",
-  "engines": { "node": ">=22.12.0" },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "tsx watch server.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "npm run build && node --test dist/tests/server.test.js"
+    "test": "npm run build && node --test \"dist/tests/**/*.test.js\"",
+    "db:up": "docker compose -f ../docker-compose.yml up -d --wait",
+    "db:seed": "node ../scripts/db-seed.mjs",
+    "db:reset": "docker compose -f ../docker-compose.yml down -v && npm run db:up && npm run db:seed"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
