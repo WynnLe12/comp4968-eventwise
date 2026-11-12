@@ -1,3 +1,4 @@
+import "./testEnvironment";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { after, before, test } from "node:test";
