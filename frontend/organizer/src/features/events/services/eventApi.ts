@@ -1,3 +1,4 @@
+import { apiUrl } from "../../../services/apiConfig";
 import { getCurrentUser, requireAuthSession } from "../../auth/services/authService";
 
 export interface OrganizerEvent {
@@ -98,7 +99,7 @@ export async function createEvent(body: unknown, signal?: AbortSignal): Promise<
   const payload = validateCreateEvent(body);
   const identity = await authenticatedEventRequest();
   const { token } = identity;
-  const response = await fetch("/api/events", {
+  const response = await fetch(apiUrl("/events"), {
     method: "POST", signal,
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token.toString()}` },
     body: JSON.stringify(payload),
@@ -120,7 +121,7 @@ export async function createEvent(body: unknown, signal?: AbortSignal): Promise<
 export async function listEvents(signal?: AbortSignal): Promise<{ userId: string; events: OrganizerEvent[] }> {
   const identity = await authenticatedEventRequest();
   const { token } = identity;
-  const response = await fetch("/api/events", {
+  const response = await fetch(apiUrl("/events"), {
     headers: { Authorization: `Bearer ${token.toString()}` }, signal,
   });
   if (response.status === 401) throw new EventSessionError("Your session has expired. Please sign in again.");
@@ -138,7 +139,7 @@ export async function getEventDetails(eventId: string, signal?: AbortSignal): Pr
   try { id = requestEventId(eventId); }
   catch { throw new EventDetailsError(400, "Select a valid event."); }
   const identity = await authenticatedEventRequest();
-  const response = await fetch(`/api/events/${id}`, {
+  const response = await fetch(apiUrl(`/events/${id}`), {
     headers: { Authorization: `Bearer ${identity.token.toString()}` }, signal,
   });
   if (response.status === 401) throw new EventSessionError("Your session has expired. Please sign in again.");
@@ -204,7 +205,7 @@ export async function updateEvent(eventId: string, body: unknown, signal?: Abort
   const payload = validateEventPatch(body);
   const identity = await authenticatedEventRequest();
   if (expectedUserId && identity.user.userId !== expectedUserId) throw new EventUpdateError(409, "Your account changed. Please reload your events.");
-  const response = await fetch(`/api/events/${id}`, {
+  const response = await fetch(apiUrl(`/events/${id}`), {
     method: "PATCH", signal,
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${identity.token.toString()}` },
     body: JSON.stringify(payload),

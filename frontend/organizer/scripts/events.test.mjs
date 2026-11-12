@@ -6,8 +6,9 @@ import * as React from "react";
 import * as jsxRuntime from "react/jsx-runtime";
 import { renderToStaticMarkup } from "react-dom/server";
 
-function loadModule(path, imports) {
-  const source = readFileSync(new URL(path, import.meta.url), "utf8");
+function loadModule(path, imports, replacements = {}) {
+  let source = readFileSync(new URL(path, import.meta.url), "utf8");
+  for (const [from, to] of Object.entries(replacements)) source = source.replaceAll(from, to);
   const { outputText } = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
   });
@@ -32,6 +33,7 @@ async function withApi(fetch, run, overrides = {}) {
   globalThis.fetch = fetch;
   try {
     const api = loadModule("../src/features/events/services/eventApi.ts", {
+      "../../../services/apiConfig": { apiUrl: (path) => `/api${path}` },
       "../../auth/services/authService": {
         requireAuthSession: async () => identity,
         getCurrentUser: async () => identity.user,
@@ -512,6 +514,8 @@ test("the reused create modal starts blank, uses a real submit form, and display
   const api = loadModule("../src/features/events/components/CreateEventModal.tsx", {
     react: React, "react/jsx-runtime": jsxRuntime,
     "../../../components/ui": { ...ui, Field, Button, Modal: ({ title, children, footer }) => React.createElement("div", null, title, children, footer) },
+    "../../../services/eventTemplates": { listEventTemplates: async () => [], getEventTemplate: async () => null },
+    "../utils/budgetPreview": loadModule("../src/features/events/utils/budgetPreview.ts", {}),
     "../hooks/useCreateEvent": { useCreateEvent: () => submission },
   });
   const render = () => renderToStaticMarkup(React.createElement(api.CreateEventModal, {}));
@@ -969,4 +973,78 @@ test("only OWNER details display an Edit action, and the edit form uses real pre
     assert.match(html, /disabled/); // unchanged Save is disabled
     assert.equal(renderToStaticMarkup(React.createElement(modal.EditEventModal, { event: second })), "");
   });
+});
+
+
+function templateForm(draft, details, submit, overrides = {}) {
+  const values = [draft, [{ templateId: "42", templateKey: "birthday", name: "Birthday", description: null }], false, 0, details, null, 0];
+  let index = 0;
+  const form = loadModule("../src/features/events/components/CreateEventModal.tsx", {
+    react: { ...React, useEffect: () => {}, useState: () => [values[index++], () => {}] },
+    "react/jsx-runtime": jsxRuntime,
+    "../../../components/ui": { ...ui, Modal: ({ children, footer }) => React.createElement("div", null, children, footer) },
+    "../../../services/eventTemplates": { listEventTemplates: async () => [], getEventTemplate: async () => null },
+    "../utils/budgetPreview": loadModule("../src/features/events/utils/budgetPreview.ts", {}),
+    "../hooks/useCreateEvent": { useCreateEvent: () => ({ loading: false, created: false, error: "", close: () => {}, submit, ...overrides }) },
+  });
+  return { module: form, element: form.CreateEventModal({}) };
+}
+const previewTemplate = {
+  templateId: "42", templateKey: "birthday", name: "Birthday", description: null,
+  categories: [
+    { templateCategoryId: "100", name: "Venue", defaultPercentage: "42.00", sortOrder: 1 },
+    { templateCategoryId: "101", name: "Food", defaultPercentage: "58.00", sortOrder: 2 },
+  ],
+};
+
+test("merged template dropdown draft submits the chosen templateId and totalBudget using the event API contract", async () => {
+  const draft = { name: "Birthday dinner", templateId: "42", eventDate: "2028-02-29", venue: " Garden ", totalBudget: "100.01" };
+  const { role: _role, ...created } = { ...first, name: draft.name, template_id: "42", total_budget: "100.01" };
+  let submitted;
+  await withApi(async (url, options) => {
+    assert.equal(url, "/api/events");
+    assert.equal(options.method, "POST");
+    assert.deepEqual(JSON.parse(options.body), { name: "Birthday dinner", template_id: "42", event_date: "2028-02-29", venue: "Garden", total_budget: "100.01" });
+    return Response.json(created, { status: 201 });
+  }, async (api) => {
+    const form = templateForm(draft, previewTemplate, (body) => { submitted = api.createEvent(body); });
+    form.element.props.children.props.onSubmit({ preventDefault() {} });
+    assert.equal((await submitted).event.template_id, "42");
+    const html = renderToStaticMarkup(form.element);
+    assert.match(html, /<select/);
+    assert.match(html, /Birthday/);
+    assert.match(html, /42%/);
+    assert.match(html, /42.00/);
+    assert.match(html, /58.01/);
+    assert.match(html, /Preview only/);
+  });
+});
+
+test("stale, missing, or invalid template defaults cannot submit and saved-event retries remain available", () => {
+  const draft = { name: "Birthday", templateId: "42", eventDate: "", venue: "", totalBudget: "0.01" };
+  for (const details of [null, { ...previewTemplate, templateId: "other" }, { ...previewTemplate, categories: [] }]) {
+    const form = templateForm(draft, details, () => { assert.fail("Cannot submit before valid defaults load"); });
+    form.element.props.children.props.onSubmit({ preventDefault() {} });
+  }
+  let retried = false;
+  const saved = templateForm(draft, null, () => { retried = true; }, { created: true });
+  saved.element.props.children.props.onSubmit({ preventDefault() {} });
+  assert.ok(retried);
+});
+
+test("template and event clients share the configured API base and preserve template response envelopes", async () => {
+  const config = loadModule("../src/services/apiConfig.ts", {}, { "import.meta.env": JSON.stringify({ VITE_API_BASE_URL: "https://example.invalid/api/" }) });
+  assert.equal(config.apiUrl("/events"), "https://example.invalid/api/events");
+  const previous = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(url);
+    return Response.json(url.endsWith("/42") ? { template: previewTemplate } : { templates: [previewTemplate] });
+  };
+  try {
+    const client = loadModule("../src/services/eventTemplates.ts", { "./apiConfig": config });
+    assert.deepEqual(await client.listEventTemplates(), [previewTemplate]);
+    assert.deepEqual(await client.getEventTemplate("42"), previewTemplate);
+    assert.deepEqual(calls, ["https://example.invalid/api/event-templates", "https://example.invalid/api/event-templates/42"]);
+  } finally { globalThis.fetch = previous; }
 });

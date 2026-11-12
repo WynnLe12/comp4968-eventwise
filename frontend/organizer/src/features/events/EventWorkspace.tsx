@@ -6,6 +6,7 @@ import { useEvents } from "./EventsContext";
 
 export function EventWorkspace({ page, children }: { page: Page; children: ReactNode }) {
   const { status, error, refresh, openCreate, detailsStatus, detailsError, detailsErrorStatus, reloadDetails } = useEvents();
+  if (page === "templates") return children;
   if (status === "loading") return <LoadingState label="Loading your events..." />;
   if (status === "error") return (
     <div role="alert"><EmptyState title="Unable to load events" message={error}

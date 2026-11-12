@@ -1,5 +1,7 @@
 
 import { createServer, type Server } from "node:http";
+import { handleTemplates } from "./event-service/handlers/templates";
+import { closePool } from "./shared/db/pool";
 import {
   sendJson,
   type ErrorResponse,
@@ -118,9 +120,14 @@ export function createAppServer(
     }
 
 
-    sendJson<ErrorResponse>(response, 404, {
-      error: "Not found",
-    });
+    void handleTemplates(request.method, path ?? "/", response)
+      .then((handled) => {
+        if (!handled) sendJson<ErrorResponse>(response, 404, { error: "Not found" });
+      })
+      .catch((error: unknown) => {
+        console.error("Template request failed", error);
+        sendJson<ErrorResponse>(response, 500, { error: "Internal server error" });
+      });
   });
 }
 
@@ -146,6 +153,6 @@ if (require.main === module) {
   });
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.on(signal, () => server.close());
+    process.on(signal, () => server.close(() => { void closePool().catch(console.error); }));
   }
 }
