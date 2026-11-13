@@ -1,3 +1,4 @@
+import { formatCalendarDate } from "../../utils/dateFormat";
 import type { BookingStatus, Money, Vendor } from "../../types";
 
 const currencyFormat = new Intl.NumberFormat("en-US", {
@@ -7,18 +8,15 @@ const currencyFormat = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 
-const dueDateFormat = new Intl.DateTimeFormat("en-US", { month: "short", day: "2-digit" });
 
 /** "$1,800.00" for an API money string ("1800.00"), or "—" when there is no value. */
 export function currency(value: Money | null) {
   return value === null ? "—" : currencyFormat.format(Number(value));
 }
 
-/** "Jul 10" for an ISO date, or "None". */
+/** "Jul 10, 2027" for an ISO date, or "None". */
 export function dueDateLabel(isoDate: string | null) {
-  if (!isoDate) return "None";
-  // Noon avoids the date shifting a day in time zones west of UTC.
-  return dueDateFormat.format(new Date(`${isoDate}T12:00:00`));
+  return formatCalendarDate(isoDate);
 }
 
 /** First letters of the first two words that start with a letter: "Fleur & Fern" -> "FF". */

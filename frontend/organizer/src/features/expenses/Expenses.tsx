@@ -1,3 +1,4 @@
+import { formatCalendarDate } from "../../utils/dateFormat";
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useResource } from "../../hooks/useResource";
@@ -257,7 +258,7 @@ export function Expenses() {
                   <td>
                     <b>{currency((Math.round(x.total * 100) - Math.round(x.paid * 100)) / 100)}</b>
                   </td>
-                  <td>{x.due}</td>
+                  <td>{formatCalendarDate(x.dueDate ?? x.due, "No due date")}</td>
                   <td>
                     <Badge tone={statusTone(x.status)}>{x.status}</Badge>
                   </td>

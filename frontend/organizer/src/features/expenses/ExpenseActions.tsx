@@ -1,3 +1,4 @@
+import { formatCalendarDate } from "../../utils/dateFormat";
 import { useId, useRef, useState } from "react";
 import { Badge, Icon } from "../../components/ui";
 import type { Expense } from "../../types";
@@ -136,7 +137,7 @@ export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, o
             <dl>
               <div><dt>Vendor</dt><dd>{vendorName ?? "No vendor linked"}</dd></div>
               <div><dt>Category</dt><dd>{expense.category || "Uncategorized"}</dd></div>
-              <div><dt>Due date</dt><dd>{expense.due}</dd></div>
+              <div><dt>Due date</dt><dd>{formatCalendarDate(expense.dueDate ?? expense.due, "No due date")}</dd></div>
             </dl>
           </section>
           <section className="expense-drawer-section">
@@ -156,7 +157,7 @@ export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, o
                   <li key={payment.id}>
                     <div>
                       <strong>{payment.paymentType === "DEPOSIT" ? "Deposit" : "Payment"}</strong>
-                      <time dateTime={payment.paidAt}>{payment.paidAt}</time>
+                      <time dateTime={payment.paidAt}>{formatCalendarDate(payment.paidAt)}</time>
                     </div>
                     <span>{money(payment.amount)}</span>
                   </li>
