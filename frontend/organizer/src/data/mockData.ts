@@ -16,6 +16,7 @@ export const budgetDefaults = [
 
 export const expensesSeed: Expense[] = [
   {
+    id: "sample-the-willow-house",
     vendor: "The Willow House",
     category: "Venue & Catering",
     total: 12800,
@@ -24,6 +25,7 @@ export const expensesSeed: Expense[] = [
     status: "Partially paid",
   },
   {
+    id: "sample-lumen-photography",
     vendor: "Lumen Photography",
     category: "Photo & Video",
     total: 4200,
@@ -32,6 +34,7 @@ export const expensesSeed: Expense[] = [
     status: "Partially paid",
   },
   {
+    id: "sample-fleur-&-fern",
     vendor: "Fleur & Fern",
     category: "Flowers & Decor",
     total: 2850,
@@ -40,6 +43,7 @@ export const expensesSeed: Expense[] = [
     status: "Deposit paid",
   },
   {
+    id: "sample-blue-note-collective",
     vendor: "Blue Note Collective",
     category: "Music & Entertainment",
     total: 1800,
@@ -48,6 +52,7 @@ export const expensesSeed: Expense[] = [
     status: "Unpaid",
   },
   {
+    id: "sample-paperfolk-studio",
     vendor: "Paperfolk Studio",
     category: "Stationery",
     total: 640,

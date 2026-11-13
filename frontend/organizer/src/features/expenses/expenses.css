@@ -84,3 +84,30 @@
   text-align: right;
   overflow-wrap: anywhere;
 }
+
+.expense-form-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 0;
+  border-radius: 24px;
+  background: #fffcff;
+  color: inherit;
+  overflow-y: auto;
+}
+.expense-form-dialog::backdrop {
+  background: rgb(30 20 45 / 35%);
+}
+.expense-form-error {
+  padding: 12px;
+  border: 1px solid #ffb7c2;
+  border-radius: 10px;
+  background: #fff2f4;
+  color: #bc2940;
+}
+.expense-field-error {
+  color: #bc2940;
+}
+.expense-form-dialog input[aria-invalid="true"] {
+  border-color: #d72d49;
+}

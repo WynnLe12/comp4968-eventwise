@@ -1,8 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge, Button, Card, Icon } from "../../components/ui";
 import { EmptyState, PageHeader, StatCard } from "../../components/page";
 import { expensesSeed } from "../../data/mockData";
 import { ExpenseActions } from "./ExpenseActions";
+import { ExpenseForm } from "./ExpenseForm";
+import { expenseSummary } from "./expenseDraft";
+import type { Expense } from "../../types";
+
+// Session-only data, retained when navigating away and back. Refresh restores samples.
+let sessionExpenses = expensesSeed.map((expense) => ({ ...expense }));
+const currency = (amount: number) =>
+  amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
 
 const filters = ["All", "Unpaid", "Deposit", "Paid"];
 
@@ -12,26 +20,29 @@ function statusTone(status: string) {
   return "warning";
 }
 
-export function Expenses({ onAdd }: { onAdd: () => void }) {
+export function Expenses() {
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
-  const expenses = expensesSeed;
+  const [expenses, setExpenses] = useState<Expense[]>(() => sessionExpenses);
+  const [adding, setAdding] = useState(false);
+  const [toast, setToast] = useState("");
+  const summary = expenseSummary(expenses);
+  const onAdd = () => setAdding(true);
 
-  if (!expenses.length)
-    return (
-      <>
-        <PageHeader page="expenses" />
-        <EmptyState
-          title="No expenses yet"
-          message="Add your first quote, deposit, or payment to start tracking your spending."
-          action={
-            <Button onClick={onAdd} icon="plus">
-              Add expense
-            </Button>
-          }
-        />
-      </>
-    );
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(""), 2600);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  const saveExpense = (expense: Expense) => {
+    sessionExpenses = [...sessionExpenses, expense];
+    setExpenses(sessionExpenses);
+    setSearch("");
+    setFilter("All");
+    setAdding(false);
+    setToast("Expense added");
+  };
 
   const query = search.trim().toLowerCase();
   const rows = expenses.filter(
@@ -50,25 +61,25 @@ export function Expenses({ onAdd }: { onAdd: () => void }) {
         }
       />
       <div className="stat-grid expenses-stats">
-        <StatCard label="Total expenses" value="$22,290" detail="Across 5 vendors" icon="receipt" />
+        <StatCard label="Total expenses" value={currency(summary.total)} detail={expenses.length + " expenses"} icon="receipt" />
         <StatCard
           label="Paid so far"
-          value="$8,590"
-          detail="39% of expenses"
+          value={currency(summary.paid)}
+          detail={summary.paidPercent + "% of expenses"}
           icon="check"
           tone="mint"
         />
         <StatCard
           label="Outstanding"
-          value="$13,700"
-          detail="4 open payments"
+          value={currency(summary.outstanding)}
+          detail={summary.openCount + " open expenses"}
           icon="clock"
           tone="coral"
         />
         <StatCard
           label="Due this month"
-          value="$3,950"
-          detail="2 payments"
+          value={currency(summary.dueThisMonth)}
+          detail={summary.dueCount + " expenses"}
           icon="calendar"
           tone="gold"
         />
@@ -134,7 +145,7 @@ export function Expenses({ onAdd }: { onAdd: () => void }) {
                 </tr>
               )}
               {rows.map((x) => (
-                <tr key={x.vendor}>
+                <tr key={x.id}>
                   <td>
                     <b>{x.vendor}</b>
                   </td>
@@ -167,6 +178,8 @@ export function Expenses({ onAdd }: { onAdd: () => void }) {
           </div>
         </div>
       </Card>
+      {adding && <ExpenseForm onSave={saveExpense} onClose={() => setAdding(false)} />}
+      {toast && <div className="toast" role="status">{toast}</div>}
     </>
   );
 }

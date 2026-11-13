@@ -18,6 +18,8 @@ export type Page =
 export type PublicPage = "landing" | "signup" | "login" | "reset";
 
 export interface Expense {
+  id: string;
+  dueDate?: string | null;
   vendor: string;
   category: string;
   total: number;
