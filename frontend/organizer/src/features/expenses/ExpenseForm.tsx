@@ -4,13 +4,20 @@ import type { Expense } from "../../types";
 import { expenseFromDraft, validateExpenseDraft, type ExpenseDraft, type ExpenseDraftErrors } from "./expenseDraft";
 import "./expenses.css";
 
-export function ExpenseForm({ onSave, onClose }: {
+export function ExpenseForm({ expense, onSave, onClose }: {
+  expense?: Expense;
   onSave: (expense: Expense) => void;
   onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
-  const [draft, setDraft] = useState<ExpenseDraft>({ name: "", amount: "", dueDate: "" });
+  const [draft, setDraft] = useState<ExpenseDraft>({
+    name: expense?.vendor ?? "",
+    amount: expense ? expense.total.toFixed(2) : "",
+    dueDate: expense?.dueDate ?? "",
+  });
+  const [dueDateChanged, setDueDateChanged] = useState(false);
+  const validate = (value: ExpenseDraft) => validateExpenseDraft(value, expense?.paid ?? 0);
   const [errors, setErrors] = useState<ExpenseDraftErrors>({});
 
   useEffect(() => {
@@ -22,25 +29,26 @@ export function ExpenseForm({ onSave, onClose }: {
   }, []);
 
   const update = (field: keyof ExpenseDraft, value: string) => {
+    if (field === "dueDate") setDueDateChanged(true);
     setDraft((current) => ({ ...current, [field]: value }));
     if (errors[field]) {
       setErrors((current) => ({
         ...current,
-        [field]: validateExpenseDraft({ ...draft, [field]: value })[field],
+        [field]: validate({ ...draft, [field]: value })[field],
       }));
     }
   };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const nextErrors = validateExpenseDraft(draft);
+    const nextErrors = validate(draft);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) {
       const first = Object.keys(nextErrors)[0];
       formRef.current?.querySelector<HTMLInputElement>('[name="' + first + '"]')?.focus();
       return;
     }
-    onSave(expenseFromDraft(draft));
+    onSave(expenseFromDraft(draft, expense, dueDateChanged));
   };
 
   return (
@@ -57,7 +65,7 @@ export function ExpenseForm({ onSave, onClose }: {
         <header className="modal-head">
           <div>
             <div className="eyebrow">EventWise</div>
-            <h2 id="expense-form-title">Add an expense</h2>
+            <h2 id="expense-form-title">{expense ? "Edit expense" : "Add an expense"}</h2>
           </div>
           <button type="button" className="icon-btn" aria-label="Close expense form" onClick={onClose}>
             <Icon name="close" />
@@ -74,7 +82,7 @@ export function ExpenseForm({ onSave, onClose }: {
                 name="name"
                 value={draft.name}
                 onChange={(event) => update("name", event.target.value)}
-                onBlur={() => setErrors((current) => ({ ...current, name: validateExpenseDraft(draft).name }))}
+                onBlur={() => setErrors((current) => ({ ...current, name: validate(draft).name }))}
                 placeholder="e.g. Cake tasting fee"
                 required
                 maxLength={255}
@@ -91,7 +99,7 @@ export function ExpenseForm({ onSave, onClose }: {
                   inputMode="decimal"
                   value={draft.amount}
                   onChange={(event) => update("amount", event.target.value)}
-                  onBlur={() => setErrors((current) => ({ ...current, amount: validateExpenseDraft(draft).amount }))}
+                  onBlur={() => setErrors((current) => ({ ...current, amount: validate(draft).amount }))}
                   placeholder="0.00"
                   required
                   aria-invalid={Boolean(errors.amount)}
@@ -111,13 +119,21 @@ export function ExpenseForm({ onSave, onClose }: {
                   aria-invalid={Boolean(errors.dueDate)}
                   aria-describedby={errors.dueDate ? "expense-date-error" : undefined}
                 />
+                {expense && !expense.dueDate && expense.due !== "Paid" && expense.due !== "No due date" && !dueDateChanged && (
+                  <small>Current due date: {expense.due}. Choose a full date to replace it.</small>
+                )}
+                {(draft.dueDate || (expense && expense.due !== "Paid" && expense.due !== "No due date" && !dueDateChanged)) && (
+                  <button type="button" className="btn btn-ghost" onClick={() => update("dueDate", "")}>
+                    Remove due date
+                  </button>
+                )}
                 {errors.dueDate && <small id="expense-date-error" className="expense-field-error">{errors.dueDate}</small>}
               </label>
             </div>
           </div>
           <footer className="modal-footer">
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit">Add expense</Button>
+            <Button type="submit">{expense ? "Save changes" : "Add expense"}</Button>
           </footer>
         </form>
       </div>

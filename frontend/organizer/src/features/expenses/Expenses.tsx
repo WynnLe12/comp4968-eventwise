@@ -25,6 +25,7 @@ export function Expenses() {
   const [search, setSearch] = useState("");
   const [expenses, setExpenses] = useState<Expense[]>(() => sessionExpenses);
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<Expense | null>(null);
   const [toast, setToast] = useState("");
   const summary = expenseSummary(expenses);
   const onAdd = () => setAdding(true);
@@ -36,12 +37,15 @@ export function Expenses() {
   }, [toast]);
 
   const saveExpense = (expense: Expense) => {
-    sessionExpenses = [...sessionExpenses, expense];
+    sessionExpenses = editing
+      ? sessionExpenses.map((current) => current.id === expense.id ? expense : current)
+      : [...sessionExpenses, expense];
     setExpenses(sessionExpenses);
     setSearch("");
     setFilter("All");
     setAdding(false);
-    setToast("Expense added");
+    setToast(editing ? "Expense updated" : "Expense added");
+    setEditing(null);
   };
 
   const query = search.trim().toLowerCase();
@@ -160,7 +164,7 @@ export function Expenses() {
                     <Badge tone={statusTone(x.status)}>{x.status}</Badge>
                   </td>
                   <td>
-                    <ExpenseActions expense={x} />
+                    <ExpenseActions expense={x} onEdit={() => setEditing(x)} />
                   </td>
                 </tr>
               ))}
@@ -178,7 +182,17 @@ export function Expenses() {
           </div>
         </div>
       </Card>
-      {adding && <ExpenseForm onSave={saveExpense} onClose={() => setAdding(false)} />}
+      {(adding || editing) && (
+        <ExpenseForm
+          key={editing?.id ?? "new"}
+          expense={editing ?? undefined}
+          onSave={saveExpense}
+          onClose={() => {
+            setAdding(false);
+            setEditing(null);
+          }}
+        />
+      )}
       {toast && <div className="toast" role="status">{toast}</div>}
     </>
   );

@@ -8,13 +8,17 @@ export interface ExpenseDraft {
 
 export type ExpenseDraftErrors = Partial<Record<keyof ExpenseDraft, string>>;
 
-export function validateExpenseDraft(draft: ExpenseDraft): ExpenseDraftErrors {
+export function validateExpenseDraft(draft: ExpenseDraft, paid = 0): ExpenseDraftErrors {
   const errors: ExpenseDraftErrors = {};
   if (!draft.name.trim() || draft.name.trim().length > 255) {
     errors.name = draft.name.trim() ? "Use 255 characters or fewer." : "Expense name is required.";
   }
   if (!/^(0|[1-9][0-9]{0,9})(\.[0-9]{1,2})?$/.test(draft.amount.trim())) {
     errors.amount = "Enter an amount of 0 or more, with up to 2 decimals.";
+  }
+  if (!errors.amount && Math.round(Number(draft.amount.trim()) * 100) < Math.round(paid * 100)) {
+    errors.amount = "Total can't be less than " +
+      paid.toLocaleString("en-US", { style: "currency", currency: "USD" }) + " already paid.";
   }
   if (draft.dueDate) {
     const parsed = new Date(draft.dueDate + "T00:00:00Z");
@@ -30,17 +34,25 @@ export function validateExpenseDraft(draft: ExpenseDraft): ExpenseDraftErrors {
 }
 
 // The local model still uses vendor as the table's combined vendor/expense label.
-export function expenseFromDraft(draft: ExpenseDraft): Expense {
+export function expenseFromDraft(
+  draft: ExpenseDraft,
+  original?: Expense,
+  dueDateChanged = true,
+): Expense {
   const total = Number(draft.amount.trim());
+  const paid = original?.paid ?? 0;
+  const fullyPaid = Math.round(total * 100) === Math.round(paid * 100);
+  const keepDueDate = original && !dueDateChanged;
   return {
-    id: crypto.randomUUID(),
+    id: original?.id ?? crypto.randomUUID(),
     vendor: draft.name.trim(),
-    category: "Uncategorized",
+    category: original?.category ?? "Uncategorized",
     total,
-    paid: 0,
-    due: draft.dueDate || "No due date",
-    dueDate: draft.dueDate || null,
-    status: total === 0 ? "Paid" : "Unpaid",
+    paid,
+    due: keepDueDate ? (original.due === "Paid" ? "No due date" : original.due) : draft.dueDate || "No due date",
+    dueDate: keepDueDate ? original.dueDate : draft.dueDate || null,
+    status: fullyPaid ? "Paid" : paid === 0 ? "Unpaid" :
+      original?.status === "Deposit paid" ? "Deposit paid" : "Partially paid",
   };
 }
 

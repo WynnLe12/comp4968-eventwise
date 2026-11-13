@@ -7,7 +7,10 @@ function money(amount: number) {
   return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
-export function ExpenseActions({ expense }: { expense: Expense }) {
+export function ExpenseActions({ expense, onEdit }: {
+  expense: Expense;
+  onEdit: () => void;
+}) {
   const menuId = useId();
   const titleId = useId();
   const menuRef = useRef<HTMLDivElement>(null);
@@ -19,7 +22,7 @@ export function ExpenseActions({ expense }: { expense: Expense }) {
   const positionMenu = (trigger: HTMLButtonElement) => {
     const rect = trigger.getBoundingClientRect();
     setPosition({
-      top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 64)),
+      top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 112)),
       left: Math.max(8, Math.min(rect.right - 176, window.innerWidth - 184)),
     });
   };
@@ -59,6 +62,16 @@ export function ExpenseActions({ expense }: { expense: Expense }) {
       >
         <button ref={viewRef} type="button" onClick={openDetails}>
           <Icon name="receipt" size={16} /> View details
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            menuRef.current?.hidePopover();
+            triggerRef.current?.focus();
+            onEdit();
+          }}
+        >
+          <Icon name="edit" size={16} /> Edit expense
         </button>
       </div>
       <dialog
