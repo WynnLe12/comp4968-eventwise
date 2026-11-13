@@ -7,10 +7,11 @@ function money(amount: number) {
   return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
-export function ExpenseActions({ expense, onEdit, onRecordPayment }: {
+export function ExpenseActions({ expense, onEdit, onRecordPayment, onDelete }: {
   expense: Expense;
   onEdit: () => void;
   onRecordPayment: () => void;
+  onDelete: () => void;
 }) {
   const fullyPaid = Math.round(expense.paid * 100) >= Math.round(expense.total * 100);
   const recordedPayments = [...(expense.payments ?? [])].reverse()
@@ -28,7 +29,7 @@ export function ExpenseActions({ expense, onEdit, onRecordPayment }: {
   const positionMenu = (trigger: HTMLButtonElement) => {
     const rect = trigger.getBoundingClientRect();
     setPosition({
-      top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 160)),
+      top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 208)),
       left: Math.max(8, Math.min(rect.right - 176, window.innerWidth - 184)),
     });
   };
@@ -89,6 +90,17 @@ export function ExpenseActions({ expense, onEdit, onRecordPayment }: {
           }}
         >
           <Icon name="receipt" size={16} /> Record payment
+        </button>
+        <button
+          type="button"
+          className="expense-delete-action"
+          onClick={() => {
+            menuRef.current?.hidePopover();
+            triggerRef.current?.focus();
+            onDelete();
+          }}
+        >
+          <Icon name="close" size={16} /> Delete expense
         </button>
       </div>
       <dialog

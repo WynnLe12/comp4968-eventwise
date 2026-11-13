@@ -156,3 +156,5 @@
   color: var(--muted);
   font-size: 12px;
 }
+
+.expense-actions .expense-delete-action { color: #bc2940; }

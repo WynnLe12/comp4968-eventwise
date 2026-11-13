@@ -4,6 +4,8 @@ import { EmptyState, PageHeader, StatCard } from "../../components/page";
 import { expensesSeed } from "../../data/mockData";
 import { ExpenseActions } from "./ExpenseActions";
 import { ExpenseForm } from "./ExpenseForm";
+import { ExpenseDeleteDialog } from "./ExpenseDeleteDialog";
+import { removeExpense } from "./expenseDeletion";
 import { ExpensePaymentForm } from "./ExpensePaymentForm";
 import { recordExpensePayment, validateExpensePayment, type PaymentDraft, type PaymentErrors } from "./expensePayments";
 import { expenseSummary } from "./expenseDraft";
@@ -29,6 +31,7 @@ export function Expenses() {
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Expense | null>(null);
   const [paying, setPaying] = useState<Expense | null>(null);
+  const [deleting, setDeleting] = useState<Expense | null>(null);
   const [toast, setToast] = useState("");
   const summary = expenseSummary(expenses);
   const onAdd = () => setAdding(true);
@@ -63,6 +66,19 @@ export function Expenses() {
     setPaying(null);
     setToast("Payment recorded");
     return {};
+  };
+
+  const confirmDelete = (): string | undefined => {
+    if (!deleting) return "Choose an expense to delete.";
+    try {
+      sessionExpenses = removeExpense(sessionExpenses, deleting.id);
+    } catch (error) {
+      return error instanceof Error ? error.message : "Unable to delete this expense.";
+    }
+    setExpenses(sessionExpenses);
+    setDeleting(null);
+    setToast("Expense deleted");
+    return undefined;
   };
 
   const query = search.trim().toLowerCase();
@@ -181,7 +197,7 @@ export function Expenses() {
                     <Badge tone={statusTone(x.status)}>{x.status}</Badge>
                   </td>
                   <td>
-                    <ExpenseActions expense={x} onEdit={() => setEditing(x)} onRecordPayment={() => setPaying(x)} />
+                    <ExpenseActions expense={x} onEdit={() => setEditing(x)} onRecordPayment={() => setPaying(x)} onDelete={() => setDeleting(x)} />
                   </td>
                 </tr>
               ))}
@@ -214,6 +230,12 @@ export function Expenses() {
         <ExpensePaymentForm
           key={paying.id} expense={paying}
           onSave={savePayment} onClose={() => setPaying(null)}
+        />
+      )}
+      {deleting && (
+        <ExpenseDeleteDialog
+          key={deleting.id} expense={deleting}
+          onConfirm={confirmDelete} onClose={() => setDeleting(null)}
         />
       )}
       {toast && <div className="toast" role="status">{toast}</div>}
