@@ -24,10 +24,95 @@ export interface EventWithMembership extends EventRecord {
   role: ListedEvent["role"] | null;
 }
 
-export class InvalidTemplateError extends Error {}
+export class InvalidTemplateError extends Error { }
+
+interface TemplateCategoryRow extends RowDataPacket {
+  template_category_id: string;
+  name: string;
+  default_percentage: string;
+  sort_order: number;
+}
+
+function allocateTemplateBudget(
+  totalBudget: string,
+  categories: TemplateCategoryRow[],
+): string[] {
+  if (!categories.length) return [];
+
+  const [whole, fraction = ""] = totalBudget.split(".");
+  const totalCents =
+    BigInt(whole) * 100n + BigInt(fraction.padEnd(2, "0"));
+
+  const percentageUnits = categories.map((category) => {
+    const value = String(category.default_percentage);
+
+    if (!/^\d{1,3}(\.\d{1,2})?$/.test(value)) {
+      throw new InvalidTemplateError("Invalid template percentage");
+    }
+
+    const [integer, decimal = ""] = value.split(".");
+    const units =
+      BigInt(integer) * 100n +
+      BigInt(decimal.padEnd(2, "0"));
+
+    if (units > 10000n) {
+      throw new InvalidTemplateError("Invalid template percentage");
+    }
+
+    return units;
+  });
+
+  const percentageTotal = percentageUnits.reduce(
+    (sum, value) => sum + value,
+    0n,
+  );
+
+  if (percentageTotal !== 10000n) {
+    throw new InvalidTemplateError(
+      "Template allocations must total 100%",
+    );
+  }
+
+  const products = percentageUnits.map(
+    (percentage) => totalCents * percentage,
+  );
+
+  const amounts = products.map(
+    (product) => product / 10000n,
+  );
+
+  const allocated = amounts.reduce(
+    (sum, amount) => sum + amount,
+    0n,
+  );
+
+  const remaining = Number(totalCents - allocated);
+
+  const order = products
+    .map((product, index) => ({
+      index,
+      remainder: product % 10000n,
+    }))
+    .sort((a, b) => {
+      if (a.remainder === b.remainder) {
+        return a.index - b.index;
+      }
+
+      return a.remainder > b.remainder ? -1 : 1;
+    });
+
+  for (let index = 0; index < remaining; index++) {
+    amounts[order[index].index] += 1n;
+  }
+
+  return amounts.map(
+    (cents) =>
+      `${cents / 100n}.${String(cents % 100n).padStart(2, "0")}`,
+  );
+}
 
 export class EventRepository {
-  constructor(private readonly pool: Pick<Pool, "getConnection"> = db) {}
+  constructor(private readonly pool: Pick<Pool, "getConnection"> = db) { }
 
   async update(
     eventId: string,
@@ -146,11 +231,52 @@ export class EventRepository {
       );
       const event = events[0];
       if (!event) throw new Error("Created event could not be read");
+
       await connection.execute(
         "INSERT INTO event_members (event_id, cognito_sub, role) VALUES (?, ?, 'OWNER')",
         [event.event_id, cognitoSub],
       );
+
+      // Initialize budget categories from the selected event template.
+      if (input.template_id !== null) {
+        const [templateCategories] =
+          await connection.execute<TemplateCategoryRow[]>(
+            `SELECT
+         CAST(template_category_id AS CHAR) AS template_category_id,
+         name,
+         CAST(default_percentage AS CHAR) AS default_percentage,
+         sort_order
+       FROM template_budget_categories
+       WHERE template_id = ?
+       ORDER BY sort_order, template_category_id`,
+            [input.template_id],
+          );
+
+        const plannedAmounts = allocateTemplateBudget(
+          input.total_budget,
+          templateCategories,
+        );
+
+        for (let index = 0; index < templateCategories.length; index++) {
+          const category = templateCategories[index];
+
+          await connection.execute(
+            `INSERT INTO budget_categories
+         (event_id, name, allocation_percentage, planned_amount, sort_order)
+       VALUES (?, ?, ?, ?, ?)`,
+            [
+              event.event_id,
+              category.name,
+              category.default_percentage,
+              plannedAmounts[index],
+              category.sort_order,
+            ],
+          );
+        }
+      }
+
       await connection.commit();
+
       return event;
     } catch (error) {
       await connection.rollback();
