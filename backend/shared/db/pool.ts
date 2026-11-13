@@ -42,3 +42,16 @@ export async function closeDatabasePool(): Promise<void> {
   pool = undefined;
   if (current) await current.end();
 }
+
+// Compatibility names used by event, template and budget repositories.
+export const sharedPool = new Proxy({} as Pool, {
+  get(target, property, receiver) {
+    if (Reflect.has(target, property)) return Reflect.get(target, property, receiver);
+    if (property === "end") return closeDatabasePool;
+    const current = getDatabasePool();
+    const value = Reflect.get(current, property, current);
+    return typeof value === "function" ? value.bind(current) : value;
+  },
+});
+export function getPool(): Pool { return sharedPool; }
+export const closePool = closeDatabasePool;
