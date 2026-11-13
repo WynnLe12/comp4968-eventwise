@@ -7,10 +7,16 @@ function money(amount: number) {
   return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
-export function ExpenseActions({ expense, onEdit }: {
+export function ExpenseActions({ expense, onEdit, onRecordPayment }: {
   expense: Expense;
   onEdit: () => void;
+  onRecordPayment: () => void;
 }) {
+  const fullyPaid = Math.round(expense.paid * 100) >= Math.round(expense.total * 100);
+  const recordedPayments = [...(expense.payments ?? [])].reverse()
+    .sort((a, b) => b.paidAt.localeCompare(a.paidAt));
+  const earlierPaid = (Math.round(expense.paid * 100) -
+    recordedPayments.reduce((sum, payment) => sum + Math.round(payment.amount * 100), 0)) / 100;
   const menuId = useId();
   const titleId = useId();
   const menuRef = useRef<HTMLDivElement>(null);
@@ -22,7 +28,7 @@ export function ExpenseActions({ expense, onEdit }: {
   const positionMenu = (trigger: HTMLButtonElement) => {
     const rect = trigger.getBoundingClientRect();
     setPosition({
-      top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 112)),
+      top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 160)),
       left: Math.max(8, Math.min(rect.right - 176, window.innerWidth - 184)),
     });
   };
@@ -73,6 +79,17 @@ export function ExpenseActions({ expense, onEdit }: {
         >
           <Icon name="edit" size={16} /> Edit expense
         </button>
+        <button
+          type="button" disabled={fullyPaid}
+          title={fullyPaid ? "This expense is fully paid" : undefined}
+          onClick={() => {
+            menuRef.current?.hidePopover();
+            triggerRef.current?.focus();
+            onRecordPayment();
+          }}
+        >
+          <Icon name="receipt" size={16} /> Record payment
+        </button>
       </div>
       <dialog
         ref={drawerRef}
@@ -115,6 +132,23 @@ export function ExpenseActions({ expense, onEdit }: {
               <div><dt>Paid</dt><dd>{money(expense.paid)}</dd></div>
               <div><dt>Balance due</dt><dd>{money(expense.total - expense.paid)}</dd></div>
             </dl>
+          </section>
+          <section className="expense-drawer-section">
+            <h3>Payment history</h3>
+            {earlierPaid > 0 && <p>Previously paid: {money(earlierPaid)}</p>}
+            {recordedPayments.length > 0 ? (
+              <ul className="expense-payment-history">
+                {recordedPayments.map((payment) => (
+                  <li key={payment.id}>
+                    <div>
+                      <strong>{payment.paymentType === "DEPOSIT" ? "Deposit" : "Payment"}</strong>
+                      <time dateTime={payment.paidAt}>{payment.paidAt}</time>
+                    </div>
+                    <span>{money(payment.amount)}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : <p>{earlierPaid > 0 ? "Earlier payment details are not available." : "No payments recorded yet."}</p>}
           </section>
         </div>
       </dialog>

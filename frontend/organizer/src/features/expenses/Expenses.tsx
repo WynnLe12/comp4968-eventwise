@@ -4,6 +4,8 @@ import { EmptyState, PageHeader, StatCard } from "../../components/page";
 import { expensesSeed } from "../../data/mockData";
 import { ExpenseActions } from "./ExpenseActions";
 import { ExpenseForm } from "./ExpenseForm";
+import { ExpensePaymentForm } from "./ExpensePaymentForm";
+import { recordExpensePayment, validateExpensePayment, type PaymentDraft, type PaymentErrors } from "./expensePayments";
 import { expenseSummary } from "./expenseDraft";
 import type { Expense } from "../../types";
 
@@ -26,6 +28,7 @@ export function Expenses() {
   const [expenses, setExpenses] = useState<Expense[]>(() => sessionExpenses);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Expense | null>(null);
+  const [paying, setPaying] = useState<Expense | null>(null);
   const [toast, setToast] = useState("");
   const summary = expenseSummary(expenses);
   const onAdd = () => setAdding(true);
@@ -46,6 +49,20 @@ export function Expenses() {
     setAdding(false);
     setToast(editing ? "Expense updated" : "Expense added");
     setEditing(null);
+  };
+
+  const savePayment = (draft: PaymentDraft): PaymentErrors => {
+    const current = sessionExpenses.find((expense) => expense.id === paying?.id);
+    if (!current) return { amount: "This expense is no longer available." };
+    const errors = validateExpensePayment(current, draft);
+    if (Object.keys(errors).length) return errors;
+    const updated = recordExpensePayment(current, draft);
+    sessionExpenses = sessionExpenses.map((expense) => expense.id === updated.id ? updated : expense);
+    setExpenses(sessionExpenses);
+    setFilter("All");
+    setPaying(null);
+    setToast("Payment recorded");
+    return {};
   };
 
   const query = search.trim().toLowerCase();
@@ -154,17 +171,17 @@ export function Expenses() {
                     <b>{x.vendor}</b>
                   </td>
                   <td>{x.category}</td>
-                  <td>${x.total.toLocaleString()}</td>
-                  <td>${x.paid.toLocaleString()}</td>
+                  <td>{currency(x.total)}</td>
+                  <td>{currency(x.paid)}</td>
                   <td>
-                    <b>${(x.total - x.paid).toLocaleString()}</b>
+                    <b>{currency((Math.round(x.total * 100) - Math.round(x.paid * 100)) / 100)}</b>
                   </td>
                   <td>{x.due}</td>
                   <td>
                     <Badge tone={statusTone(x.status)}>{x.status}</Badge>
                   </td>
                   <td>
-                    <ExpenseActions expense={x} onEdit={() => setEditing(x)} />
+                    <ExpenseActions expense={x} onEdit={() => setEditing(x)} onRecordPayment={() => setPaying(x)} />
                   </td>
                 </tr>
               ))}
@@ -191,6 +208,12 @@ export function Expenses() {
             setAdding(false);
             setEditing(null);
           }}
+        />
+      )}
+      {paying && (
+        <ExpensePaymentForm
+          key={paying.id} expense={paying}
+          onSave={savePayment} onClose={() => setPaying(null)}
         />
       )}
       {toast && <div className="toast" role="status">{toast}</div>}

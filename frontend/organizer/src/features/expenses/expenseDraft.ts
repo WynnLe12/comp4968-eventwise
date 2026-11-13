@@ -44,6 +44,7 @@ export function expenseFromDraft(
   const fullyPaid = Math.round(total * 100) === Math.round(paid * 100);
   const keepDueDate = original && !dueDateChanged;
   return {
+    ...original,
     id: original?.id ?? crypto.randomUUID(),
     vendor: draft.name.trim(),
     category: original?.category ?? "Uncategorized",

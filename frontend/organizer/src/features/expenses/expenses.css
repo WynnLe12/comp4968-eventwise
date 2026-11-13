@@ -118,3 +118,41 @@
 .expense-form-dialog input[aria-invalid="true"] {
   border-color: #d72d49;
 }
+
+.expense-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.expense-payment-context {
+  margin: 0 0 20px;
+}
+.expense-payment-type {
+  height: 38px;
+  padding: 0 11px;
+  border: 1px solid #dcd8e5;
+  border-radius: 11px;
+  background: white;
+  color: inherit;
+  font: inherit;
+}
+.expense-payment-type:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 2px;
+}
+.expense-payment-history {
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.expense-payment-history li {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.expense-payment-history time {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
