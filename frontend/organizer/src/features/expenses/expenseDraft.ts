@@ -11,10 +11,10 @@ export type ExpenseDraftErrors = Partial<Record<keyof ExpenseDraft, string>>;
 export function validateExpenseDraft(draft: ExpenseDraft): ExpenseDraftErrors {
   const errors: ExpenseDraftErrors = {};
   if (!draft.name.trim() || draft.name.trim().length > 255) {
-    errors.name = "Enter an expense name using 1 to 255 characters.";
+    errors.name = draft.name.trim() ? "Use 255 characters or fewer." : "Expense name is required.";
   }
   if (!/^(0|[1-9][0-9]{0,9})(\.[0-9]{1,2})?$/.test(draft.amount.trim())) {
-    errors.amount = "Enter an amount from 0 to 9,999,999,999.99 with up to 2 decimals.";
+    errors.amount = "Enter an amount of 0 or more, with up to 2 decimals.";
   }
   if (draft.dueDate) {
     const parsed = new Date(draft.dueDate + "T00:00:00Z");
