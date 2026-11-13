@@ -13,6 +13,7 @@ function statusTone(status: string) {
 
 export function Expenses({ onAdd }: { onAdd: () => void }) {
   const [filter, setFilter] = useState("All");
+  const [search, setSearch] = useState("");
   const expenses = expensesSeed;
 
   if (!expenses.length)
@@ -31,7 +32,12 @@ export function Expenses({ onAdd }: { onAdd: () => void }) {
       </>
     );
 
-  const rows = filter === "All" ? expenses : expenses.filter((x) => x.status.includes(filter));
+  const query = search.trim().toLowerCase();
+  const rows = expenses.filter(
+    (expense) =>
+      (filter === "All" || expense.status.includes(filter)) &&
+      expense.vendor.toLowerCase().includes(query),
+  );
   return (
     <>
       <PageHeader
@@ -76,10 +82,16 @@ export function Expenses({ onAdd }: { onAdd: () => void }) {
             ))}
           </div>
           <div className="toolbar-actions">
-            <button className="filter-btn">
+            <label className="search-input">
               <Icon name="search" />
-              Search
-            </button>
+              <input
+                type="search"
+                aria-label="Search expenses"
+                placeholder="Search expenses"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </label>
             <button className="filter-btn">
               All categories <Icon name="down" size={14} />
             </button>
@@ -100,6 +112,26 @@ export function Expenses({ onAdd }: { onAdd: () => void }) {
               </tr>
             </thead>
             <tbody>
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={8}>
+                    <EmptyState
+                      title="No matching expenses"
+                      message="Try another search or clear your filters."
+                      action={
+                        <Button
+                          onClick={() => {
+                            setSearch("");
+                            setFilter("All");
+                          }}
+                        >
+                          Clear filters
+                        </Button>
+                      }
+                    />
+                  </td>
+                </tr>
+              )}
               {rows.map((x) => (
                 <tr key={x.vendor}>
                   <td>
