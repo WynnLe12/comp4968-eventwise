@@ -10,7 +10,7 @@ import {
 
 const authCopy: Record<Exclude<PublicPage, "landing">, [string, string]> = {
   login: ["Welcome back", "Sign in to continue planning the good stuff."],
-  signup: ["Let?s plan something wonderful", "Create your free EventWise account."],
+  signup: ["Let's plan something wonderful", "Create your free EventWise account."],
   reset: ["Reset your password", "We?ll send a verification code to your inbox."],
 };
 
