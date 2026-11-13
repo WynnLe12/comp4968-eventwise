@@ -547,7 +547,8 @@
 }
 
 .vendor-expense-action {
-  margin-top: 12px;
+  min-width: 0;
+  margin: 0 0 12px;
 }
 .vendor-expense-action .btn {
   width: 100%;
@@ -576,7 +577,8 @@
 }
 
 .vendor-expense-mismatch {
-  padding: 12px;
+  min-width: 0;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: #faf7ff;
@@ -596,8 +598,29 @@
   color: var(--purple-dark);
   font-size: 14px;
   font-weight: 800;
+  font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 .vendor-expense-mismatch .btn {
+  height: auto;
+  min-height: 36px;
   margin-top: 8px;
+  padding: 8px 0 0;
+  justify-content: flex-start;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  color: var(--purple-dark);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+}
+.vendor-expense-mismatch .btn:hover {
+  background: transparent;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.vendor-expense-mismatch .btn:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 2px;
 }
