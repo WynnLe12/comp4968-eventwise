@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useEvents } from "../events/EventsContext";
 import { Badge, Button, Card, Icon } from "../../components/ui";
 import { PageHeader } from "../../components/page";
 import { budgetDefaults } from "../../data/mockData";
@@ -7,6 +8,7 @@ import {
   editBudgetCategory,
   addBudgetCategory,
   removeBudgetCategory,
+  saveTotalBudget,
   type BudgetCategory,
   type EventBudgetResponse,
 } from "./budgetApi";
@@ -16,8 +18,6 @@ const spentByCategory = [12800, 4200, 1900, 2850, 690, 0, 0];
 
 interface BudgetProps {
   openReset: () => void;
-  eventId?: string;
-  accessToken?: string;
 }
 
 function formatMoney(amount: number): string {
@@ -35,11 +35,17 @@ function calculatePlannedCents(
   return Math.round((totalCents * percentageUnits) / 10000);
 }
 
-export function Budget({
-  openReset,
-  eventId,
-  accessToken,
-}: BudgetProps) {
+export function Budget({ openReset }: BudgetProps) {
+  const { selectedId: eventId, eventDetails, } = useEvents();
+  // Track the currently selected event across asynchronous requests.
+  const activeEventIdRef = useRef(eventId);
+  activeEventIdRef.current = eventId;
+
+  function isActiveEvent(requestEventId: string): boolean {
+    return activeEventIdRef.current === requestEventId;
+  }
+
+  const canEditTotalBudget = eventDetails?.role === "OWNER";
   // Original mock-data page.
   const [total, setTotal] = useState(35000);
   const [categories, setCategories] = useState(budgetDefaults);
@@ -51,11 +57,9 @@ export function Budget({
   );
 
   // Real event budget state.
-  const [budgetData, setBudgetData] =
-    useState<EventBudgetResponse | null>(null);
+  const [budgetData, setBudgetData] = useState<EventBudgetResponse | null>(null);
 
-  const [draftCategories, setDraftCategories] =
-    useState<BudgetCategory[]>([]);
+  const [draftCategories, setDraftCategories] = useState<BudgetCategory[]>([]);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,10 +69,15 @@ export function Budget({
   // Add Category form state.
   const [newCategoryName, setNewCategoryName] = useState("");
   const [showAddCategory, setShowAddCategory] = useState(false);
+  const [editingTotal, setEditingTotal] = useState(false);
+  const [savingTotal, setSavingTotal] = useState(false);
+  const [newTotalBudget, setNewTotalBudget] = useState("");
+  const [recalculationMode, setRecalculationMode] = useState<"recalculate" | "keep">("recalculate");
 
   // Load actual budget data when an event is selected.
   useEffect(() => {
-    if (!eventId || !accessToken) {
+
+    if (!eventId) {
       setBudgetData(null);
       setDraftCategories([]);
       setLoading(false);
@@ -80,16 +89,19 @@ export function Budget({
 
     async function loadBudget() {
       setLoading(true);
+      setEditingTotal(false);
+      setNewTotalBudget("");
+      setRecalculationMode("recalculate");
+      setShowAddCategory(false);
+      setNewCategoryName("");
+      setSaveMessage(null);
       setError(null);
       setBudgetData(null);
       setDraftCategories([]);
       setSaveMessage(null);
 
       try {
-        const data = await fetchBudgetCategories(
-          eventId!,
-          accessToken
-        );
+        const data = await fetchBudgetCategories(eventId!);
 
         if (!cancelled) {
           setBudgetData(data);
@@ -117,7 +129,7 @@ export function Budget({
     return () => {
       cancelled = true;
     };
-  }, [eventId, accessToken]);
+  }, [eventId]);
 
   // Update a category's percentage in local state.
   function updateAllocation(categoryId: string, percentage: string) {
@@ -210,6 +222,38 @@ export function Budget({
       return;
     }
 
+    if (savingTotal) {
+      setSaveMessage(
+        "Please finish updating the total budget first."
+      );
+      return;
+    }
+
+    const hasUnsavedChanges =
+      draftCategories.length !== (budgetData?.categories.length ?? 0) ||
+      draftCategories.some((draft) => {
+        const original = budgetData?.categories.find(
+          (item) => item.categoryId === draft.categoryId
+        );
+
+        return (
+          !original ||
+          draft.name !== original.name ||
+          draft.allocationPercentage !== original.allocationPercentage ||
+          draft.sortOrder !== original.sortOrder
+        );
+      });
+
+    if (
+      !categoryId.startsWith("new-") &&
+      hasUnsavedChanges
+    ) {
+      setSaveMessage(
+        "Please save your category changes before deleting an existing category."
+      );
+      return;
+    }
+
     // New categories do not exist in MySQL yet.
     if (categoryId.startsWith("new-")) {
       setDraftCategories((previous) =>
@@ -223,7 +267,7 @@ export function Budget({
     }
 
     // Existing categories require an event and authentication.
-    if (!eventId || !accessToken) {
+    if (!eventId) {
       setSaveMessage("Authentication required.");
       return;
     }
@@ -240,17 +284,10 @@ export function Budget({
     setSaveMessage(null);
 
     try {
-      await removeBudgetCategory(
-        eventId,
-        categoryId,
-        accessToken
-      );
+      await removeBudgetCategory(eventId, categoryId);
 
       // Reload categories from MySQL.
-      const updatedBudget = await fetchBudgetCategories(
-        eventId,
-        accessToken
-      );
+      const updatedBudget = await fetchBudgetCategories(eventId);
 
       setBudgetData(updatedBudget);
       setDraftCategories(
@@ -296,9 +333,258 @@ export function Budget({
     Math.round(realAllocationPercent * 100) > 10000 ||
     realAllocatedCents > totalCents;
 
+  const budgetPreview = editingTotal ? calculateNewBudget() : null;
+
+  function handleEditTotalBudget() {
+    if (!budgetData || saving) return;
+
+    setNewTotalBudget(budgetData.totalBudget);
+    setRecalculationMode("recalculate");
+    setEditingTotal(true);
+    setSaveMessage(null);
+  }
+
+  function calculateNewBudget() {
+    if (!budgetData) return null;
+
+    const value = newTotalBudget.trim();
+
+    // MySQL supports a maximum of two decimal places.
+    if (!/^(0|[1-9]\d{0,9})(\.\d{1,2})?$/.test(value)) {
+      return null;
+    }
+
+    const newTotalCents = Math.round(Number(value) * 100);
+
+    const updatedCategories = draftCategories.map((category) => {
+      const oldPlannedCents = Math.round(
+        Number(category.plannedAmount) * 100
+      );
+
+      if (recalculationMode === "recalculate") {
+        // Keep percentages; calculate amounts from the new total.
+        const plannedCents = calculatePlannedCents(
+          newTotalCents,
+          category.allocationPercentage
+        );
+
+        return {
+          ...category,
+          newPercentage: Number(category.allocationPercentage ?? 0),
+          newAmount: plannedCents / 100,
+        };
+      }
+
+      // Keep existing planned amounts; calculate new percentages.
+      const newPercentage =
+        newTotalCents > 0
+          ? (oldPlannedCents / newTotalCents) * 100
+          : oldPlannedCents === 0
+            ? 0
+            : NaN;
+
+      return {
+        ...category,
+        newPercentage,
+        newAmount: oldPlannedCents / 100,
+      };
+    });
+
+    const totalAllocated = updatedCategories.reduce(
+      (sum, category) =>
+        sum + Math.round(category.newAmount * 100),
+      0
+    );
+
+    return {
+      newTotal: newTotalCents / 100,
+      categories: updatedCategories,
+      allocated: totalAllocated / 100,
+      unallocated: (newTotalCents - totalAllocated) / 100,
+    };
+  }
+
+  function validateBudgetPreview(): string | null {
+    if (!budgetData || !eventId) {
+      return "Please select an event first.";
+    }
+
+    if (!canEditTotalBudget) {
+      return "Only the event owner can change the total budget.";
+    }
+
+    const preview = calculateNewBudget();
+
+    if (!preview) {
+      return "Please enter a valid total budget.";
+    }
+
+    if (preview.unallocated < 0) {
+      return "Category amounts cannot exceed the total budget.";
+    }
+
+    if (
+      draftCategories.some(
+        (category) =>
+          category.allocationPercentage === null ||
+          category.allocationPercentage === ""
+      )
+    ) {
+      return "Please complete all category percentages first.";
+    }
+
+    // Percentages are stored with a maximum of 2 decimal places.
+    const newTotalCents = Math.round(preview.newTotal * 100);
+
+    for (const category of preview.categories) {
+      if (
+        !Number.isFinite(category.newPercentage) ||
+        category.newPercentage < 0 ||
+        category.newPercentage > 100
+      ) {
+        return `Invalid allocation for "${category.name}".`;
+      }
+
+      const roundedPercentage =
+        Math.round(category.newPercentage * 100) / 100;
+
+      const calculatedCents = calculatePlannedCents(
+        newTotalCents,
+        roundedPercentage.toFixed(2)
+      );
+
+      const expectedCents = Math.round(
+        category.newAmount * 100
+      );
+
+      if (Math.abs(calculatedCents - expectedCents) > 1) {
+        return (
+          `The amount for "${category.name}" cannot be preserved ` +
+          "accurately using two-decimal percentages. " +
+          "Choose Recalculate planned amounts or adjust the total."
+        );
+      }
+    }
+
+    return null;
+  }
+
+  async function handleSaveTotalBudget() {
+    if (!eventId || !budgetData || saving || savingTotal) {
+      return;
+    }
+
+    // The event owner is the only user allowed to change the total.
+    if (!canEditTotalBudget) {
+      setSaveMessage(
+        "Only the event owner can change the total budget."
+      );
+      return;
+    }
+
+    // Do not overwrite unsaved category edits.
+    const hasUnsavedChanges =
+      draftCategories.length !== budgetData.categories.length ||
+      draftCategories.some((category, index) => {
+        const original = budgetData.categories[index];
+
+        return (
+          !original ||
+          category.categoryId !== original.categoryId ||
+          category.name !== original.name ||
+          category.sortOrder !== original.sortOrder ||
+          category.allocationPercentage !==
+          original.allocationPercentage
+        );
+      });
+
+    if (hasUnsavedChanges) {
+      setSaveMessage(
+        "Please save your category changes before updating the total budget."
+      );
+      return;
+    }
+
+    const validationError = validateBudgetPreview();
+
+    if (validationError) {
+      setSaveMessage(validationError);
+      return;
+    }
+
+    const preview = calculateNewBudget();
+
+    if (!preview) {
+      setSaveMessage("Invalid budget preview.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Change the total budget to $${formatMoney(preview.newTotal)}?`
+    );
+
+    if (!confirmed) return;
+
+    setSavingTotal(true);
+    setSaveMessage(null);
+
+    try {
+      const requestEventId = eventId;
+
+      // Build the complete list of existing category allocations.
+      const categoriesToSave = preview.categories.map((category) => ({
+        categoryId: category.categoryId,
+        allocationPercentage: category.newPercentage.toFixed(2),
+        plannedAmount: category.newAmount.toFixed(2),
+      }));
+
+      // Update the total and its categories in one MySQL transaction.
+      await saveTotalBudget(requestEventId, {
+        totalBudget: preview.newTotal.toFixed(2),
+        categories: categoriesToSave,
+      });
+
+      // The save may finish after the user has selected another event.
+      if (!isActiveEvent(requestEventId)) {
+        return;
+      }
+
+      // Retrieve the updated values from MySQL.
+      const updatedBudget = await fetchBudgetCategories(requestEventId);
+
+      // Do not display Event A's data if the user switched to Event B.
+      if (!isActiveEvent(requestEventId)) {
+        return;
+      }
+
+      setBudgetData(updatedBudget);
+
+      setDraftCategories(
+        updatedBudget.categories.map((category) => ({
+          ...category,
+        }))
+      );
+
+      setEditingTotal(false);
+      setSaveMessage(
+        "Total budget and category allocations updated successfully."
+      );
+    } catch (err: unknown) {
+      if (isActiveEvent(eventId)) {
+        setSaveMessage(
+          err instanceof Error
+            ? `Failed to update total budget: ${err.message}`
+            : "Failed to update total budget."
+        );
+      }
+    } finally {
+      setSavingTotal(false);
+    }
+  }
+
   // Save new and edited categories through the backend API.
   async function handleSaveChanges() {
-    if (!eventId || !accessToken || !budgetData || saving) {
+    if (!eventId || !budgetData || saving) {
       return;
     }
 
@@ -308,11 +594,11 @@ export function Budget({
     }
 
     if (draftCategories.some((category) =>
-          category.allocationPercentage === null ||
-          category.allocationPercentage === "" ||
-          !Number.isFinite(Number(category.allocationPercentage)) ||
-          Number(category.allocationPercentage) < 0
-      )
+      category.allocationPercentage === null ||
+      category.allocationPercentage === "" ||
+      !Number.isFinite(Number(category.allocationPercentage)) ||
+      Number(category.allocationPercentage) < 0
+    )
     ) {
       setSaveMessage("Please enter a valid percentage for every category.");
       return;
@@ -333,6 +619,8 @@ export function Budget({
       setSaveMessage("Category names must be unique.");
       return;
     }
+
+    const requestEventId = eventId;
 
     setSaving(true);
     setSaveMessage(null);
@@ -356,26 +644,33 @@ export function Budget({
         if (category.categoryId.startsWith("new-")) {
           // New category: INSERT using POST.
           await addBudgetCategory(
-            eventId,
-            input,
-            accessToken
+            requestEventId,
+            input
           );
         } else {
           // Existing category: UPDATE using PATCH.
           await editBudgetCategory(
-            eventId,
+            requestEventId,
             category.categoryId,
-            input,
-            accessToken
+            input
           );
         }
       }
 
       // Reload the budget from MySQL after saving.
+      // Do not reload if the user switched to another event.
+      if (!isActiveEvent(requestEventId)) {
+        return;
+      }
+
       const updatedBudget = await fetchBudgetCategories(
-        eventId,
-        accessToken
+        requestEventId
       );
+
+      // Make sure the user is still viewing the same event.
+      if (!isActiveEvent(requestEventId)) {
+        return;
+      }
 
       setBudgetData(updatedBudget);
       setDraftCategories(
@@ -386,11 +681,13 @@ export function Budget({
 
       setSaveMessage("Budget changes saved successfully.");
     } catch (err: unknown) {
-      setSaveMessage(
-        err instanceof Error
-          ? `Save failed: ${err.message}. Some changes may already have been saved.`
-          : "Failed to save budget categories."
-      );
+      if (isActiveEvent(requestEventId)) {
+        setSaveMessage(
+          err instanceof Error
+            ? `Save failed: ${err.message}. Some changes may already have been saved.`
+            : "Failed to save budget categories."
+        );
+      }
     } finally {
       setSaving(false);
     }
@@ -402,11 +699,7 @@ export function Budget({
       <>
         <PageHeader page="budget" />
 
-        {!accessToken ? (
-          <Card>
-            <p>Authentication is required to load this event's budget.</p>
-          </Card>
-        ) : loading ? (
+        {loading ? (
           <Card>
             <p>Loading budget categories...</p>
           </Card>
@@ -416,10 +709,142 @@ export function Budget({
           </Card>
         ) : budgetData ? (
           <>
-            <div className="budget-overview">
+            <div
+              className={`budget-overview ${editingTotal ? "budget-overview--editing" : ""}`}
+            >
+
               <Card>
                 <span>Total event budget</span>
+
                 <strong>${formatMoney(realTotal)}</strong>
+
+                {!editingTotal ? (
+                  canEditTotalBudget ? (
+                    <Button
+                      variant="secondary"
+                      onClick={handleEditTotalBudget}
+                    >
+                      Edit total budget
+                    </Button>
+                  ) : (
+                    <small>
+                      Only the event owner can edit the total budget.
+                    </small>
+                  )
+                ) : (
+                  <div className="budget-edit">
+                    <label htmlFor="new-total-budget">
+                      New total budget ($)
+                    </label>
+
+                    <input
+                      id="new-total-budget"
+                      type="number"
+                      min="0"
+                      max="9999999999.99"
+                      step="0.01"
+                      value={newTotalBudget}
+                      onChange={(event) =>
+                        setNewTotalBudget(event.target.value)
+                      }
+                    />
+
+                    <p>How should category allocations change?</p>
+
+                    <label>
+                      <input
+                        type="radio"
+                        name="recalculation-mode"
+                        checked={recalculationMode === "recalculate"}
+                        onChange={() => setRecalculationMode("recalculate")}
+                      />
+                      Recalculate planned amounts (keep percentages)
+                    </label>
+
+                    <label>
+                      <input
+                        type="radio"
+                        name="recalculation-mode"
+                        checked={recalculationMode === "keep"}
+                        onChange={() => setRecalculationMode("keep")}
+                      />
+                      Keep planned amounts (recalculate percentages)
+                    </label>
+
+                    {budgetPreview ? (
+                      <div className="budget-preview">
+                        <h4>Budget Preview</h4>
+
+                        <p>
+                          New total: ${formatMoney(budgetPreview.newTotal)}
+                        </p>
+
+                        <p>
+                          Allocated: ${formatMoney(budgetPreview.allocated)}
+                        </p>
+
+                        <p>
+                          Unallocated: ${formatMoney(budgetPreview.unallocated)}
+                        </p>
+
+                        <div className="budget-table table-wrap">
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>Category</th>
+                                <th>New %</th>
+                                <th>New Amount</th>
+                              </tr>
+                            </thead>
+
+                            <tbody>
+                              {budgetPreview.categories.map((category) => (
+                                <tr key={category.categoryId}>
+                                  <td>{category.name}</td>
+                                  <td>
+                                    {Number.isFinite(category.newPercentage)
+                                      ? `${category.newPercentage.toFixed(2)}%`
+                                      : "N/A"}
+                                  </td>
+                                  <td>${formatMoney(category.newAmount)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {budgetPreview.unallocated < 0 && (
+                          <p role="alert" className="negative">
+                            Categories exceed the new total budget.
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <p role="alert">
+                        Enter a valid total budget between $0 and
+                        $9,999,999,999.99.
+                      </p>
+                    )}
+
+                    <Button
+                      variant="primary"
+                      onClick={() => {
+                        void handleSaveTotalBudget();
+                      }}
+                    >
+                      {savingTotal ? "Saving budget..." : "Save total budget"}
+                    </Button>
+
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setEditingTotal(false);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                )}
               </Card>
 
               <Card>
@@ -578,7 +1003,13 @@ export function Budget({
               </div>
 
               {saveMessage && (
-                <p role="status">{saveMessage}</p>
+                <div
+                  className="budget-notification"
+                  role="status"
+                >
+                  <span className="budget-notification-icon">✓</span>
+                  <span>{saveMessage}</span>
+                </div>
               )}
             </Card>
           </>

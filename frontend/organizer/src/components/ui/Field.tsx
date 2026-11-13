@@ -1,20 +1,14 @@
-import type { HTMLInputTypeAttribute } from "react";
+import type { InputHTMLAttributes } from "react";
 
 export function Field({
   label,
-  placeholder,
   type = "text",
-  defaultValue,
-}: {
-  label: string;
-  placeholder?: string;
-  type?: HTMLInputTypeAttribute;
-  defaultValue?: string | number;
-}) {
+  ...inputProps
+}: InputHTMLAttributes<HTMLInputElement> & { label: string }) {
   return (
     <label className="field">
       <span>{label}</span>
-      <input type={type} placeholder={placeholder} defaultValue={defaultValue} />
+      <input {...inputProps} type={type} />
     </label>
   );
 }

@@ -1,8 +1,10 @@
+import "./testEnvironment";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { after, before, test } from "node:test";
 import type { RowDataPacket } from "mysql2/promise";
 import { createAppServer } from "../server";
+import { db } from "../shared/db/db";
 import { closePool, getPool } from "../shared/db/pool";
 
 const server = createAppServer();
@@ -67,4 +69,9 @@ test("MySQL: nonexistent valid ID returns 404", integration, async () => {
   const response = await fetch(`${baseUrl}/event-templates/${rows[0].id}`);
   assert.equal(response.status, 404);
   assert.deepEqual(await response.json(), { error: "Template not found" });
+});
+
+
+test("templates and authenticated event repositories share the existing MySQL pool", () => {
+  assert.equal(getPool(), db);
 });
