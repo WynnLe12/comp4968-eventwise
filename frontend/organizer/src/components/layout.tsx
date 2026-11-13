@@ -2,6 +2,9 @@ import { useState } from "react";
 import { navGroups } from "../routes/navigation";
 import type { Page } from "../types";
 import { Icon } from "./ui";
+import { useEvents } from "../features/events/EventsContext";
+import { eventDate, eventInitials, eventRole } from "../features/events/eventPresentation";
+import { useUserProfile } from "../features/auth/hooks/useUserProfile";
 
 export function Brand() {
   return (
@@ -29,6 +32,7 @@ export function Sidebar({
   open: boolean;
   close: () => void;
 }) {
+  const { events, selectedEvent, status, selectEvent, eventDetails, detailsStatus } = useEvents();
   return (
     <>
       {open && <div className="mobile-overlay" onClick={close} />}
@@ -40,13 +44,15 @@ export function Sidebar({
           </button>
         </div>
         <div className="event-switcher">
-          <div className="event-thumb">
-            M<span>&</span>E
-          </div>
+          <div className="event-thumb">{selectedEvent ? eventInitials(eventDetails?.name ?? selectedEvent.name) : "?"}</div>
           <div>
-            <small>Current event</small>
-            <b>Maya & Eli</b>
-            <span>Wedding · Sep 20</span>
+            <label htmlFor="current-event"><small>Current event</small></label>
+            <select id="current-event" value={selectedEvent?.event_id ?? ""} disabled={status !== "ready"}
+              onChange={(event) => selectEvent(event.target.value)}>
+              {!selectedEvent && <option value="">{status === "loading" ? "Loading events..." : status === "error" ? "Events unavailable" : "No events"}</option>}
+              {events.map((event) => <option key={event.event_id} value={event.event_id}>{event.event_id === eventDetails?.event_id ? eventDetails.name : event.name}</option>)}
+            </select>
+            <span>{eventDetails ? eventRole(eventDetails.role) : selectedEvent ? detailsStatus === "loading" ? "Loading role..." : "Event unavailable" : "No event selected"}</span>
           </div>
           <Icon name="down" size={15} />
         </div>
@@ -65,7 +71,6 @@ export function Sidebar({
                 >
                   <Icon name={item.icon} />
                   <span>{item.label}</span>
-                  {item.id === "alerts" && <i>3</i>}
                 </button>
               ))}
             </div>
@@ -75,11 +80,8 @@ export function Sidebar({
           <div className="mini-spark">
             <Icon name="spark" size={16} />
           </div>
-          <b>Your plan is 68% ready</b>
-          <span>Keep going—you’re doing great.</span>
-          <div>
-            <i style={{ width: "68%" }} />
-          </div>
+          <b>Planning progress</b>
+          <span>Progress information is not available yet.</span>
         </div>
         <div className="side-footer">
           <button>
@@ -104,15 +106,17 @@ export function Topbar({
   exit: () => void;
 }) {
   const [profileOpen, setProfileOpen] = useState(false);
+  const { profile, loading } = useUserProfile();
+  const { selectedEvent, eventDetails, detailsStatus } = useEvents();
   return (
     <header className="topbar">
       <button className="menu-button" onClick={toggleMenu} aria-label="Open menu">
         <Icon name="menu" />
       </button>
       <div className="top-event">
-        <span>125 days to go</span>
+        <span>{eventDetails?.name ?? (selectedEvent ? detailsStatus === "loading" ? "Loading event..." : "Event unavailable" : "No event selected")}</span>
         <i />
-        <b>Saturday, September 20, 2025</b>
+        <b>{eventDetails ? eventDate(eventDetails.event_date) : ""}</b>
       </div>
       <div className="top-actions">
         <button className="search-button">
@@ -126,10 +130,10 @@ export function Topbar({
         </button>
         <div className="profile-wrap">
           <button className="profile" onClick={() => setProfileOpen(!profileOpen)}>
-            <span>MB</span>
+            <span>{loading ? "..." : profile?.initials ?? "?"}</span>
             <div>
-              <b>Maya Bennett</b>
-              <small>Owner</small>
+              <b>{loading ? "Loading..." : profile?.displayName ?? "Account"}</b>
+              <small>{eventDetails ? eventRole(eventDetails.role) : selectedEvent ? detailsStatus === "loading" ? "Loading role..." : "Event unavailable" : "No event selected"}</small>
             </div>
             <Icon name="down" size={14} />
           </button>
