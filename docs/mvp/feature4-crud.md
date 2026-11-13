@@ -17,7 +17,7 @@ List filters: categoryId, vendorId, paymentStatus, overdue, q, limit and offset.
 
 Money and BIGINT IDs use strings. Financial calculations use integer cents with BigInt. The repository uses parameterized SQL, event-scoped lookups, membership checks and transactions. Payment rows are pre-aggregated to avoid duplicating commitments. Existing refund rows reduce net paid. Writes validate category/vendor membership, and updates cannot lower commitment below net paid.
 
-Membership rows and association rows are held with shared locks; expense mutation locks the expense row. Commit 5's payment writers must acquire the same parent expense lock before calculating/updating payments. Delete cascades to payment rows under the existing schema. Database errors do not disclose SQL or credentials in API responses.
+Membership rows and association rows are held with shared locks; expense mutation locks the expense row. Commit 5's payment writers must acquire the same parent expense lock before calculating/updating payments. Delete checks for any payment/refund history under the same parent-row lock and returns 409 HAS_PAYMENTS if present. The schema cascade remains for fixture/admin cleanup; the API cannot use it to discard history. Database errors do not disclose SQL or credentials in API responses.
 
 The current transaction isolation is READ COMMITTED. Count/list reads are scoped to the same event but are not a frozen pagination snapshot across concurrent changes. Refresh if records change during paging.
 
@@ -48,12 +48,12 @@ node scripts/verify-expense-seed.mjs
 npm --prefix backend run test:db
 ```
 
-Run one command at a time; stop if a command fails. Loading 03 resets only reserved fixture events 400/401 and their records; it is unnecessary if you already have the unchanged fixtures loaded. The integration check inserts a temporary expense and payment under event 400, checks CRUD, filtering, exact amounts, forbidden cross-event references, reductions below paid and payment cascade deletion, then cleans up its temporary expense. It does not reset demo events 1/2. Run it against disposable local data only, never production.
+Run one command at a time; stop if a command fails. Loading 03 resets only reserved fixture events 400/401 and their records; it is unnecessary if you already have the unchanged fixtures loaded. The integration check inserts a temporary expense and payment under event 400, checks CRUD, filtering, exact amounts, forbidden cross-event references, reductions below paid and payment-history protection and unpaid-expense deletion, then cleans up its temporary expense. It does not reset demo events 1/2. Run it against disposable local data only, never production.
 
 Expected final integration message:
 
 ```text
-MySQL expense CRUD checks passed (including access, associations, filters, precision and payment cascade).
+MySQL expense CRUD checks passed (including access, associations, filters, precision and payment history protection).
 ```
 
 This check passes known fixture identities directly to the service. It verifies SQL membership enforcement, not Cognito sign-in. MySQL integration must be run on the developer machine; it was not run in the preparation environment because Docker/MySQL was unavailable.

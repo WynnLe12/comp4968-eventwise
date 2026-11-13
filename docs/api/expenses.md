@@ -32,7 +32,7 @@ These policies establish a working contract; they are not evidence of prior team
 | Payment status | Derived from committed amount and net paid; never manually writable. |
 | Due date | Optional date for the expense obligation, not a date on each recorded payment. Separate scheduled installments require separate expense obligations whose totals do not duplicate a full contract expense. |
 | Expense edits | Reject a committed amount below net paid. Existing payment history remains associated with the expense. |
-| Expense deletion | Explicit confirmation in UI; delete the expense and its payments atomically, matching existing cascade behavior. This MVP does not provide a financial audit ledger. |
+| Expense deletion | Explicit confirmation in UI; only expenses without payment or refund history can be deleted. Reject expenses with history with 409 HAS_PAYMENTS, even when fully paid or fully refunded. |
 | Refunds | Include existing REFUND rows in all calculations/history. Creating, editing, or deleting payment/refund records is outside this MVP, except recording a new DEPOSIT or PAYMENT. |
 | Actual spending | Avoid an ambiguous `actual` field. Expose committed and paid separately. Budget remaining/overrun uses committed expenses. |
 | Calendar boundaries | Proposed MVP uses UTC today for overdue/month calculations, matching local DB configuration. Confirm before release if event-local dates are needed. |
@@ -135,7 +135,7 @@ GET/PATCH use the same single-resource envelope. List data contains objects of t
 
 PATCH accepts any nonempty subset of categoryId, vendorId, description, committedAmount and dueDate with the create validation rules. categoryId, description and committedAmount cannot be null. Reject amount below net paid with 409. Revalidate all changed associations in the same event.
 
-DELETE removes the authorized expense and its payment rows in one transaction; return 204 with no body. A repeated DELETE returns 404. The UI must explain that payment history is removed and require explicit confirmation. Refresh category/event/vendor totals afterward.
+DELETE locks the authorized expense and checks for any payment or refund rows in the same transaction. If any exist, return 409 HAS_PAYMENTS and preserve the expense and all history, regardless of the remaining balance or net paid amount. Otherwise delete the expense and return 204 with no body. A repeated DELETE returns 404. The UI must name the expense and amount and require explicit confirmation. Refresh category/event/vendor totals afterward.
 
 ### Record a deposit/payment
 
@@ -231,6 +231,7 @@ The existing vendor view must remain consistent: refunds subtract from paid_tota
 | 405 | METHOD_NOT_ALLOWED | Unsupported method on known route |
 | 409 | PAYMENT_EXCEEDS_BALANCE | Payment greater than outstanding |
 | 409 | AMOUNT_BELOW_PAID | Expense edit would put committed below net paid |
+| 409 | HAS_PAYMENTS | Expense has payment or refund history and cannot be deleted |
 | 413 | PAYLOAD_TOO_LARGE | Body exceeds agreed limit |
 | 415 | UNSUPPORTED_MEDIA_TYPE | Write body is not application/json |
 | 422 | VALIDATION_ERROR | Invalid fields, query, or same-event associations |

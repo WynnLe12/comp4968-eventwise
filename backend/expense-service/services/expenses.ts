@@ -109,6 +109,10 @@ export class ExpenseService {
     return this.repository.transaction(async tx => {
       await tx.assertMember(eventId, sub);
       requireRow(await tx.find(eventId, expenseId, true));
+      const history = await tx.listPayments(eventId, expenseId, { limit: 1, offset: 0 });
+      if (history.total > 0) {
+        throw new ApiError(409, "HAS_PAYMENTS", "This expense has payment history and cannot be deleted.");
+      }
       await tx.remove(eventId, expenseId);
     });
   }

@@ -12,6 +12,7 @@ async function main(): Promise<void> {
   const service = new ExpenseService(new MySqlExpenseRepository(() => pool), () => "2026-11-11");
   const owner = "expense-test-owner";
   let createdId: string | undefined;
+  let unpaidId: string | undefined;
   try {
     const listed = await service.list("400", owner, { limit: 100, offset: 0 });
     assert.ok(listed.data.some(row => row.expenseId === "4001"), "Load commit 3 fixtures first.");
@@ -24,7 +25,7 @@ async function main(): Promise<void> {
     const created = await service.create("400", owner, { categoryId: "4001", vendorId: "4001", description: "CRUD integration 100%_literal", committedAmount: "10.00", dueDate: "2026-11-10" });
     createdId = created.expenseId;
     assert.equal(created.paidTotal, "0.00");
-    // Test payment cascade/reduction handling using an isolated temporary row.
+    // Test payment-history protection and amount reduction using an isolated temporary row.
     // Payment API implementation belongs to commit 5.
     await pool.execute("INSERT INTO expense_payments (expense_id, amount, paid_at, payment_type) VALUES (?, '2.00', '2026-11-01', 'DEPOSIT')", [createdId]);
     assert.equal((await service.get("400", createdId, owner)).outstandingAmount, "8.00");
@@ -39,13 +40,27 @@ async function main(): Promise<void> {
     assert.ok(notOverdue.data.some(row => row.expenseId === createdId), "Null due dates are not overdue.");
     const noRows = await service.list("400", owner, { limit: 1, offset: 100000 });
     assert.equal(noRows.data.length, 0); assert.ok(noRows.total >= 8);
-    await service.remove("400", createdId, owner);
+    await assert.rejects(service.remove("400", createdId, owner),
+      error => error instanceof ApiError && error.status === 409 && error.code === "HAS_PAYMENTS");
     const [payments] = await pool.execute<RowDataPacket[]>("SELECT payment_id FROM expense_payments WHERE expense_id = ?", [createdId]);
-    assert.equal(payments.length, 0);
-    await assert.rejects(service.get("400", createdId, owner), e => e instanceof ApiError && e.status === 404);
-    console.log("MySQL expense CRUD checks passed (including access, associations, filters, precision and payment cascade).");
+    assert.equal(payments.length, 1, "Blocked deletion must preserve payment history.");
+    assert.equal((await service.get("400", createdId, owner)).paidTotal, "2.00");
+    // A matching refund must still block deletion at a zero net paid balance.
+    await pool.execute("INSERT INTO expense_payments (expense_id, amount, paid_at, payment_type) VALUES (?, '2.00', '2026-11-02', 'REFUND')", [createdId]);
+    assert.equal((await service.get("400", createdId, owner)).paidTotal, "0.00");
+    await assert.rejects(service.remove("400", createdId, owner),
+      error => error instanceof ApiError && error.status === 409 && error.code === "HAS_PAYMENTS");
+    const [preserved] = await pool.execute<RowDataPacket[]>("SELECT payment_id FROM expense_payments WHERE expense_id = ?", [createdId]);
+    assert.equal(preserved.length, 2);
+    const unpaid = await service.create("400", owner, { categoryId: "4001", description: "Unpaid delete verification", committedAmount: "1.00" });
+    unpaidId = unpaid.expenseId;
+    await service.remove("400", unpaid.expenseId, owner);
+    unpaidId = undefined;
+    await assert.rejects(service.get("400", unpaid.expenseId, owner), e => e instanceof ApiError && e.status === 404);
+    console.log("MySQL expense CRUD checks passed (including access, associations, filters, precision and payment history protection).");
   } finally {
     try {
+      if (unpaidId) await pool.execute("DELETE FROM expenses WHERE event_id = ? AND expense_id = ?", ["400", unpaidId]);
       if (createdId) await pool.execute("DELETE FROM expenses WHERE event_id = '400' AND expense_id = ?", [createdId]);
     } finally { await closeDatabasePool(); }
   }

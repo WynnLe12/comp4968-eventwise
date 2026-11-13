@@ -193,6 +193,10 @@ test("HTTP routes return JSON status codes, body limits, pagination and no-conte
   assert.equal(list.data.length, 1); assert.equal(list.total, 2); assert.equal(list.limit, 1);
   assert.equal((await fetch(`${base}${location}`, { headers })).status, 200);
   assert.equal((await fetch(`${base}${location}`, { method: "PATCH", headers, body: JSON.stringify({ description: "Edited" }) })).status, 200);
+  const protectedDelete = await fetch(base + "/events/400/expenses/4001", { method: "DELETE", headers });
+  assert.equal(protectedDelete.status, 409);
+  assert.equal(((await protectedDelete.json()) as { error: { code: string } }).error.code, "HAS_PAYMENTS");
+  assert.equal((await fetch(base + "/events/400/expenses/4001", { headers })).status, 200);
   const deleted = await fetch(`${base}${location}`, { method: "DELETE", headers });
   assert.equal(deleted.status, 204); assert.equal(await deleted.text(), "");
   assert.equal((await fetch(`${base}${location}`, { method: "DELETE", headers })).status, 404);
@@ -315,4 +319,23 @@ test("event summary ignores list pagination and updates after expense/payment ch
   const summary = await service.summary("400", "owner");
   assert.equal(summary.committedTotal, "1300.00"); assert.equal(summary.paidTotal, "225.00");
   assert.equal(summary.outstandingTotal, "1075.00"); assert.equal(summary.remainingBudget, "700.00");
+});
+
+test("deletion preserves partial, fully paid and fully refunded payment histories", async () => {
+  for (const paidTotal of ["200.00", "1200.00", "0.00"]) {
+    const { repository, service } = setup();
+    repository.rows.set("4001", row({ paidTotal }));
+    repository.payments[0]!.amount = paidTotal === "0.00" ? "200.00" : paidTotal;
+    if (paidTotal === "0.00") {
+      repository.payments.push({
+        ...repository.payments[0]!, paymentId: "2", paymentType: "REFUND", amount: "200.00",
+      });
+    }
+    const beforeRows = structuredClone(repository.rows);
+    const beforePayments = structuredClone(repository.payments);
+    await assert.rejects(service.remove("400", "4001", "owner"),
+      error => error instanceof ApiError && error.status === 409 && error.code === "HAS_PAYMENTS");
+    assert.deepEqual(repository.rows, beforeRows);
+    assert.deepEqual(repository.payments, beforePayments);
+  }
 });

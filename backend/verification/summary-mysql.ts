@@ -55,9 +55,14 @@ async function main(): Promise<void> {
     assert.equal(afterEdit.categories[0]?.committedTotal, "1200.00");
     assert.equal(afterEdit.categories[1]?.committedTotal, "620.30");
     assert.equal(afterEdit.categories[1]?.paidTotal, "325.30");
-    await service.remove("400", expenseId, owner); expenseId = undefined;
+    await assert.rejects(service.remove("400", expenseId, owner),
+      error => error instanceof ApiError && error.status === 409 && error.code === "HAS_PAYMENTS");
+    assert.deepEqual(await service.summary("400", owner), afterEdit);
+    // Only fixture cleanup bypasses the API's payment-history protection.
+    await pool.execute("DELETE FROM expenses WHERE event_id = '400' AND expense_id = ?", [expenseId]);
+    expenseId = undefined;
     assert.deepEqual(await service.summary("400", owner), baseline);
-    console.log("PASS: summary refresh after create, payment, amount/category edit and deletion");
+    console.log("PASS: summary refresh after create, payment, amount/category edit, blocked deletion and fixture cleanup");
 
     eventId = await insert("INSERT INTO events (name, total_budget) VALUES (?, ?)", ["Commit 6 temporary summary event", "50.00"]);
     await pool.execute("INSERT INTO event_members (event_id, cognito_sub, role) VALUES (?, ?, 'OWNER')", [eventId, owner]);
