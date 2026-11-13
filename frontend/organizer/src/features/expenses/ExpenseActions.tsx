@@ -1,6 +1,6 @@
 import { formatCalendarDate } from "../../utils/dateFormat";
 import { useId, useRef, useState } from "react";
-import { Badge, Icon } from "../../components/ui";
+import { Badge, Button, Icon } from "../../components/ui";
 import type { Expense } from "../../types";
 import "./expenses.css";
 
@@ -141,7 +141,19 @@ export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, o
             </dl>
           </section>
           <section className="expense-drawer-section">
-            <h3>Payment summary</h3>
+            <div className="expense-payment-heading">
+              <h3>Payment summary</h3>
+              <Button
+                icon="receipt"
+                disabled={fullyPaid}
+                onClick={() => {
+                  if (!fullyPaid) onRecordPayment();
+                }}
+              >
+                Record payment
+              </Button>
+            </div>
+            {fullyPaid && <p className="expense-payment-complete">This expense is fully paid.</p>}
             <dl>
               <div><dt>Total amount</dt><dd>{money(expense.total)}</dd></div>
               <div><dt>Paid</dt><dd>{money(expense.paid)}</dd></div>
