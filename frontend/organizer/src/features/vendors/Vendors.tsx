@@ -28,6 +28,7 @@ import type {
 } from "../../types";
 import { VendorActions } from "./VendorActions";
 import { VendorCard } from "./VendorCard";
+import { currency } from "./vendorFormat";
 import { ContractExpensePrompt } from "./ContractExpensePrompt";
 import {
   canAddContractExpense, contractExpenseSummary, ContractExpenseError, planContractExpense,
@@ -493,9 +494,21 @@ export function Vendors({
                     Add contract to expenses
                   </Button>
                 ) : contractExpenseSummary(vendor).mismatch ? (
-                  <Button variant="ghost" onClick={() => viewExpenses(vendor)}>
-                    Review expense breakdown
-                  </Button>
+                  <div className="vendor-expense-mismatch">
+                    <dl>
+                      <div>
+                        <dt>Contract</dt>
+                        <dd>{currency(vendor.contractTotal)}</dd>
+                      </div>
+                      <div>
+                        <dt>Linked expenses</dt>
+                        <dd>{currency(contractExpenseSummary(vendor).total)}</dd>
+                      </div>
+                    </dl>
+                    <Button variant="ghost" onClick={() => viewExpenses(vendor)}>
+                      Review expense breakdown
+                    </Button>
+                  </div>
                 ) : undefined
               }
               actions={

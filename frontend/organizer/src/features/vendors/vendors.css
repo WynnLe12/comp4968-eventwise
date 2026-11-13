@@ -574,3 +574,30 @@
   color: var(--muted);
   font-size: 13px;
 }
+
+.vendor-expense-mismatch {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #faf7ff;
+}
+.vendor-expense-mismatch dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.vendor-expense-mismatch dt {
+  font-size: 11px;
+  color: var(--muted);
+}
+.vendor-expense-mismatch dd {
+  margin: 4px 0 0;
+  color: var(--purple-dark);
+  font-size: 14px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.vendor-expense-mismatch .btn {
+  margin-top: 8px;
+}

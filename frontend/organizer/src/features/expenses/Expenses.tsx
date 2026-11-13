@@ -137,7 +137,7 @@ export function Expenses() {
         <ErrorState message="We couldn't load vendors. Retry to link expenses to a vendor." onRetry={reloadVendors} />
       ) : null}
       <div className="stat-grid expenses-stats">
-        <StatCard label="Total expenses" value={currency(summary.total)} detail={vendorExpenses.length + " expenses"} icon="receipt" selected={!hasTableFilters} onClick={() => selectSummaryFilter("all")} />
+        <StatCard label="Total expenses" value={currency(summary.total)} detail={vendorExpenses.length + (vendorExpenses.length === 1 ? " expense" : " expenses")} icon="receipt" selected={!hasTableFilters} onClick={() => selectSummaryFilter("all")} />
         <StatCard
           label="Paid so far"
           value={currency(summary.paid)}
@@ -150,7 +150,7 @@ export function Expenses() {
         <StatCard
           label="Outstanding"
           value={currency(summary.outstanding)}
-          detail={summary.openCount + " open expenses"}
+          detail={summary.openCount + (summary.openCount === 1 ? " open expense" : " open expenses")}
           icon="clock"
           selected={summaryFilter === "outstanding"}
           onClick={() => selectSummaryFilter("outstanding")}
@@ -159,7 +159,7 @@ export function Expenses() {
         <StatCard
           label="Due this month"
           value={currency(summary.dueThisMonth)}
-          detail={summary.dueCount + " expenses"}
+          detail={summary.dueCount + (summary.dueCount === 1 ? " expense" : " expenses")}
           icon="calendar"
           selected={summaryFilter === "due"}
           onClick={() => selectSummaryFilter("due")}
@@ -271,7 +271,7 @@ export function Expenses() {
         </div>
         <div className="pagination">
           <span>
-            Showing {rows.length} of {vendorExpenses.length} expenses
+            Showing {rows.length} of {vendorExpenses.length} {vendorExpenses.length === 1 ? "expense" : "expenses"}
           </span>
           <div>
             <button>‹</button>
