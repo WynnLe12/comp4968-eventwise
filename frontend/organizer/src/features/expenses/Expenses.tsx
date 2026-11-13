@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Badge, Button, Card, Icon } from "../../components/ui";
 import { EmptyState, PageHeader, StatCard } from "../../components/page";
 import { expensesSeed } from "../../data/mockData";
+import { ExpenseActions } from "./ExpenseActions";
 
 const filters = ["All", "Unpaid", "Deposit", "Paid"];
 
@@ -148,9 +149,7 @@ export function Expenses({ onAdd }: { onAdd: () => void }) {
                     <Badge tone={statusTone(x.status)}>{x.status}</Badge>
                   </td>
                   <td>
-                    <button className="icon-btn" aria-label="More options">
-                      <Icon name="more" />
-                    </button>
+                    <ExpenseActions expense={x} />
                   </td>
                 </tr>
               ))}
