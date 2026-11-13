@@ -158,3 +158,27 @@
 }
 
 .expense-actions .expense-delete-action { color: #bc2940; }
+
+.expenses-stats .stat-card-selected {
+  border-color: var(--purple);
+  box-shadow: 0 0 0 1px var(--purple);
+}
+.expense-toolbar {
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.expense-toolbar .toolbar-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+.expense-toolbar .expense-clear-filters {
+  color: var(--purple-dark);
+  border-color: var(--purple);
+}
+
+.expense-table .expense-row:nth-child(even) td {
+  background: #f8f5fc;
+}
+.expense-table .expense-row:hover td {
+  background: #f0ebff;
+}

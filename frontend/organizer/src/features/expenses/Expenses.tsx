@@ -8,7 +8,7 @@ import { ExpenseDeleteDialog } from "./ExpenseDeleteDialog";
 import { removeExpense } from "./expenseDeletion";
 import { ExpensePaymentForm } from "./ExpensePaymentForm";
 import { recordExpensePayment, validateExpensePayment, type PaymentDraft, type PaymentErrors } from "./expensePayments";
-import { expenseSummary } from "./expenseDraft";
+import { expenseSummary, matchesExpenseSummary, type ExpenseSummaryFilter } from "./expenseDraft";
 import type { Expense } from "../../types";
 
 // Session-only data, retained when navigating away and back. Refresh restores samples.
@@ -27,6 +27,7 @@ function statusTone(status: string) {
 export function Expenses() {
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
+  const [summaryFilter, setSummaryFilter] = useState<ExpenseSummaryFilter>("all");
   const [expenses, setExpenses] = useState<Expense[]>(() => sessionExpenses);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Expense | null>(null);
@@ -49,6 +50,7 @@ export function Expenses() {
     setExpenses(sessionExpenses);
     setSearch("");
     setFilter("All");
+    setSummaryFilter("all");
     setAdding(false);
     setToast(editing ? "Expense updated" : "Expense added");
     setEditing(null);
@@ -63,6 +65,7 @@ export function Expenses() {
     sessionExpenses = sessionExpenses.map((expense) => expense.id === updated.id ? updated : expense);
     setExpenses(sessionExpenses);
     setFilter("All");
+    setSummaryFilter("all");
     setPaying(null);
     setToast("Payment recorded");
     return {};
@@ -81,11 +84,24 @@ export function Expenses() {
     return undefined;
   };
 
+  const clearFilters = () => {
+    setFilter("All");
+    setSearch("");
+    setSummaryFilter("all");
+  };
+
+  const selectSummaryFilter = (next: ExpenseSummaryFilter) => {
+    clearFilters();
+    setSummaryFilter(next);
+  };
+
+  const hasFilters = summaryFilter !== "all" || filter !== "All" || Boolean(search.trim());
   const query = search.trim().toLowerCase();
   const rows = expenses.filter(
     (expense) =>
       (filter === "All" || expense.status.includes(filter)) &&
-      expense.vendor.toLowerCase().includes(query),
+      expense.vendor.toLowerCase().includes(query) &&
+      matchesExpenseSummary(expense, summaryFilter),
   );
   return (
     <>
@@ -98,12 +114,14 @@ export function Expenses() {
         }
       />
       <div className="stat-grid expenses-stats">
-        <StatCard label="Total expenses" value={currency(summary.total)} detail={expenses.length + " expenses"} icon="receipt" />
+        <StatCard label="Total expenses" value={currency(summary.total)} detail={expenses.length + " expenses"} icon="receipt" selected={!hasFilters} onClick={() => selectSummaryFilter("all")} />
         <StatCard
           label="Paid so far"
           value={currency(summary.paid)}
           detail={summary.paidPercent + "% of expenses"}
           icon="check"
+          selected={summaryFilter === "paid"}
+          onClick={() => selectSummaryFilter("paid")}
           tone="mint"
         />
         <StatCard
@@ -111,6 +129,8 @@ export function Expenses() {
           value={currency(summary.outstanding)}
           detail={summary.openCount + " open expenses"}
           icon="clock"
+          selected={summaryFilter === "outstanding"}
+          onClick={() => selectSummaryFilter("outstanding")}
           tone="coral"
         />
         <StatCard
@@ -118,14 +138,24 @@ export function Expenses() {
           value={currency(summary.dueThisMonth)}
           detail={summary.dueCount + " expenses"}
           icon="calendar"
+          selected={summaryFilter === "due"}
+          onClick={() => selectSummaryFilter("due")}
           tone="gold"
         />
       </div>
       <Card>
-        <div className="table-toolbar">
+        <div className="table-toolbar expense-toolbar">
           <div className="tabs">
             {filters.map((x) => (
-              <button className={filter === x ? "active" : ""} onClick={() => setFilter(x)} key={x}>
+              <button
+                className={summaryFilter === "all" && filter === x ? "active" : ""}
+                aria-pressed={summaryFilter === "all" && filter === x}
+                onClick={() => {
+                  setFilter(x);
+                  setSummaryFilter("all");
+                }}
+                key={x}
+              >
                 {x}
               </button>
             ))}
@@ -144,9 +174,14 @@ export function Expenses() {
             <button className="filter-btn">
               All categories <Icon name="down" size={14} />
             </button>
+            {hasFilters && (
+              <button type="button" className="filter-btn expense-clear-filters" onClick={clearFilters}>
+                Clear filters
+              </button>
+            )}
           </div>
         </div>
-        <div className="table-wrap">
+        <div className="table-wrap expense-table">
           <table>
             <thead>
               <tr>
@@ -169,10 +204,7 @@ export function Expenses() {
                       message="Try another search or clear your filters."
                       action={
                         <Button
-                          onClick={() => {
-                            setSearch("");
-                            setFilter("All");
-                          }}
+                          onClick={clearFilters}
                         >
                           Clear filters
                         </Button>
@@ -182,7 +214,7 @@ export function Expenses() {
                 </tr>
               )}
               {rows.map((x) => (
-                <tr key={x.id}>
+                <tr key={x.id} className="expense-row">
                   <td>
                     <b>{x.vendor}</b>
                   </td>

@@ -57,14 +57,31 @@ export function expenseFromDraft(
   };
 }
 
+export type ExpenseSummaryFilter = "all" | "paid" | "outstanding" | "due";
+
+export function matchesExpenseSummary(
+  expense: Expense,
+  filter: ExpenseSummaryFilter,
+  today = new Date(),
+): boolean {
+  const paid = Math.round(expense.paid * 100);
+  const outstanding = Math.round(expense.total * 100) > paid;
+  if (filter === "paid") return paid > 0;
+  if (filter === "outstanding") return outstanding;
+  if (filter === "due") {
+    const month = String(today.getFullYear()) + "-" + String(today.getMonth() + 1).padStart(2, "0");
+    return outstanding && Boolean(expense.dueDate?.startsWith(month));
+  }
+  return true;
+}
+
 export function expenseSummary(expenses: Expense[], today = new Date()) {
   const cents = (amount: number) => Math.round(amount * 100);
   const total = expenses.reduce((sum, expense) => sum + cents(expense.total), 0);
   const paid = expenses.reduce((sum, expense) => sum + cents(expense.paid), 0);
   const open = expenses.filter((expense) => cents(expense.total) > cents(expense.paid));
-  const month = String(today.getFullYear()) + "-" + String(today.getMonth() + 1).padStart(2, "0");
   // Legacy sample rows have month/day labels without a year; don't invent a date for them.
-  const due = open.filter((expense) => expense.dueDate?.startsWith(month));
+  const due = open.filter((expense) => matchesExpenseSummary(expense, "due", today));
   return {
     total: total / 100,
     paid: paid / 100,
