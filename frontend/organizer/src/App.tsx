@@ -7,6 +7,8 @@ import { PublicApp } from "./features/auth/PublicPage";
 import { pagePath } from "./routes/navigation";
 import type { Page, PublicPage } from "./types";
 
+type ToastTone = "success" | "error";
+
 const named = <K extends string, P extends object>(load: () => Promise<Record<K, React.ComponentType<P>>>, key: K) =>
   lazy(() => load().then((module) => ({ default: module[key] })));
 
@@ -80,19 +82,25 @@ export default function App() {
   // UI-only sign-in state for the wireframe; no real authentication is performed.
   const [authenticated, setAuthenticated] = useState(false);
   const [modal, setModal] = useState<ModalName | null>(null);
-  const [toast, setToast] = useState("");
+  const [toast, setToast] = useState<{ message: string; tone: ToastTone } | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
   const navigate = useNavigate();
   const go = (page: Page) => navigate(pagePath(page));
 
   const openModal = useCallback((name: ModalName) => setModal(name), []);
   const closeModal = useCallback(() => setModal(null), []);
-  const showSaved = useCallback((message: string) => {
-    setModal(null);
-    setToast(message);
+  const notify = useCallback((message: string, tone: ToastTone = "success") => {
+    setToast({ message, tone });
     window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(""), 2600);
+    toastTimer.current = window.setTimeout(() => setToast(null), tone === "error" ? 4500 : 2600);
   }, []);
+  const showSaved = useCallback(
+    (message: string) => {
+      setModal(null);
+      notify(message);
+    },
+    [notify],
+  );
 
   useEffect(() => () => window.clearTimeout(toastTimer.current), []);
 
@@ -128,7 +136,7 @@ export default function App() {
           <Route path="events" element={<Events onCreate={() => openModal("event")} go={go} />} />
           <Route path="budget" element={<Budget openReset={() => openModal("template")} />} />
           <Route path="expenses" element={<Expenses onAdd={() => openModal("expense")} />} />
-          <Route path="vendors" element={<Vendors onAdd={() => openModal("vendor")} />} />
+          <Route path="vendors" element={<Vendors onToast={notify} />} />
           <Route path="guests" element={<Guests onAdd={() => openModal("guest")} />} />
           <Route path="templates" element={<Templates applyTemplate={() => openModal("template")} />} />
           <Route path="tasks" element={<Tasks />} />
@@ -145,9 +153,12 @@ export default function App() {
 
       <AppModal modal={modal} onClose={closeModal} onSaved={showSaved} />
       {toast && (
-        <div className="toast" role="status">
-          <span>✓</span>
-          {toast}
+        <div
+          className={`toast${toast.tone === "error" ? " toast-error" : ""}`}
+          role={toast.tone === "error" ? "alert" : "status"}
+        >
+          <span aria-hidden="true">{toast.tone === "error" ? "!" : "✓"}</span>
+          {toast.message}
         </div>
       )}
     </>

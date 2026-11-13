@@ -1,5 +1,9 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
+
+const FOCUSABLE =
+  'input:not(:disabled), select:not(:disabled), textarea:not(:disabled), button:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])';
 
 export function Modal({
   title,
@@ -12,13 +16,40 @@ export function Modal({
   onClose: () => void;
   footer?: ReactNode;
 }) {
-  return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Move focus into the dialog on open (first field in the body, else the dialog),
+  // and give it back to whatever had it when the dialog closes.
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    const dialog = dialogRef.current;
+    const target = dialog?.querySelector<HTMLElement>(`.modal-body :is(${FOCUSABLE})`) ?? dialog;
+    target?.focus();
+    return () => {
+      if (previous?.isConnected) previous.focus();
+    };
+  }, []);
+
+  // Rendered into <body> so modals opened from inside other modals or cards are never clipped.
+  return createPortal(
+    <div
+      className="modal-backdrop"
+      onMouseDown={onClose}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          // Stop here so an outer modal or drawer doesn't close too.
+          event.stopPropagation();
+          onClose();
+        }
+      }}
+    >
       <div
+        ref={dialogRef}
         className="modal"
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="modal-head">
@@ -33,6 +64,7 @@ export function Modal({
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-footer">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

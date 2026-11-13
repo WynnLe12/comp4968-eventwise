@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Button, Field, Icon, Modal } from "./ui";
 
-export type ModalName = "template" | "expense" | "vendor" | "guest" | "event";
+export type ModalName = "template" | "expense" | "guest" | "event";
 
 type FormModal = Exclude<ModalName, "template">;
 
@@ -24,27 +24,6 @@ const forms: Record<FormModal, { title: string; body: ReactNode; saved: string }
           <Field label="Next due date" type="date" />
         </div>
         <Field label="Notes" placeholder="Optional notes or payment details" />
-      </>
-    ),
-  },
-  vendor: {
-    title: "Add a vendor",
-    saved: "Vendor added",
-    body: (
-      <>
-        <Field label="Business name" placeholder="e.g. Rosewood Bakery" />
-        <div className="form-row">
-          <Field label="Category" placeholder="Select category" />
-          <Field label="Contact name" placeholder="Full name" />
-        </div>
-        <div className="form-row">
-          <Field label="Email" type="email" placeholder="hello@vendor.com" />
-          <Field label="Phone" placeholder="(555) 000-0000" />
-        </div>
-        <div className="form-row">
-          <Field label="Quote amount" placeholder="$0.00" />
-          <Field label="Contract status" placeholder="Not signed" />
-        </div>
       </>
     ),
   },

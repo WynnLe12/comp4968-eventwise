@@ -61,19 +61,36 @@ export function EmptyState({
   title,
   message,
   action,
+  icon = "spark",
 }: {
   title: string;
   message: string;
   action?: ReactNode;
+  icon?: string;
 }) {
   return (
     <div className="state-card">
       <div className="state-icon">
-        <Icon name="spark" />
+        <Icon name={icon} />
       </div>
       <h2>{title}</h2>
       <p>{message}</p>
       {action}
+    </div>
+  );
+}
+
+export function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="state-card state-error" role="alert">
+      <div className="state-icon">
+        <Icon name="bell" />
+      </div>
+      <h2>We hit a little snag</h2>
+      <p>{message}</p>
+      <button className="btn btn-primary" onClick={onRetry}>
+        Try again
+      </button>
     </div>
   );
 }
