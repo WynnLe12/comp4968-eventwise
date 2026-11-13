@@ -21,6 +21,7 @@ export function StatCard({
   detail,
   icon,
   tone = "purple",
+  selected,
   onClick,
 }: {
   label: string;
@@ -28,16 +29,17 @@ export function StatCard({
   detail: string;
   icon: string;
   tone?: string;
+  selected?: boolean;
   onClick?: () => void;
 }) {
   return (
-    <Card className="stat-card">
+    <Card className={selected ? "stat-card stat-card-selected" : "stat-card"}>
       <div className={`stat-icon ${tone}`}>
         <Icon name={icon} />
       </div>
       <div className="stat-top">
         <span>{label}</span>
-        <button onClick={onClick} aria-label={`Open ${label}`}>
+        <button onClick={onClick} aria-label={`Open ${label}`} aria-pressed={selected}>
           <Icon name="chevron" size={15} />
         </button>
       </div>

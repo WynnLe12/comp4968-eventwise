@@ -18,12 +18,22 @@ export type Page =
 export type PublicPage = "landing" | "signup" | "login" | "reset";
 
 export interface Expense {
+  id: string;
+  dueDate?: string | null;
+  payments?: ExpensePayment[];
   vendor: string;
   category: string;
   total: number;
   paid: number;
   due: string;
   status: string;
+}
+
+export interface ExpensePayment {
+  id: string;
+  amount: number;
+  paidAt: string;
+  paymentType: "PAYMENT" | "DEPOSIT";
 }
 
 export interface Guest {

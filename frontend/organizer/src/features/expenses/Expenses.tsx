@@ -1,7 +1,20 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge, Button, Card, Icon } from "../../components/ui";
 import { EmptyState, PageHeader, StatCard } from "../../components/page";
 import { expensesSeed } from "../../data/mockData";
+import { ExpenseActions } from "./ExpenseActions";
+import { ExpenseForm } from "./ExpenseForm";
+import { ExpenseDeleteDialog } from "./ExpenseDeleteDialog";
+import { removeExpense } from "./expenseDeletion";
+import { ExpensePaymentForm } from "./ExpensePaymentForm";
+import { recordExpensePayment, validateExpensePayment, type PaymentDraft, type PaymentErrors } from "./expensePayments";
+import { expenseSummary, matchesExpenseSummary, type ExpenseSummaryFilter } from "./expenseDraft";
+import type { Expense } from "../../types";
+
+// Session-only data, retained when navigating away and back. Refresh restores samples.
+let sessionExpenses = expensesSeed.map((expense) => ({ ...expense }));
+const currency = (amount: number) =>
+  amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
 
 const filters = ["All", "Unpaid", "Deposit", "Paid"];
 
@@ -11,27 +24,85 @@ function statusTone(status: string) {
   return "warning";
 }
 
-export function Expenses({ onAdd }: { onAdd: () => void }) {
+export function Expenses() {
   const [filter, setFilter] = useState("All");
-  const expenses = expensesSeed;
+  const [search, setSearch] = useState("");
+  const [summaryFilter, setSummaryFilter] = useState<ExpenseSummaryFilter>("all");
+  const [expenses, setExpenses] = useState<Expense[]>(() => sessionExpenses);
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<Expense | null>(null);
+  const [paying, setPaying] = useState<Expense | null>(null);
+  const [deleting, setDeleting] = useState<Expense | null>(null);
+  const [toast, setToast] = useState("");
+  const summary = expenseSummary(expenses);
+  const onAdd = () => setAdding(true);
 
-  if (!expenses.length)
-    return (
-      <>
-        <PageHeader page="expenses" />
-        <EmptyState
-          title="No expenses yet"
-          message="Add your first quote, deposit, or payment to start tracking your spending."
-          action={
-            <Button onClick={onAdd} icon="plus">
-              Add expense
-            </Button>
-          }
-        />
-      </>
-    );
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(""), 2600);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
-  const rows = filter === "All" ? expenses : expenses.filter((x) => x.status.includes(filter));
+  const saveExpense = (expense: Expense) => {
+    sessionExpenses = editing
+      ? sessionExpenses.map((current) => current.id === expense.id ? expense : current)
+      : [...sessionExpenses, expense];
+    setExpenses(sessionExpenses);
+    setSearch("");
+    setFilter("All");
+    setSummaryFilter("all");
+    setAdding(false);
+    setToast(editing ? "Expense updated" : "Expense added");
+    setEditing(null);
+  };
+
+  const savePayment = (draft: PaymentDraft): PaymentErrors => {
+    const current = sessionExpenses.find((expense) => expense.id === paying?.id);
+    if (!current) return { amount: "This expense is no longer available." };
+    const errors = validateExpensePayment(current, draft);
+    if (Object.keys(errors).length) return errors;
+    const updated = recordExpensePayment(current, draft);
+    sessionExpenses = sessionExpenses.map((expense) => expense.id === updated.id ? updated : expense);
+    setExpenses(sessionExpenses);
+    setFilter("All");
+    setSummaryFilter("all");
+    setPaying(null);
+    setToast("Payment recorded");
+    return {};
+  };
+
+  const confirmDelete = (): string | undefined => {
+    if (!deleting) return "Choose an expense to delete.";
+    try {
+      sessionExpenses = removeExpense(sessionExpenses, deleting.id);
+    } catch (error) {
+      return error instanceof Error ? error.message : "Unable to delete this expense.";
+    }
+    setExpenses(sessionExpenses);
+    setDeleting(null);
+    setToast("Expense deleted");
+    return undefined;
+  };
+
+  const clearFilters = () => {
+    setFilter("All");
+    setSearch("");
+    setSummaryFilter("all");
+  };
+
+  const selectSummaryFilter = (next: ExpenseSummaryFilter) => {
+    clearFilters();
+    setSummaryFilter(next);
+  };
+
+  const hasFilters = summaryFilter !== "all" || filter !== "All" || Boolean(search.trim());
+  const query = search.trim().toLowerCase();
+  const rows = expenses.filter(
+    (expense) =>
+      (filter === "All" || expense.status.includes(filter)) &&
+      expense.vendor.toLowerCase().includes(query) &&
+      matchesExpenseSummary(expense, summaryFilter),
+  );
   return (
     <>
       <PageHeader
@@ -43,49 +114,74 @@ export function Expenses({ onAdd }: { onAdd: () => void }) {
         }
       />
       <div className="stat-grid expenses-stats">
-        <StatCard label="Total expenses" value="$22,290" detail="Across 5 vendors" icon="receipt" />
+        <StatCard label="Total expenses" value={currency(summary.total)} detail={expenses.length + " expenses"} icon="receipt" selected={!hasFilters} onClick={() => selectSummaryFilter("all")} />
         <StatCard
           label="Paid so far"
-          value="$8,590"
-          detail="39% of expenses"
+          value={currency(summary.paid)}
+          detail={summary.paidPercent + "% of expenses"}
           icon="check"
+          selected={summaryFilter === "paid"}
+          onClick={() => selectSummaryFilter("paid")}
           tone="mint"
         />
         <StatCard
           label="Outstanding"
-          value="$13,700"
-          detail="4 open payments"
+          value={currency(summary.outstanding)}
+          detail={summary.openCount + " open expenses"}
           icon="clock"
+          selected={summaryFilter === "outstanding"}
+          onClick={() => selectSummaryFilter("outstanding")}
           tone="coral"
         />
         <StatCard
           label="Due this month"
-          value="$3,950"
-          detail="2 payments"
+          value={currency(summary.dueThisMonth)}
+          detail={summary.dueCount + " expenses"}
           icon="calendar"
+          selected={summaryFilter === "due"}
+          onClick={() => selectSummaryFilter("due")}
           tone="gold"
         />
       </div>
       <Card>
-        <div className="table-toolbar">
+        <div className="table-toolbar expense-toolbar">
           <div className="tabs">
             {filters.map((x) => (
-              <button className={filter === x ? "active" : ""} onClick={() => setFilter(x)} key={x}>
+              <button
+                className={summaryFilter === "all" && filter === x ? "active" : ""}
+                aria-pressed={summaryFilter === "all" && filter === x}
+                onClick={() => {
+                  setFilter(x);
+                  setSummaryFilter("all");
+                }}
+                key={x}
+              >
                 {x}
               </button>
             ))}
           </div>
           <div className="toolbar-actions">
-            <button className="filter-btn">
+            <label className="search-input">
               <Icon name="search" />
-              Search
-            </button>
+              <input
+                type="search"
+                aria-label="Search expenses"
+                placeholder="Search expenses"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </label>
             <button className="filter-btn">
               All categories <Icon name="down" size={14} />
             </button>
+            {hasFilters && (
+              <button type="button" className="filter-btn expense-clear-filters" onClick={clearFilters}>
+                Clear filters
+              </button>
+            )}
           </div>
         </div>
-        <div className="table-wrap">
+        <div className="table-wrap expense-table">
           <table>
             <thead>
               <tr>
@@ -100,25 +196,40 @@ export function Expenses({ onAdd }: { onAdd: () => void }) {
               </tr>
             </thead>
             <tbody>
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={8}>
+                    <EmptyState
+                      title="No matching expenses"
+                      message="Try another search or clear your filters."
+                      action={
+                        <Button
+                          onClick={clearFilters}
+                        >
+                          Clear filters
+                        </Button>
+                      }
+                    />
+                  </td>
+                </tr>
+              )}
               {rows.map((x) => (
-                <tr key={x.vendor}>
+                <tr key={x.id} className="expense-row">
                   <td>
                     <b>{x.vendor}</b>
                   </td>
                   <td>{x.category}</td>
-                  <td>${x.total.toLocaleString()}</td>
-                  <td>${x.paid.toLocaleString()}</td>
+                  <td>{currency(x.total)}</td>
+                  <td>{currency(x.paid)}</td>
                   <td>
-                    <b>${(x.total - x.paid).toLocaleString()}</b>
+                    <b>{currency((Math.round(x.total * 100) - Math.round(x.paid * 100)) / 100)}</b>
                   </td>
                   <td>{x.due}</td>
                   <td>
                     <Badge tone={statusTone(x.status)}>{x.status}</Badge>
                   </td>
                   <td>
-                    <button className="icon-btn" aria-label="More options">
-                      <Icon name="more" />
-                    </button>
+                    <ExpenseActions expense={x} onEdit={() => setEditing(x)} onRecordPayment={() => setPaying(x)} onDelete={() => setDeleting(x)} />
                   </td>
                 </tr>
               ))}
@@ -136,6 +247,30 @@ export function Expenses({ onAdd }: { onAdd: () => void }) {
           </div>
         </div>
       </Card>
+      {(adding || editing) && (
+        <ExpenseForm
+          key={editing?.id ?? "new"}
+          expense={editing ?? undefined}
+          onSave={saveExpense}
+          onClose={() => {
+            setAdding(false);
+            setEditing(null);
+          }}
+        />
+      )}
+      {paying && (
+        <ExpensePaymentForm
+          key={paying.id} expense={paying}
+          onSave={savePayment} onClose={() => setPaying(null)}
+        />
+      )}
+      {deleting && (
+        <ExpenseDeleteDialog
+          key={deleting.id} expense={deleting}
+          onConfirm={confirmDelete} onClose={() => setDeleting(null)}
+        />
+      )}
+      {toast && <div className="toast" role="status">{toast}</div>}
     </>
   );
 }

@@ -135,7 +135,7 @@ export default function App() {
           <Route path="dashboard" element={<Dashboard go={go} />} />
           <Route path="events" element={<Events onCreate={() => openModal("event")} go={go} />} />
           <Route path="budget" element={<Budget openReset={() => openModal("template")} />} />
-          <Route path="expenses" element={<Expenses onAdd={() => openModal("expense")} />} />
+          <Route path="expenses" element={<Expenses />} />
           <Route path="vendors" element={<Vendors onToast={notify} />} />
           <Route path="guests" element={<Guests onAdd={() => openModal("guest")} />} />
           <Route path="templates" element={<Templates applyTemplate={() => openModal("template")} />} />
