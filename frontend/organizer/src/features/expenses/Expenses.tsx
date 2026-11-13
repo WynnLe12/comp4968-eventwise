@@ -1,18 +1,19 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { useResource } from "../../hooks/useResource";
+import { vendorService } from "../../services/vendorService";
+import { mockExpenseStore } from "../../services/mockExpenseStore";
 import { Badge, Button, Card, Icon } from "../../components/ui";
-import { EmptyState, PageHeader, StatCard } from "../../components/page";
-import { expensesSeed } from "../../data/mockData";
+import { EmptyState, ErrorState, PageHeader, StatCard } from "../../components/page";
+import { CURRENT_EVENT_ID } from "../../data/mockData";
 import { ExpenseActions } from "./ExpenseActions";
 import { ExpenseForm } from "./ExpenseForm";
 import { ExpenseDeleteDialog } from "./ExpenseDeleteDialog";
-import { removeExpense } from "./expenseDeletion";
 import { ExpensePaymentForm } from "./ExpensePaymentForm";
 import { recordExpensePayment, validateExpensePayment, type PaymentDraft, type PaymentErrors } from "./expensePayments";
 import { expenseSummary, matchesExpenseSummary, type ExpenseSummaryFilter } from "./expenseDraft";
 import type { Expense } from "../../types";
 
-// Session-only data, retained when navigating away and back. Refresh restores samples.
-let sessionExpenses = expensesSeed.map((expense) => ({ ...expense }));
 const currency = (amount: number) =>
   amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
 
@@ -25,16 +26,24 @@ function statusTone(status: string) {
 }
 
 export function Expenses() {
+  const [params, setParams] = useSearchParams();
+  const vendorId = params.get("vendorId") || null;
+  const loadVendors = useCallback(() => vendorService.list(CURRENT_EVENT_ID), []);
+  const { data: vendorData, loading: vendorsLoading, error: vendorsError, reload: reloadVendors } = useResource(loadVendors);
+  const vendors = vendorData ?? [];
+  const selectedVendor = vendors.find((vendor) => vendor.id === vendorId);
+  const vendorNames = new Map(vendors.map((vendor) => [vendor.id, vendor.name]));
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [summaryFilter, setSummaryFilter] = useState<ExpenseSummaryFilter>("all");
-  const [expenses, setExpenses] = useState<Expense[]>(() => sessionExpenses);
+  const [expenses, setExpenses] = useState<Expense[]>(() => mockExpenseStore.list(CURRENT_EVENT_ID));
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Expense | null>(null);
   const [paying, setPaying] = useState<Expense | null>(null);
   const [deleting, setDeleting] = useState<Expense | null>(null);
   const [toast, setToast] = useState("");
-  const summary = expenseSummary(expenses);
+  const vendorExpenses = vendorId ? expenses.filter((expense) => expense.vendorId === vendorId) : expenses;
+  const summary = expenseSummary(vendorExpenses);
   const onAdd = () => setAdding(true);
 
   useEffect(() => {
@@ -44,10 +53,8 @@ export function Expenses() {
   }, [toast]);
 
   const saveExpense = (expense: Expense) => {
-    sessionExpenses = editing
-      ? sessionExpenses.map((current) => current.id === expense.id ? expense : current)
-      : [...sessionExpenses, expense];
-    setExpenses(sessionExpenses);
+    mockExpenseStore.save(CURRENT_EVENT_ID, expense);
+    setExpenses(mockExpenseStore.list(CURRENT_EVENT_ID));
     setSearch("");
     setFilter("All");
     setSummaryFilter("all");
@@ -57,13 +64,13 @@ export function Expenses() {
   };
 
   const savePayment = (draft: PaymentDraft): PaymentErrors => {
-    const current = sessionExpenses.find((expense) => expense.id === paying?.id);
+    const current = mockExpenseStore.list(CURRENT_EVENT_ID).find((expense) => expense.id === paying?.id);
     if (!current) return { amount: "This expense is no longer available." };
     const errors = validateExpensePayment(current, draft);
     if (Object.keys(errors).length) return errors;
     const updated = recordExpensePayment(current, draft);
-    sessionExpenses = sessionExpenses.map((expense) => expense.id === updated.id ? updated : expense);
-    setExpenses(sessionExpenses);
+    mockExpenseStore.save(CURRENT_EVENT_ID, updated);
+    setExpenses(mockExpenseStore.list(CURRENT_EVENT_ID));
     setFilter("All");
     setSummaryFilter("all");
     setPaying(null);
@@ -74,33 +81,46 @@ export function Expenses() {
   const confirmDelete = (): string | undefined => {
     if (!deleting) return "Choose an expense to delete.";
     try {
-      sessionExpenses = removeExpense(sessionExpenses, deleting.id);
+      mockExpenseStore.remove(CURRENT_EVENT_ID, deleting.id);
     } catch (error) {
       return error instanceof Error ? error.message : "Unable to delete this expense.";
     }
-    setExpenses(sessionExpenses);
+    setExpenses(mockExpenseStore.list(CURRENT_EVENT_ID));
     setDeleting(null);
     setToast("Expense deleted");
     return undefined;
   };
 
-  const clearFilters = () => {
+  const clearTableFilters = () => {
     setFilter("All");
     setSearch("");
     setSummaryFilter("all");
   };
 
   const selectSummaryFilter = (next: ExpenseSummaryFilter) => {
-    clearFilters();
+    clearTableFilters();
     setSummaryFilter(next);
   };
 
-  const hasFilters = summaryFilter !== "all" || filter !== "All" || Boolean(search.trim());
+  const clearVendorFilter = () => {
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("vendorId");
+      return next;
+    }, { replace: true });
+  };
+  const clearFilters = () => {
+    clearTableFilters();
+    clearVendorFilter();
+  };
+  const hasTableFilters = summaryFilter !== "all" || filter !== "All" || Boolean(search.trim());
+  const hasFilters = hasTableFilters || Boolean(vendorId);
   const query = search.trim().toLowerCase();
-  const rows = expenses.filter(
+  const rows = vendorExpenses.filter(
     (expense) =>
       (filter === "All" || expense.status.includes(filter)) &&
-      expense.vendor.toLowerCase().includes(query) &&
+      (expense.vendor.toLowerCase().includes(query) ||
+        (vendorNames.get(expense.vendorId ?? "") ?? "").toLowerCase().includes(query)) &&
       matchesExpenseSummary(expense, summaryFilter),
   );
   return (
@@ -108,13 +128,16 @@ export function Expenses() {
       <PageHeader
         page="expenses"
         action={
-          <Button onClick={onAdd} icon="plus">
+          <Button onClick={onAdd} icon="plus" disabled={vendorsLoading || Boolean(vendorsError) || Boolean(vendorId && !selectedVendor)}>
             Add expense
           </Button>
         }
       />
+      {vendorsError ? (
+        <ErrorState message="We couldn't load vendors. Retry to link expenses to a vendor." onRetry={reloadVendors} />
+      ) : null}
       <div className="stat-grid expenses-stats">
-        <StatCard label="Total expenses" value={currency(summary.total)} detail={expenses.length + " expenses"} icon="receipt" selected={!hasFilters} onClick={() => selectSummaryFilter("all")} />
+        <StatCard label="Total expenses" value={currency(summary.total)} detail={vendorExpenses.length + " expenses"} icon="receipt" selected={!hasTableFilters} onClick={() => selectSummaryFilter("all")} />
         <StatCard
           label="Paid so far"
           value={currency(summary.paid)}
@@ -161,6 +184,14 @@ export function Expenses() {
             ))}
           </div>
           <div className="toolbar-actions">
+            {vendorId && (
+              <span className="expense-vendor-filter">
+                Vendor: {selectedVendor?.name ?? (vendorsLoading ? "Loading..." : "Unavailable")}
+                <button type="button" aria-label="Clear vendor filter" onClick={clearVendorFilter}>
+                  <Icon name="close" size={14} />
+                </button>
+              </span>
+            )}
             <label className="search-input">
               <Icon name="search" />
               <input
@@ -200,8 +231,9 @@ export function Expenses() {
                 <tr>
                   <td colSpan={8}>
                     <EmptyState
-                      title="No matching expenses"
-                      message="Try another search or clear your filters."
+                      title={vendorId && !vendorsLoading && !selectedVendor ? "Vendor unavailable" :
+                        vendorId && vendorExpenses.length === 0 ? "No expenses linked to this vendor" : "No matching expenses"}
+                      message={vendorId && vendorExpenses.length === 0 ? "Add an expense for this vendor or clear the vendor filter." : "Try another search or clear your filters."}
                       action={
                         <Button
                           onClick={clearFilters}
@@ -217,6 +249,7 @@ export function Expenses() {
                 <tr key={x.id} className="expense-row">
                   <td>
                     <b>{x.vendor}</b>
+                    {x.vendorId && <span className="expense-linked-vendor">{vendorNames.get(x.vendorId) ?? "Vendor unavailable"}</span>}
                   </td>
                   <td>{x.category}</td>
                   <td>{currency(x.total)}</td>
@@ -229,7 +262,7 @@ export function Expenses() {
                     <Badge tone={statusTone(x.status)}>{x.status}</Badge>
                   </td>
                   <td>
-                    <ExpenseActions expense={x} onEdit={() => setEditing(x)} onRecordPayment={() => setPaying(x)} onDelete={() => setDeleting(x)} />
+                    <ExpenseActions vendorName={vendorNames.get(x.vendorId ?? "")} expense={x} onEdit={() => setEditing(x)} onRecordPayment={() => setPaying(x)} onDelete={() => setDeleting(x)} />
                   </td>
                 </tr>
               ))}
@@ -238,7 +271,7 @@ export function Expenses() {
         </div>
         <div className="pagination">
           <span>
-            Showing {rows.length} of {expenses.length} expenses
+            Showing {rows.length} of {vendorExpenses.length} expenses
           </span>
           <div>
             <button>‹</button>
@@ -251,6 +284,8 @@ export function Expenses() {
         <ExpenseForm
           key={editing?.id ?? "new"}
           expense={editing ?? undefined}
+          vendors={vendors}
+          defaultVendorId={selectedVendor?.id}
           onSave={saveExpense}
           onClose={() => {
             setAdding(false);

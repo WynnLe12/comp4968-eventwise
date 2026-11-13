@@ -4,6 +4,8 @@
  */
 import type { Expense, Guest, Money, VendorFields } from "../types";
 
+export const CURRENT_EVENT_ID = "1";
+
 export const budgetDefaults = [
   { name: "Venue & Catering", pct: 42, color: "#7958e8" },
   { name: "Photo & Video", pct: 14, color: "#ff6b9a" },
@@ -14,52 +16,16 @@ export const budgetDefaults = [
   { name: "Other", pct: 8, color: "#a6a9b6" },
 ];
 
+/** Individual obligations linked by IDs, matching the vendor mock totals. */
 export const expensesSeed: Expense[] = [
-  {
-    id: "sample-the-willow-house",
-    vendor: "The Willow House",
-    category: "Venue & Catering",
-    total: 12800,
-    paid: 5000,
-    due: "Jun 15",
-    status: "Partially paid",
-  },
-  {
-    id: "sample-lumen-photography",
-    vendor: "Lumen Photography",
-    category: "Photo & Video",
-    total: 4200,
-    paid: 2100,
-    due: "Aug 01",
-    status: "Partially paid",
-  },
-  {
-    id: "sample-fleur-&-fern",
-    vendor: "Fleur & Fern",
-    category: "Flowers & Decor",
-    total: 2850,
-    paid: 850,
-    due: "Aug 20",
-    status: "Deposit paid",
-  },
-  {
-    id: "sample-blue-note-collective",
-    vendor: "Blue Note Collective",
-    category: "Music & Entertainment",
-    total: 1800,
-    paid: 0,
-    due: "Jul 10",
-    status: "Unpaid",
-  },
-  {
-    id: "sample-paperfolk-studio",
-    vendor: "Paperfolk Studio",
-    category: "Stationery",
-    total: 640,
-    paid: 640,
-    due: "Paid",
-    status: "Paid",
-  },
+  { id: "1", eventId: CURRENT_EVENT_ID, vendorId: "1", vendor: "Venue deposit", category: "Venue & Catering", total: 5000, paid: 5000, due: "2027-01-15", dueDate: "2027-01-15", status: "Paid" },
+  { id: "2", eventId: CURRENT_EVENT_ID, vendorId: "1", vendor: "Venue balance", category: "Venue & Catering", total: 7800, paid: 0, due: "2027-06-15", dueDate: "2027-06-15", status: "Unpaid" },
+  { id: "3", eventId: CURRENT_EVENT_ID, vendorId: "2", vendor: "Photography package", category: "Photo & Video", total: 4200, paid: 2100, due: "2027-08-01", dueDate: "2027-08-01", status: "Partially paid" },
+  { id: "4", eventId: CURRENT_EVENT_ID, vendorId: "3", vendor: "Florals", category: "Flowers & Decor", total: 2850, paid: 850, due: "2027-08-20", dueDate: "2027-08-20", status: "Deposit paid" },
+  { id: "5", eventId: CURRENT_EVENT_ID, vendorId: "4", vendor: "Band", category: "Music & Entertainment", total: 1800, paid: 0, due: "2027-07-10", dueDate: "2027-07-10", status: "Unpaid" },
+  { id: "6", eventId: CURRENT_EVENT_ID, vendorId: "5", vendor: "Invitations", category: "Stationery", total: 640, paid: 640, due: "2027-03-01", dueDate: "2027-03-01", status: "Paid" },
+  { id: "7", eventId: CURRENT_EVENT_ID, vendorId: "6", vendor: "Cake tasting fee", category: "Cake & Desserts", total: 50, paid: 0, due: "No due date", dueDate: null, status: "Unpaid" },
+  { id: "8", eventId: CURRENT_EVENT_ID, vendorId: "8", vendor: "Beauty package", category: "Attire & Beauty", total: 1200, paid: 300, due: "2027-09-05", dueDate: "2027-09-05", status: "Deposit paid" },
 ];
 
 export const guestsSeed: Guest[] = [
@@ -89,7 +55,6 @@ export const guestsSeed: Guest[] = [
 ];
 
 /** The event the organizer is viewing. IDs are strings of digits, like the API (event 1 in the DB seed). */
-export const CURRENT_EVENT_ID = "1";
 
 /** A vendor row as the mock service stores it: editable fields plus IDs and timestamps. */
 export interface MockVendorRecord extends VendorFields {

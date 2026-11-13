@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button, Icon } from "../../components/ui";
-import type { Expense } from "../../types";
+import type { Expense, Vendor } from "../../types";
 import { expenseFromDraft, validateExpenseDraft, type ExpenseDraft, type ExpenseDraftErrors } from "./expenseDraft";
 import "./expenses.css";
+import { CURRENT_EVENT_ID } from "../../data/mockData";
 
-export function ExpenseForm({ expense, onSave, onClose }: {
+export function ExpenseForm({ expense, vendors, defaultVendorId, onSave, onClose }: {
+  vendors: Vendor[];
+  defaultVendorId?: string;
   expense?: Expense;
   onSave: (expense: Expense) => void;
   onClose: () => void;
@@ -13,11 +16,18 @@ export function ExpenseForm({ expense, onSave, onClose }: {
   const formRef = useRef<HTMLFormElement>(null);
   const [draft, setDraft] = useState<ExpenseDraft>({
     name: expense?.vendor ?? "",
+    vendorId: expense ? expense.vendorId ?? "" : defaultVendorId ?? "",
     amount: expense ? expense.total.toFixed(2) : "",
     dueDate: expense?.dueDate ?? "",
   });
   const [dueDateChanged, setDueDateChanged] = useState(false);
-  const validate = (value: ExpenseDraft) => validateExpenseDraft(value, expense?.paid ?? 0);
+  const validate = (value: ExpenseDraft) => {
+    const fields = validateExpenseDraft(value, expense?.paid ?? 0);
+    if (value.vendorId && !vendors.some((vendor) => vendor.id === value.vendorId && vendor.eventId === CURRENT_EVENT_ID)) {
+      fields.vendorId = "Choose a vendor from this event.";
+    }
+    return fields;
+  };
   const [errors, setErrors] = useState<ExpenseDraftErrors>({});
 
   useEffect(() => {
@@ -90,6 +100,21 @@ export function ExpenseForm({ expense, onSave, onClose }: {
                 aria-describedby={errors.name ? "expense-name-error" : undefined}
               />
               {errors.name && <small id="expense-name-error" className="expense-field-error">{errors.name}</small>}
+            </label>
+            <label className="field">
+              <span>Vendor (optional)</span>
+              <select
+                className="expense-vendor-select"
+                name="vendorId"
+                value={draft.vendorId ?? ""}
+                onChange={(event) => update("vendorId", event.target.value)}
+                aria-invalid={Boolean(errors.vendorId)}
+                aria-describedby={errors.vendorId ? "expense-vendor-error" : undefined}
+              >
+                <option value="">No vendor linked</option>
+                {vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
+              </select>
+              {errors.vendorId && <small id="expense-vendor-error" className="expense-field-error">{errors.vendorId}</small>}
             </label>
             <div className="form-row">
               <label className="field">

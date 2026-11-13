@@ -126,7 +126,8 @@
 .expense-payment-context {
   margin: 0 0 20px;
 }
-.expense-payment-type {
+.expense-payment-type,
+.expense-vendor-select {
   height: 38px;
   padding: 0 11px;
   border: 1px solid #dcd8e5;
@@ -135,7 +136,8 @@
   color: inherit;
   font: inherit;
 }
-.expense-payment-type:focus-visible {
+.expense-payment-type:focus-visible,
+.expense-vendor-select:focus-visible {
   outline: 2px solid var(--purple);
   outline-offset: 2px;
 }
@@ -181,4 +183,31 @@
 }
 .expense-table .expense-row:hover td {
   background: #f0ebff;
+}
+
+.expense-vendor-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--lavender);
+  color: var(--purple-dark);
+  font-size: 12px;
+}
+.expense-vendor-filter button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+}
+.expense-linked-vendor {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
 }

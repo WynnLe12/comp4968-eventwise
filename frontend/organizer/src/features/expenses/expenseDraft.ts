@@ -1,6 +1,8 @@
 import type { Expense } from "../../types";
+import { CURRENT_EVENT_ID } from "../../data/mockData";
 
 export interface ExpenseDraft {
+  vendorId?: string;
   name: string;
   amount: string;
   dueDate: string;
@@ -46,6 +48,8 @@ export function expenseFromDraft(
   return {
     ...original,
     id: original?.id ?? crypto.randomUUID(),
+    eventId: original?.eventId ?? CURRENT_EVENT_ID,
+    vendorId: draft.vendorId === undefined ? original?.vendorId ?? null : draft.vendorId || null,
     vendor: draft.name.trim(),
     category: original?.category ?? "Uncategorized",
     total,

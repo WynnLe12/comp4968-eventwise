@@ -7,8 +7,9 @@ function money(amount: number) {
   return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
-export function ExpenseActions({ expense, onEdit, onRecordPayment, onDelete }: {
+export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, onDelete }: {
   expense: Expense;
+  vendorName?: string;
   onEdit: () => void;
   onRecordPayment: () => void;
   onDelete: () => void;
@@ -133,6 +134,7 @@ export function ExpenseActions({ expense, onEdit, onRecordPayment, onDelete }: {
           <section className="expense-drawer-section">
             <h3>Expense details</h3>
             <dl>
+              <div><dt>Vendor</dt><dd>{vendorName ?? "No vendor linked"}</dd></div>
               <div><dt>Category</dt><dd>{expense.category || "Uncategorized"}</dd></div>
               <div><dt>Due date</dt><dd>{expense.due}</dd></div>
             </dl>

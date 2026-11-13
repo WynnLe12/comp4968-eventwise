@@ -12,7 +12,6 @@
  */
 import {
   CURRENT_EVENT_ID,
-  type MockVendorExpenses,
   type MockVendorRecord,
   vendorsSeed,
 } from "../data/mockData";
@@ -25,6 +24,7 @@ import type {
   VendorUpdateInput,
 } from "../types";
 import { mockRequest, mockScenario } from "./mockClient";
+import { mockExpenseStore } from "./mockExpenseStore";
 import { applyStatusRules, MONEY_FIELDS, validateFields, type VendorDeleteConflict } from "./vendorRules";
 
 export type { VendorDeleteConflict } from "./vendorRules";
@@ -68,9 +68,6 @@ export class VendorDeleteConflictError extends VendorServiceError {
 // ---------------------------------------------------------------------------
 
 let records: MockVendorRecord[] = vendorsSeed.map((seed) => structuredClone(seed.record));
-const expensesByVendor = new Map<string, MockVendorExpenses>(
-  vendorsSeed.map((seed) => [seed.record.id, { ...seed.expenses }]),
-);
 const memberOf = new Set([CURRENT_EVENT_ID]);
 let lastVendorId = Math.max(...records.map((record) => Number(record.id)));
 
@@ -100,7 +97,6 @@ const NEW_VENDOR: VendorFields = {
   notes: null,
 };
 
-const NO_EXPENSES: MockVendorExpenses = { paidTotal: "0.00", nextDueDate: null, expenseCount: 0 };
 
 /**
  * Like the server's cleanInput: keeps only editable fields, trims strings, turns empty
@@ -151,7 +147,7 @@ function prepare(current: VendorFields, body: object): VendorFields {
 
 /** Stand-in for the server's vendor query, which reads the totals from vendor_payment_totals. */
 function toVendor(record: MockVendorRecord): Vendor {
-  const expenses = expensesByVendor.get(record.id) ?? NO_EXPENSES;
+  const expenses = mockExpenseStore.vendorTotals(record.eventId, record.id);
   const balance =
     record.contractTotal === null
       ? null
@@ -261,13 +257,12 @@ export const vendorService = {
           "SIGNED_CONTRACT",
         );
       }
-      if ((expensesByVendor.get(vendorId) ?? NO_EXPENSES).expenseCount > 0) {
+      if (mockExpenseStore.vendorTotals(eventId, vendorId).expenseCount > 0) {
         throw new VendorDeleteConflictError(
           "This vendor has expenses. Remove or move them to another vendor first.",
           "HAS_EXPENSES",
         );
       }
       records = records.filter((item) => item.id !== vendorId);
-      expensesByVendor.delete(vendorId);
     }),
 };
