@@ -545,3 +545,32 @@
     gap: 0;
   }
 }
+
+.vendor-expense-action {
+  margin-top: 12px;
+}
+.vendor-expense-action .btn {
+  width: 100%;
+}
+
+.vendor-contract-amount {
+  color: var(--purple-dark);
+  font-weight: 800;
+}
+
+.vendor-contract-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+.vendor-contract-identity strong {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.vendor-contract-identity span {
+  color: var(--muted);
+  font-size: 13px;
+}

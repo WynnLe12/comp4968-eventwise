@@ -16,11 +16,13 @@ export function VendorCard({
   vendor,
   onOpen,
   actions,
+  expenseAction,
 }: {
   vendor: Vendor;
   onOpen: () => void;
   /** The kebab menu, rendered in the card's top-right corner. */
   actions: ReactNode;
+  expenseAction?: ReactNode;
 }) {
   const contractTotal = moneyToNumber(vendor.contractTotal);
   const hasContract = contractTotal !== null;
@@ -112,6 +114,11 @@ export function VendorCard({
         </div>
       )}
 
+      {expenseAction && (
+        <div className="vendor-expense-action" onClick={(event) => event.stopPropagation()}>
+          {expenseAction}
+        </div>
+      )}
       <div className="vendor-due">
         <span>Next due</span>
         <b>{nextDueLabel(vendor)}</b>

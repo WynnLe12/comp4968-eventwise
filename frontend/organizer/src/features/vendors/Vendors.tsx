@@ -28,6 +28,11 @@ import type {
 } from "../../types";
 import { VendorActions } from "./VendorActions";
 import { VendorCard } from "./VendorCard";
+import { ContractExpensePrompt } from "./ContractExpensePrompt";
+import {
+  canAddContractExpense, contractExpenseSummary, ContractExpenseError, planContractExpense,
+  type ContractExpenseChoice, type ContractExpensePlan,
+} from "../../services/vendorExpenseContract";
 import { VendorDrawer } from "./VendorDrawer";
 import { VendorForm, type VendorFormSubmitError } from "./VendorForm";
 import "./vendors.css";
@@ -93,6 +98,12 @@ export function Vendors({
   } | null>(null);
   const [researchTarget, setResearchTarget] = useState<Vendor | null>(null);
   const [saving, setSaving] = useState(false);
+  const [contractOffer, setContractOffer] = useState<Vendor | null>(null);
+  const [contractReview, setContractReview] = useState<{
+    vendor: Vendor;
+    plan: ContractExpensePlan;
+    finish: (choice: ContractExpenseChoice | null) => void;
+  } | null>(null);
 
   // ---- Derived data -------------------------------------------------------
 
@@ -174,20 +185,62 @@ export function Vendors({
     return true;
   };
 
+  const offerContractExpense = (vendor: Vendor) => {
+    if (canAddContractExpense(vendor)) setContractOffer(vendor);
+  };
+
+  const finishContractReview = (choice: ContractExpenseChoice | null) => {
+    contractReview?.finish(choice);
+    setContractReview(null);
+  };
+
+  const createContractExpense = async () => {
+    if (!contractOffer || saving) return;
+    setSaving(true);
+    try {
+      replaceVendor(await vendorService.addContractExpense(CURRENT_EVENT_ID, contractOffer.id));
+      setContractOffer(null);
+      onToast("Contract added to expenses");
+    } catch (reason) {
+      onToast(errorMessage(reason, "We couldn't add the contract expense."), "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const saveVendor = async (body: VendorUpdateInput): Promise<VendorFormSubmitError | null> => {
     setSaving(true);
     try {
       if (editing) {
-        replaceVendor(await vendorService.update(CURRENT_EVENT_ID, editing.id, body));
+        const nextTotal = body.contractTotal === undefined ? editing.contractTotal : body.contractTotal;
+        let choice: ContractExpenseChoice | null = "keep";
+        if (nextTotal !== null && (editing.contractTotal === null ||
+            Math.round(Number(nextTotal) * 100) !== Math.round(Number(editing.contractTotal) * 100))) {
+          const plan = planContractExpense(editing, String(nextTotal));
+          if (plan.mode === "single" || plan.mode === "multiple") {
+            choice = await new Promise<ContractExpenseChoice | null>((finish) => {
+              setContractReview({ vendor: editing, plan, finish });
+            });
+            if (choice === null) return null;
+          }
+        }
+        const updated = await vendorService.update(CURRENT_EVENT_ID, editing.id, body, choice === "sync" ? "sync" : "keep");
+        replaceVendor(updated);
+        if (choice === "review") viewExpenses(updated);
+        else offerContractExpense(updated);
         onToast("Vendor updated");
       } else {
         const created = await vendorService.create(CURRENT_EVENT_ID, body as VendorCreateInput);
         update((list) => [...list, created]);
         onToast("Vendor added");
+        offerContractExpense(created);
       }
       setEditing(undefined);
       return null;
     } catch (reason) {
+      if (reason instanceof ContractExpenseError) {
+        return { message: reason.message, fields: { contractTotal: reason.message } };
+      }
       if (reason instanceof VendorValidationError) {
         return { message: reason.message, fields: reason.fields };
       }
@@ -203,7 +256,9 @@ export function Vendors({
   const applyUpdate = async (vendor: Vendor, input: VendorUpdateInput, successMessage: string) => {
     setSaving(true);
     try {
-      replaceVendor(await vendorService.update(CURRENT_EVENT_ID, vendor.id, input));
+      const updated = await vendorService.update(CURRENT_EVENT_ID, vendor.id, input);
+      replaceVendor(updated);
+      offerContractExpense(updated);
       onToast(successMessage);
       return true;
     } catch (reason) {
@@ -432,6 +487,17 @@ export function Vendors({
               key={vendor.id}
               vendor={vendor}
               onOpen={() => setSelectedId(vendor.id)}
+              expenseAction={
+                canAddContractExpense(vendor) ? (
+                  <Button variant="secondary" icon="receipt" onClick={() => setContractOffer(vendor)}>
+                    Add contract to expenses
+                  </Button>
+                ) : contractExpenseSummary(vendor).mismatch ? (
+                  <Button variant="ghost" onClick={() => viewExpenses(vendor)}>
+                    Review expense breakdown
+                  </Button>
+                ) : undefined
+              }
               actions={
                 <VendorActions
                   vendor={vendor}
@@ -470,6 +536,24 @@ export function Vendors({
       )}
 
       {vendorFormModal}
+
+      {contractReview && (
+        <ContractExpensePrompt
+          vendor={contractReview.vendor}
+          plan={contractReview.plan}
+          onChoose={finishContractReview}
+          onClose={() => finishContractReview(null)}
+        />
+      )}
+      {contractOffer && (
+        <ContractExpensePrompt
+          vendor={contractOffer}
+          plan={planContractExpense(contractOffer, contractOffer.contractTotal)}
+          busy={saving}
+          onChoose={() => void createContractExpense()}
+          onClose={() => { if (!saving) setContractOffer(null); }}
+        />
+      )}
 
       {researchTarget && (
         <Modal

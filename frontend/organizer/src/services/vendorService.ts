@@ -25,6 +25,7 @@ import type {
 } from "../types";
 import { mockRequest, mockScenario } from "./mockClient";
 import { mockExpenseStore } from "./mockExpenseStore";
+import { addContractExpense, planContractExpense, syncContractExpense } from "./vendorExpenseContract";
 import { applyStatusRules, MONEY_FIELDS, validateFields, type VendorDeleteConflict } from "./vendorRules";
 
 export type { VendorDeleteConflict } from "./vendorRules";
@@ -235,14 +236,31 @@ export const vendorService = {
     }),
 
   /** PATCH /events/{eventId}/vendors/{vendorId} with only the changed fields -> 200. */
-  update: (eventId: string, vendorId: string, input: VendorUpdateInput) =>
+  update: (eventId: string, vendorId: string, input: VendorUpdateInput, expenseChoice: "keep" | "sync" = "keep") =>
     mockRequest(() => {
       requireMember(eventId);
       const existing = findRecord(eventId, vendorId);
       failIfSaveErrorScenario();
       const fields = prepare(editableFields(existing), input);
+      // All validation and failure simulation precedes either mutation.
+      if (fields.contractTotal !== null && fields.contractTotal !== existing.contractTotal) {
+        planContractExpense(toVendor(existing), fields.contractTotal);
+      }
+      if (expenseChoice === "sync") {
+        if (fields.contractTotal === null) throw new Error("Enter a contract total first.");
+        syncContractExpense(toVendor(existing), fields.contractTotal);
+      }
       const record: MockVendorRecord = { ...existing, ...fields, updatedAt: now() };
       records = records.map((item) => (item.id === vendorId ? record : item));
+      return toVendor(record);
+    }),
+
+  addContractExpense: (eventId: string, vendorId: string) =>
+    mockRequest(() => {
+      requireMember(eventId);
+      failIfSaveErrorScenario();
+      const record = findRecord(eventId, vendorId);
+      addContractExpense(toVendor(record));
       return toVendor(record);
     }),
 
