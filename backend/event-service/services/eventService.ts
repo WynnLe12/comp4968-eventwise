@@ -1,5 +1,6 @@
 import { EventRepository, EventDeletionBlockedError, InvalidTemplateError, type EventInput, type EventRecord, type ListedEvent } from "../repositories/eventRepository";
 import { localToday, validDate } from "../../shared/utils/dateOnly";
+import { GuestRepository } from "../../guest-service/repositories/guestRepository";
 
 export class EventValidationError extends Error {}
 export class EventNotFoundError extends Error {}
@@ -72,7 +73,8 @@ export function validateEventPatch(body: unknown, today = localToday()): Partial
 }
 
 export class EventService {
-  constructor(private readonly repository: Pick<EventRepository, "create"> & Partial<Pick<EventRepository, "list" | "getById" | "update" | "delete">> = new EventRepository(), private readonly today = localToday) {}
+  constructor(private readonly repository: Pick<EventRepository, "create"> & Partial<Pick<EventRepository, "list" | "getById" | "update" | "delete">> = new EventRepository(), private readonly today = localToday,
+    private readonly guests: Pick<GuestRepository, "deleteAllForEvent"> = new GuestRepository()) {}
 
   async delete(eventId: string, cognitoSub: string): Promise<void> {
     if (!cognitoSub || cognitoSub.length > 128) throw new Error("Verified Cognito identity is required");
@@ -88,6 +90,13 @@ export class EventService {
         ? "This event has recorded expense payments and cannot be deleted."
         : "This event has records referenced by another event and cannot be deleted.");
       throw error;
+    }
+    // Guests live in DynamoDB, outside the MySQL cascade. The event is already gone, so a
+    // failure here is logged rather than reported: its guests are unreachable (no members).
+    try {
+      await this.guests.deleteAllForEvent(id);
+    } catch (error) {
+      console.error(`Event ${id} was deleted, but removing its guests failed:`, error);
     }
   }
 
