@@ -23,3 +23,30 @@
   color: var(--muted);
   padding: 22px 12px;
 }
+
+.guest-form-error {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: #fff0ed;
+  color: #b8412f;
+  font-size: 11px;
+}
+.guest-form-fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+/* Edit guest footer: Delete (or the delete confirmation text) sits on the left. */
+.guest-footer-start {
+  margin-right: auto;
+  display: flex;
+  align-items: center;
+}
+.guest-delete-prompt {
+  font-size: 11px;
+  font-weight: 700;
+  color: #c95145;
+}

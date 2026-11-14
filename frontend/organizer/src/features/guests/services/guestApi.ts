@@ -1,14 +1,5 @@
-import { mockGuestListResponse } from "./guestMockData";
-
 // Guest list from the staging API Gateway: GET <url>?eventId=<id> returns { count, guests }.
 // The URL is public configuration; set VITE_GUESTS_API_URL to point at another stage.
-
-/**
- * Hardcoded guests are used until the backend is ready. Set VITE_GUESTS_USE_MOCK=false
- * to call the real API instead.
- */
-export const GUESTS_USE_MOCK = import.meta.env.VITE_GUESTS_USE_MOCK !== "false";
-
 const GUESTS_API_URL = (
   import.meta.env.VITE_GUESTS_API_URL ??
   "https://cw5hmsb1e6.execute-api.us-west-2.amazonaws.com/staging/guest"
@@ -53,7 +44,9 @@ function parseGuest(row: unknown): GuestRecord {
   const guest = row as Record<string, unknown>;
   const guestId = text(guest.guestId);
   if (!guestId) throw new GuestApiError("The guest service returned a guest without an ID.");
-  if (!isRsvpStatus(guest.rsvpStatus)) {
+  // A guest saved without a status (the create request doesn't send one) hasn't been invited yet.
+  const rsvpStatus = guest.rsvpStatus ?? "UNINVITED";
+  if (!isRsvpStatus(rsvpStatus)) {
     throw new GuestApiError("The guest service returned a guest with an unknown RSVP status.");
   }
   return {
@@ -65,7 +58,7 @@ function parseGuest(row: unknown): GuestRecord {
     plusOneAllowed: guest.plusOneAllowed === true,
     mealChoice: text(guest.mealChoice),
     dietaryNotes: text(guest.dietaryNotes),
-    rsvpStatus: guest.rsvpStatus,
+    rsvpStatus,
     createdAt: text(guest.createdAt),
     updatedAt: text(guest.updatedAt),
   };
@@ -80,13 +73,63 @@ function parseGuestList(body: unknown): GuestRecord[] {
   return list.guests.map(parseGuest);
 }
 
-export async function listGuests(eventId: string): Promise<GuestRecord[]> {
-  if (GUESTS_USE_MOCK) {
-    // Short delay so the loading state behaves as it will with the real API.
-    await new Promise((resolve) => window.setTimeout(resolve, 250));
-    return parseGuestList(structuredClone(mockGuestListResponse));
-  }
+/** Fields the "Add a guest" form collects. Empty optional fields are null. */
+export interface NewGuestInput {
+  firstName: string;
+  lastName: string | null;
+  email: string | null;
+  plusOneAllowed: boolean;
+}
 
+/**
+ * Creates a guest: PUT <GUESTS_API_URL> with body { guest: { eventId, guestId, ... } }.
+ * The guest ID is generated here. Empty optional fields are left out of the body.
+ * Returns the new guest's ID.
+ */
+export async function createGuest(eventId: string, input: NewGuestInput): Promise<string> {
+  const guestId = crypto.randomUUID();
+  const guest: Record<string, string | boolean> = {
+    eventId,
+    guestId,
+    firstName: input.firstName,
+    plusOneAllowed: input.plusOneAllowed,
+  };
+  if (input.lastName) guest.lastName = input.lastName;
+  if (input.email) guest.email = input.email;
+
+  let response: Response;
+  try {
+    // No Content-Type header on purpose: the gateway's CORS settings allow PUT but no request
+    // headers, so a browser preflight for "application/json" would fail. A plain string body is
+    // sent as text/plain, which needs no permission; the backend parses the JSON body either way.
+    // Once the gateway allows the Content-Type header, add it here.
+    response = await fetch(GUESTS_API_URL, { method: "PUT", body: JSON.stringify({ guest }) });
+  } catch {
+    throw new GuestApiError("We couldn't reach the guest service. Check your connection and try again.");
+  }
+  if (!response.ok) throw new GuestApiError("Unable to add this guest. Please try again.");
+  return guestId;
+}
+
+/**
+ * Deletes one guest: DELETE <GUESTS_API_URL> with body { guest: { eventId, guestId } }.
+ * Sent without a Content-Type header for the same CORS reason as createGuest.
+ */
+export async function deleteGuest(eventId: string, guestId: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(GUESTS_API_URL, {
+      method: "DELETE",
+      body: JSON.stringify({ guest: { eventId, guestId } }),
+    });
+  } catch {
+    throw new GuestApiError("We couldn't reach the guest service. Check your connection and try again.");
+  }
+  if (!response.ok) throw new GuestApiError("Unable to delete this guest. Please try again.");
+}
+
+/** Loads every guest of one event: GET <GUESTS_API_URL>?eventId=<eventId>. */
+export async function listGuests(eventId: string): Promise<GuestRecord[]> {
   let response: Response;
   try {
     response = await fetch(`${GUESTS_API_URL}?eventId=${encodeURIComponent(eventId)}`);

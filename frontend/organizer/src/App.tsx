@@ -257,7 +257,7 @@ export default function App() {
           <Route path="budget" element={<Budget openReset={() => openModal("template")} />} />
           <Route path="expenses" element={<Expenses />} />
           <Route path="vendors" element={<Vendors onToast={notify} />} />
-          <Route path="guests" element={<Guests onAdd={() => openModal("guest")} />} />
+          <Route path="guests" element={<Guests onToast={notify} />} />
           <Route path="templates" element={<Templates />} />
           <Route path="tasks" element={<Tasks />} />
           <Route path="timeline" element={<Timeline />} />

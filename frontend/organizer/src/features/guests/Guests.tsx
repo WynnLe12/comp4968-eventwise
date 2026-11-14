@@ -4,7 +4,6 @@ import { EmptyState, ErrorState, LoadingState, PageHeader } from "../../componen
 import { useResource } from "../../hooks/useResource";
 import { useEvents } from "../events/EventsContext";
 import {
-  GUESTS_USE_MOCK,
   isRsvpStatus,
   listGuests,
   RSVP_LABELS,
@@ -12,6 +11,7 @@ import {
   type GuestRecord,
   type RsvpStatus,
 } from "./services/guestApi";
+import { AddGuestModal } from "./AddGuestModal";
 import { EditGuestModal } from "./EditGuestModal";
 import "./guests.css";
 
@@ -44,12 +44,16 @@ function errorText(error: unknown) {
   return error instanceof Error && error.message ? error.message : "Unable to load your guest list.";
 }
 
-export function Guests({ onAdd }: { onAdd: () => void }) {
+export function Guests({
+  onToast,
+}: {
+  onToast: (message: string, tone?: "success" | "error") => void;
+}) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
   const { selectedEvent, status: eventsStatus } = useEvents();
-  // The hardcoded guests belong to event "42"; show them even when no event is selected.
-  const eventId = selectedEvent?.event_id ?? (GUESTS_USE_MOCK ? "42" : null);
+  // The event chosen in the sidebar switcher. Changing it reloads the guest list for that event.
+  const eventId = selectedEvent?.event_id ?? null;
 
   const loadGuests = useCallback(
     () => (eventId ? listGuests(eventId) : Promise.resolve<GuestRecord[]>([])),
@@ -59,6 +63,21 @@ export function Guests({ onAdd }: { onAdd: () => void }) {
   const guests = useMemo(() => data ?? [], [data]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const editingGuest = editingId ? guests.find((g) => g.guestId === editingId) : undefined;
+  const [adding, setAdding] = useState(false);
+
+  const openAdd = () => setAdding(true);
+  const addModal =
+    adding && eventId ? (
+      <AddGuestModal
+        eventId={eventId}
+        onClose={() => setAdding(false)}
+        onAdded={(name) => {
+          setAdding(false);
+          onToast(name ? `${name} added to your guest list` : "Guest added");
+          reload(); // Show the guest as the backend stored it.
+        }}
+      />
+    ) : null;
 
   const counts = useMemo(() => {
     const byStatus = Object.fromEntries(RSVP_STATUSES.map((status) => [status, 0])) as Record<
@@ -109,11 +128,12 @@ export function Guests({ onAdd }: { onAdd: () => void }) {
           title="Your guest list is ready to grow"
           message="Add guests one by one to begin collecting RSVPs."
           action={
-            <Button onClick={onAdd} icon="plus">
+            <Button onClick={openAdd} icon="plus">
               Add guest
             </Button>
           }
         />
+        {addModal}
       </>
     );
 
@@ -131,7 +151,7 @@ export function Guests({ onAdd }: { onAdd: () => void }) {
       <PageHeader
         page="guests"
         action={
-          <Button onClick={onAdd} icon="plus">
+          <Button onClick={openAdd} icon="plus">
             Add guest
           </Button>
         }
@@ -252,11 +272,18 @@ export function Guests({ onAdd }: { onAdd: () => void }) {
           </table>
         </div>
       </Card>
+      {addModal}
       {editingGuest && (
         <EditGuestModal
           key={editingGuest.guestId}
           guest={editingGuest}
+          eventId={eventId}
           onClose={() => setEditingId(null)}
+          onDeleted={(name) => {
+            setEditingId(null);
+            onToast(`${name} removed from your guest list`);
+            reload(); // Show the list as the backend now has it.
+          }}
           onSave={(saved) => {
             update((list) => list.map((g) => (g.guestId === saved.guestId ? saved : g)));
             setEditingId(null);

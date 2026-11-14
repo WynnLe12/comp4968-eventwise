@@ -2,19 +2,11 @@ import type { ReactNode } from "react";
 import { EmptyState, LoadingState, PageHeader } from "../../components/page";
 import { Button } from "../../components/ui";
 import type { Page } from "../../types";
-import { GUESTS_USE_MOCK } from "../guests/services/guestApi";
 import { useEvents } from "./EventsContext";
 
 export function EventWorkspace({ page, children }: { page: Page; children: ReactNode }) {
   const { status, error, refresh, openCreate, detailsStatus, detailsError, detailsErrorStatus, reloadDetails } = useEvents();
   if (page === "templates") return children;
-  // Hardcoded guests don't depend on the event list, so show them even if events can't load.
-  if (page === "guests" && GUESTS_USE_MOCK) return <>
-    <p className="feature-preview-notice" role="status">
-      Preview: sample guests. This list isn't loaded from your selected event yet.
-    </p>
-    {children}
-  </>;
   if (status === "loading") return <LoadingState label="Loading your events..." />;
   if (status === "error") return (
     <div role="alert"><EmptyState title="Unable to load events" message={error}

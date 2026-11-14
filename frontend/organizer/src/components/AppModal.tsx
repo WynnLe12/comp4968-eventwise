@@ -3,7 +3,7 @@ import { Button, Field, Icon, Modal } from "./ui";
 import { CreateEventModal } from "../features/events/components/CreateEventModal";
 import type { CreateEventResult } from "../features/events/services/eventApi";
 
-export type ModalName = "template" | "expense" | "guest" | "event";
+export type ModalName = "template" | "expense" | "event";
 
 type FormModal = Exclude<ModalName, "template" | "event">;
 
@@ -29,34 +29,6 @@ const forms: Record<FormModal, { title: string; body: ReactNode; saved: string }
       </>
     ),
   },
-  guest: {
-    title: "Add a guest",
-    saved: "Guest added",
-    body: (
-      <>
-        <div className="form-row">
-          <Field label="First name" placeholder="First name" />
-          <Field label="Last name" placeholder="Last name" />
-        </div>
-        <Field label="Email" type="email" placeholder="guest@example.com" />
-        <label className="check-field">
-          <input type="checkbox" />
-          <div>
-            <b>Allow a plus-one</b>
-            <span>This guest can add one person when they RSVP.</span>
-          </div>
-        </label>
-        <label className="check-field">
-          <input type="checkbox" defaultChecked />
-          <div>
-            <b>Send an invitation</b>
-            <span>Email this guest your RSVP link.</span>
-          </div>
-        </label>
-      </>
-    ),
-  },
-
 };
 
 export function AppModal({
