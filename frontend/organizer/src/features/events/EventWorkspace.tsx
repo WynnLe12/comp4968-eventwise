@@ -31,7 +31,7 @@ export function EventWorkspace({ page, children }: { page: Page; children: React
     {children}
   </>;
   // Keep unconnected feature screens from presenting sample data as this event's data.
-  if (page !== "dashboard" && page !== "events" && page !== "budget") return <>
+  if (page !== "dashboard" && page !== "events" && page !== "budget" && page !== "guests") return <>
     <PageHeader page={page} />
     <EmptyState title="Event information unavailable" message="This section is not available for this event yet." />
   </>;
