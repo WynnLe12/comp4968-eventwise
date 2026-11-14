@@ -14,7 +14,8 @@ export function EventWorkspace({ page, children }: { page: Page; children: React
   );
   if (status === "empty") return <EmptyState title="No events yet" message="There are no events available for your account." action={<Button onClick={openCreate} icon="plus">Create event</Button>} />;
   if (page === "dashboard") {
-    if (detailsStatus === "loading" || detailsStatus === "idle") return <LoadingState label="Loading event details..." />;
+    if (detailsStatus === "idle") return <EmptyState title="Select an event" message="Choose an event from the event switcher to view its dashboard." />;
+    if (detailsStatus === "loading") return <LoadingState label="Loading event details..." />;
     if (detailsStatus === "error") return (
       <div role="alert"><EmptyState title={detailsErrorStatus === 403 ? "Event access unavailable" : detailsErrorStatus === 404 ? "Event not found" : "Unable to load event details"}
         message={detailsError} action={<>

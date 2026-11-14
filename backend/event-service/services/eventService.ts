@@ -1,9 +1,10 @@
-import { EventRepository, InvalidTemplateError, type EventInput, type EventRecord, type ListedEvent } from "../repositories/eventRepository";
+import { EventRepository, EventDeletionBlockedError, InvalidTemplateError, type EventInput, type EventRecord, type ListedEvent } from "../repositories/eventRepository";
 import { localToday, validDate } from "../../shared/utils/dateOnly";
 
 export class EventValidationError extends Error {}
 export class EventNotFoundError extends Error {}
 export class EventAccessDeniedError extends Error {}
+export class EventConflictError extends Error {}
 
 export function validateEventId(eventId: unknown): string {
   if (typeof eventId !== "string" || !/^[0-9]+$/.test(eventId)) {
@@ -71,7 +72,24 @@ export function validateEventPatch(body: unknown, today = localToday()): Partial
 }
 
 export class EventService {
-  constructor(private readonly repository: Pick<EventRepository, "create"> & Partial<Pick<EventRepository, "list" | "getById" | "update">> = new EventRepository(), private readonly today = localToday) {}
+  constructor(private readonly repository: Pick<EventRepository, "create"> & Partial<Pick<EventRepository, "list" | "getById" | "update" | "delete">> = new EventRepository(), private readonly today = localToday) {}
+
+  async delete(eventId: string, cognitoSub: string): Promise<void> {
+    if (!cognitoSub || cognitoSub.length > 128) throw new Error("Verified Cognito identity is required");
+    const id = validateEventId(eventId);
+    if (!this.repository.delete) throw new Error("Event delete repository is not configured");
+    try {
+      await this.repository.delete(id, cognitoSub, (event) => {
+        if (!event) throw new EventNotFoundError("Event not found");
+        if (event.role !== "OWNER") throw new EventAccessDeniedError("Only the event owner can delete this event");
+      });
+    } catch (error) {
+      if (error instanceof EventDeletionBlockedError) throw new EventConflictError(error.reason === "payments"
+        ? "This event has recorded expense payments and cannot be deleted."
+        : "This event has records referenced by another event and cannot be deleted.");
+      throw error;
+    }
+  }
 
   async update(eventId: string, body: unknown, cognitoSub: string): Promise<ListedEvent> {
     if (!cognitoSub || cognitoSub.length > 128) throw new Error("Verified Cognito identity is required");

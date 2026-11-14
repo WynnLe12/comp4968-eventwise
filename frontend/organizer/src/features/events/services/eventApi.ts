@@ -172,6 +172,31 @@ export class EventUpdateError extends Error {
   constructor(readonly status: number, message: string, readonly fieldErrors: EventFieldErrors = {}) { super(message); }
 }
 
+export interface DeleteEventResult { userId: string; eventId: string }
+export class EventDeleteError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
+
+export async function deleteEvent(eventId: string, signal?: AbortSignal, expectedUserId?: string): Promise<DeleteEventResult> {
+  const id = requestEventId(eventId);
+  const identity = await authenticatedEventRequest();
+  if (expectedUserId && identity.user.userId !== expectedUserId) throw new EventDeleteError(409, "Your account changed. Please reload your events.");
+  const response = await fetch(apiUrl(`/events/${id}`), { method: "DELETE", signal,
+    headers: { Authorization: `Bearer ${identity.token.toString()}` } });
+  if (response.status === 401) throw new EventSessionError("Your session has expired. Please sign in again.");
+  if (response.status === 403) throw new EventDeleteError(403, "Only the event owner can delete this event.");
+  if (response.status === 404) throw new EventDeleteError(404, "This event no longer exists. Close the editor and refresh your events.");
+  if (response.status === 409) {
+    const result = await response.json().catch(() => null) as { error?: string } | null;
+    const known = ["This event has recorded expense payments and cannot be deleted.", "This event has records referenced by another event and cannot be deleted."];
+    throw new EventDeleteError(409, result?.error && known.includes(result.error) ? result.error : "This event cannot be deleted because it has linked records.");
+  }
+  if (response.status !== 204) throw new EventDeleteError(response.status, "Unable to delete your event. Please try again.");
+  const current = await getCurrentUser().catch(() => { throw new EventSessionError("Please sign in again."); });
+  if (current.userId !== identity.user.userId) throw new EventDeleteError(409, "Your account changed. Please reload your events.");
+  return { userId: current.userId, eventId: id };
+}
+
 export function eventEditDraft(event: OrganizerEvent): EventEditDraft {
   return { name: event.name, template_id: event.template_id ?? "", event_date: event.event_date ?? "", venue: event.venue ?? "", total_budget: event.total_budget };
 }

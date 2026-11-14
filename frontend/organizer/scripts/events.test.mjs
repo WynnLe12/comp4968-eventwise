@@ -18,6 +18,7 @@ function loadModule(path, imports, replacements = {}) {
       if (name.endsWith("/utils/eventFormValidation")) return loadModule("../src/features/events/utils/eventFormValidation.ts", {});
       if (name.endsWith("/hooks/useEventValidation")) return loadModule("../src/features/events/hooks/useEventValidation.ts", { react: imports.react });
       if (name.endsWith(".css")) return {};
+      if (name === "./DeleteEventDialog") return loadModule("../src/features/events/components/DeleteEventDialog.tsx", { "react/jsx-runtime": jsxRuntime, "../../../components/ui": imports["../../../components/ui"] });
     }
     assert.ok(name in imports, `Unexpected import: ${name}`);
     return imports[name];
@@ -68,6 +69,30 @@ test("empty backend results stay empty, without mock events", async () => {
   await withApi(async () => Response.json([]), async (api) => {
     assert.deepEqual(await api.listEvents(), { userId: "user-a", events: [] });
   });
+});
+
+test("delete API uses the exact event ID, Cognito token and DELETE /api/events/:id with no body", async () => {
+  const controller = new AbortController();
+  await withApi(async (url, options) => {
+    assert.equal(url, `/api/events/${first.event_id}`); assert.equal(options.method, "DELETE");
+    assert.deepEqual(options.headers, { Authorization: "Bearer access-token-a" });
+    assert.equal(options.body, undefined); assert.equal(options.signal, controller.signal);
+    return new Response(null, { status: 204 });
+  }, async (api) => assert.deepEqual(await api.deleteEvent(first.event_id, controller.signal, "user-a"), { userId: "user-a", eventId: first.event_id }));
+  await withApi(async () => assert.fail("No request allowed"), async (api) => {
+    await assert.rejects(api.deleteEvent("0"), api.EventValidationError);
+    await assert.rejects(api.deleteEvent(first.event_id, undefined, "other-account"), /account changed/);
+  });
+});
+
+test("delete API handles 401/403/404/409/500 safely, and rejects stale account results", async () => {
+  for (const status of [401, 403, 404, 409, 500]) await withApi(async () => Response.json({ error: "private SQL data" }, { status }), async (api) => {
+    await assert.rejects(api.deleteEvent(first.event_id), (error) => status === 401 ? error instanceof api.EventSessionError
+      : error instanceof api.EventDeleteError && error.status === status && !error.message.includes("private"));
+  });
+  await withApi(async () => new Response(null, { status: 204 }), async (api) => {
+    await assert.rejects(api.deleteEvent(first.event_id), /account changed/);
+  }, { getCurrentUser: async () => ({ userId: "other-account" }) });
 });
 
 test("expired sessions/401 never return cached events and authentication failures skip fetch", async () => {
@@ -193,6 +218,22 @@ test("event selection is shared, rejects foreign IDs, and survives refresh only 
     requests[2].resolve({ userId: "user-b", events: [first, { ...second, role: "OWNER" }] });
     await settle();
     assert.deepEqual(render().selectedEvent, first); // account A's selected ID did not carry over
+  });
+});
+
+test("confirmed deletion clears selection, removes only that user's event, and invalidates stale list requests", async () => {
+  await withListHook(async ({ render, requests, settle }) => {
+    requests[0].resolve({ userId: "user-a", events: [first, second] }); await settle();
+    const pending = render().refresh(undefined, true);
+    assert.equal(render().removeEvent({ userId: "other-account", eventId: first.event_id }), false);
+    assert.deepEqual(render().events, [first, second]);
+    assert.equal(render().removeEvent({ userId: "user-a", eventId: first.event_id }), true);
+    assert.equal(render().selectedEvent, null); assert.equal(render().selectedId, null);
+    assert.deepEqual(render().events, [second]); assert.ok(requests[1].signal.aborted);
+    requests[1].resolve({ userId: "user-a", events: [first, second] }); await pending;
+    assert.deepEqual(render().events, [second]);
+    render().removeEvent({ userId: "user-a", eventId: second.event_id });
+    assert.deepEqual(render().events, []); assert.equal(render().status, "empty");
   });
 });
 
@@ -746,6 +787,9 @@ test("detail loading and authorization errors hide dashboard content but keep ev
   const render = (currentPage = "dashboard") => renderToStaticMarkup(React.createElement(api.EventWorkspace, { page: currentPage }, "EVENT CONTENT"));
   assert.match(render(), /Loading event details/);
   assert.doesNotMatch(render(), /EVENT CONTENT/);
+  state = { ...state, detailsStatus: "idle" };
+  assert.match(render(), /Select an event/);
+  assert.doesNotMatch(render(), /Loading event details|EVENT CONTENT/);
   for (const status of [403, 404]) {
     state = { ...state, detailsStatus: "error", detailsErrorStatus: status, detailsError: "Select another event or refresh your events." };
     assert.match(render(), /Refresh events/);

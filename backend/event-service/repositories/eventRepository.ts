@@ -1,4 +1,4 @@
-import type { Pool, RowDataPacket } from "mysql2/promise";
+import type { Pool, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { db } from "../../shared/db/db";
 
 export interface EventInput {
@@ -25,6 +25,9 @@ export interface EventWithMembership extends EventRecord {
 }
 
 export class InvalidTemplateError extends Error { }
+export class EventDeletionBlockedError extends Error {
+  constructor(readonly reason: "payments" | "references") { super(reason); }
+}
 
 interface TemplateCategoryRow extends RowDataPacket {
   template_category_id: string;
@@ -113,6 +116,44 @@ function allocateTemplateBudget(
 
 export class EventRepository {
   constructor(private readonly pool: Pick<Pool, "getConnection"> = db) { }
+
+  async delete(eventId: string, cognitoSub: string, authorize: (event: Pick<EventWithMembership, "role"> | undefined) => void): Promise<void> {
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [events] = await connection.execute<(RowDataPacket & Pick<EventWithMembership, "role">)[]>(
+        `SELECT m.role FROM events e LEFT JOIN event_members m
+         ON m.event_id = e.event_id AND m.cognito_sub = ? WHERE e.event_id = ? FOR UPDATE`, [cognitoSub, eventId],
+      );
+      authorize(events[0]);
+      // Lock parents before checking references, preventing new FK references during deletion.
+      await connection.execute("SELECT expense_id FROM expenses WHERE event_id = ? FOR UPDATE", [eventId]);
+      await connection.execute("SELECT member_id FROM event_members WHERE event_id = ? FOR UPDATE", [eventId]);
+      await connection.execute("SELECT document_id FROM event_documents WHERE event_id = ? FOR UPDATE", [eventId]);
+      const [payments] = await connection.execute<RowDataPacket[]>(
+        `SELECT p.payment_id FROM expense_payments p JOIN expenses e ON e.expense_id = p.expense_id
+         WHERE e.event_id = ? LIMIT 1 FOR UPDATE`, [eventId],
+      );
+      if (payments.length) throw new EventDeletionBlockedError("payments");
+      const [tasks] = await connection.execute<RowDataPacket[]>(
+        `SELECT t.task_id FROM tasks t JOIN event_members m ON m.member_id = t.assigned_member_id
+         WHERE m.event_id = ? AND t.event_id <> ? LIMIT 1 FOR UPDATE`, [eventId, eventId],
+      );
+      const [drafts] = await connection.execute<RowDataPacket[]>(
+        `SELECT b.draft_id FROM draft_budget_items b JOIN event_documents d ON d.document_id = b.document_id
+         WHERE d.event_id = ? AND b.event_id <> ? LIMIT 1 FOR UPDATE`, [eventId, eventId],
+      );
+      if (tasks.length || drafts.length) throw new EventDeletionBlockedError("references");
+      // RESTRICT links to vendors/categories require expenses to be removed first.
+      await connection.execute("DELETE FROM expenses WHERE event_id = ?", [eventId]);
+      const [result] = await connection.execute<ResultSetHeader>("DELETE FROM events WHERE event_id = ?", [eventId]);
+      if (result.affectedRows !== 1) throw new Error("Event deletion was not completed");
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally { connection.release(); }
+  }
 
   async update(
     eventId: string,

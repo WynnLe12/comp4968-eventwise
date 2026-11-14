@@ -36,7 +36,8 @@ function find(node, predicate) {
 // Exercise actual form + submission hooks with controlled React state/effects and API promises.
 function formHost(mode, original = saved) {
   const states = [], refs = [], effects = [], scheduled = [], requests = [];
-  let si = 0, ri = 0, ei = 0, tree, closeCount = 0, successCount = 0;
+  let si = 0, ri = 0, ei = 0, tree, closeCount = 0, successCount = 0, auth, current = true;
+  const deletions = [];
   const react = {
     useState(initial) {
       const index = si++;
@@ -52,10 +53,11 @@ function formHost(mode, original = saved) {
     },
   };
   const request = (body) => new Promise((resolve, reject) => requests.push({ body, resolve, reject }));
-  const eventApi = { ...api, createEvent: request, updateEvent: (_id, body) => request(body) };
+  const eventApi = { ...api, createEvent: request, updateEvent: (_id, body) => request(body),
+    deleteEvent: (eventId, signal, userId) => request({ method: "DELETE", eventId, signal, userId }) };
   const hookName = mode === "create" ? "useCreateEvent" : "useEditEvent";
   const hook = load(`features/events/hooks/${hookName}.ts`, {
-    react, "aws-amplify/utils": { Hub: { listen: () => () => {} } }, "../services/eventApi": eventApi,
+    react, "aws-amplify/utils": { Hub: { listen: (_channel, listener) => { auth = listener; return () => {}; } } }, "../services/eventApi": eventApi,
   });
   const { Field } = load("components/ui/Field.tsx", { react: React, "react/jsx-runtime": jsx });
   const Modal = ({ children, footer }) => React.createElement("div", null, children, footer);
@@ -67,9 +69,10 @@ function formHost(mode, original = saved) {
     "../utils/eventFormValidation": validation,
     "../hooks/useEventValidation": load("features/events/hooks/useEventValidation.ts", { react }),
     "../utils/budgetPreview": load("features/events/utils/budgetPreview.ts"),
+    "./DeleteEventDialog": load("features/events/components/DeleteEventDialog.tsx", { "react/jsx-runtime": jsx, "../../../components/ui": { Button, Modal } }),
   });
-  const props = { event: original, userId: "a", isCurrent: () => true, onCreated: async () => true, onUpdated: async () => true,
-    onClose: () => closeCount++, onComplete: () => successCount++, onSessionExpired: () => {} };
+  const props = { event: original, userId: "a", isCurrent: () => current, onCreated: async () => true, onUpdated: async () => true,
+    onClose: () => closeCount++, onComplete: () => successCount++, onSessionExpired: () => {}, onDeleted: (result) => deletions.push(result) };
   const render = () => {
     si = ri = ei = 0;
     tree = component[mode === "create" ? "CreateEventModal" : "EditEventModal"](props);
@@ -78,7 +81,7 @@ function formHost(mode, original = saved) {
   };
   render();
   return {
-    render, requests,
+    render, requests, deletions, auth: (event) => auth({ payload: { event } }), setCurrent: (value) => { current = value; },
     html: () => renderToStaticMarkup(render()),
     field: (name) => find(render(), (node) => node.props?.name === name),
     change(name, value) { this.field(name).props.onChange({ target: { value } }); render(); },
@@ -277,7 +280,7 @@ test("the real EventsProvider unmounts editors on close, event/account switching
   const previous = globalThis.window;
   globalThis.window = { addEventListener() {}, removeEventListener() {} };
   const states = [], refs = [], effects = [], callbacks = [], scheduled = [];
-  let si = 0, ri = 0, ei = 0, ci = 0, auth, creates = 0, closeCreates = 0;
+  let si = 0, ri = 0, ei = 0, ci = 0, auth, creates = 0, closeCreates = 0, deleted = 0;
   const events = [saved, { ...saved, event_id: "2", name: "Second event" }];
   const react = {
     createContext: () => ({ Provider: () => null }), useContext() {},
@@ -305,7 +308,7 @@ test("the real EventsProvider unmounts editors on close, event/account switching
     "./hooks/useEventDetails": { useEventDetails: (id) => ({ eventDetails: events.find((event) => event.event_id === id) ?? null }) },
     "./components/EditEventModal": { EditEventModal: () => null },
   });
-  const props = { children: null, onSessionExpired() {}, onCreate: () => creates++, onEdit: () => closeCreates++ };
+  const props = { children: null, onSessionExpired() {}, onCreate: () => creates++, onEdit: () => closeCreates++, onDeleted: () => deleted++ };
   const render = () => {
     si = ri = ei = ci = 0;
     const node = EventsProvider(props);
@@ -323,7 +326,12 @@ test("the real EventsProvider unmounts editors on close, event/account switching
     render().props.value.openEdit();
     render().props.value.selectEvent("2"); assert.ok(!editor());
     render().props.value.openEdit(); assert.equal(editor().key, "a/2");
-    editor().props.onComplete(); assert.ok(!editor());
+    editor().props.onDeleted({ userId: "a", eventId: "2" });
+    assert.ok(!editor()); assert.equal(deleted, 1);
+    assert.deepEqual(render().props.value.events.map((event) => event.event_id), ["1"]);
+    assert.equal(render().props.value.selectedId, null);
+    assert.equal(render().props.value.eventDetails, null);
+    render().props.value.selectEvent("1");
     render().props.value.openEdit(); auth({ payload: { event: "signedOut" } }); assert.ok(!editor());
   } finally {
     for (const effect of effects) effect?.cleanup?.();
@@ -362,4 +370,85 @@ test("Expense validation remains unchanged: required name, money checks, and pas
   assert.equal(validateExpenseDraft({ name: "", amount: "0", dueDate: "" }).name, "Expense name is required.");
   assert.deepEqual(validateExpenseDraft({ name: "Venue", amount: "50.00", dueDate: "2020-01-01" }), {});
   assert.match(validateExpenseDraft({ name: "Venue", amount: "-1", dueDate: "" }).amount, /0 or more/);
+});
+
+const deleteTrigger = (host) => find(host.render().props.footer, (node) => node.props?.children === "Delete Event");
+const confirmation = (host) => find(host.render(), (node) => node.type?.name === "DeleteEventDialog");
+
+test("Delete Event is OWNER Edit-only, uses button type, and Cancel/X never submit or discard the edit draft", async () => {
+  const create = formHost("create"), coPlanner = formHost("edit", { ...saved, role: "CO_PLANNER" }), edit = formHost("edit");
+  try {
+    assert.doesNotMatch(create.html(), /Delete Event/); assert.equal(coPlanner.render(), null);
+    edit.change("name", ""); await edit.submit();
+    const before = edit.html();
+    assert.match(before, /Event name is required\./);
+    assert.equal(deleteTrigger(edit).props.type, "button");
+    deleteTrigger(edit).props.onClick();
+    assert.equal(edit.requests.length, 0);
+    assert.equal(confirmation(edit).props.name, saved.name);
+    assert.match(edit.html(), /Are you sure you want to delete this event\? This action cannot be undone\./);
+    confirmation(edit).props.onClose();
+    assert.equal(confirmation(edit), null); assert.equal(edit.requests.length, 0);
+    assert.equal(edit.field("name").props.value, "");
+    assert.match(edit.html(), /Event name is required\./); // Cancelling deletion must not reset validation/draft.
+    deleteTrigger(edit).props.onClick(); edit.render().props.onClose();
+    assert.equal(confirmation(edit), null); assert.equal(edit.closeCount(), 0);
+    assert.equal(edit.requests.length, 0);
+  } finally { create.cleanup(); coPlanner.cleanup(); edit.cleanup(); }
+});
+
+test("confirmed deletion sends one request, blocks closing while pending, and clears all form validation on success", async () => {
+  const host = formHost("edit");
+  try {
+    host.change("name", ""); await host.submit();
+    deleteTrigger(host).props.onClick();
+    confirmation(host).props.onConfirm(); confirmation(host).props.onConfirm();
+    assert.equal(host.requests.length, 1);
+    assert.equal(host.requests[0].body.method, "DELETE");
+    assert.equal(host.requests[0].body.eventId, saved.event_id);
+    assert.equal(host.requests[0].body.userId, "a");
+    assert.equal(confirmation(host).props.loading, true);
+    assert.match(host.html(), /Deleting\.\.\./);
+    confirmation(host).props.onClose(); assert.ok(confirmation(host));
+    host.requests[0].resolve({ userId: "a", eventId: saved.event_id }); await host.settle();
+    assert.deepEqual(host.deletions, [{ userId: "a", eventId: saved.event_id }]);
+    assert.equal(confirmation(host), null);
+    for (const name of ["name", "templateId", "eventDate", "venue", "totalBudget"]) assert.equal(host.field(name).props.value, "");
+    assert.doesNotMatch(host.html(), /expense-form-error|field-error/);
+    const create = formHost("create");
+    try { assert.equal(create.field("name").props.value, ""); assert.doesNotMatch(create.html(), /expense-form-error|field-error/); }
+    finally { create.cleanup(); }
+  } finally { host.cleanup(); }
+});
+
+test("failed deletion preserves the editor/event, displays safe errors, and allows retry", async () => {
+  const host = formHost("edit");
+  try {
+    host.change("name", "Unsaved name"); deleteTrigger(host).props.onClick();
+    confirmation(host).props.onConfirm();
+    host.requests[0].reject(new api.EventDeleteError(409, "This event has recorded expense payments and cannot be deleted."));
+    await host.settle();
+    assert.match(host.html(), /recorded expense payments/);
+    assert.equal(host.field("name").props.value, "Unsaved name");
+    assert.equal(host.deletions.length, 0); assert.equal(host.closeCount(), 0);
+    confirmation(host).props.onConfirm();
+    assert.equal(host.requests.length, 2);
+    host.requests[1].reject(new Error("private SQL error")); await host.settle();
+    assert.match(host.html(), /Check your connection and try again/);
+    assert.doesNotMatch(host.html(), /private SQL/);
+    assert.equal(host.deletions.length, 0);
+  } finally { host.cleanup(); }
+});
+
+test("account/event switching discards late deletion results and aborts on sign-out", async () => {
+  for (const switchAccount of [true, false]) {
+    const host = formHost("edit");
+    try {
+      deleteTrigger(host).props.onClick(); confirmation(host).props.onConfirm();
+      if (switchAccount) { host.auth("signedOut"); assert.ok(host.requests[0].body.signal.aborted); }
+      else host.setCurrent(false);
+      host.requests[0].resolve({ userId: "a", eventId: saved.event_id }); await host.settle();
+      assert.equal(host.deletions.length, 0);
+    } finally { host.cleanup(); }
+  }
 });

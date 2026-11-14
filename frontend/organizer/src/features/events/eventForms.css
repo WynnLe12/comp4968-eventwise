@@ -11,3 +11,9 @@
   border-color: #d72d49;
   box-shadow: none;
 }
+.event-delete-action { margin-right: auto; display: flex; }
+@media (max-width: 640px) {
+  .modal-footer:has(.event-delete-action) { flex-wrap: wrap; }
+  .event-delete-action { flex-basis: 100%; margin-right: 0; }
+  .event-delete-action .btn { width: 100%; }
+}

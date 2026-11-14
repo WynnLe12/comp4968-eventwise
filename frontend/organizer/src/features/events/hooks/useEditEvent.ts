@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Hub } from "aws-amplify/utils";
-import { buildEventPatch, EventSessionError, EventUpdateError, EventValidationError, updateEvent,
-  type EventEditDraft, type OrganizerEvent, type UpdateEventResult } from "../services/eventApi";
+import { buildEventPatch, deleteEvent, EventDeleteError, EventSessionError, EventUpdateError, EventValidationError, updateEvent,
+  type DeleteEventResult, type EventEditDraft, type OrganizerEvent, type UpdateEventResult } from "../services/eventApi";
 
 export interface EditEventCallbacks {
   userId: string;
@@ -10,6 +10,7 @@ export interface EditEventCallbacks {
   onComplete: () => void;
   onClose: () => void;
   onSessionExpired: () => void;
+  onDeleted?: (result: DeleteEventResult) => void;
 }
 
 export function useEditEvent(original: OrganizerEvent, options: EditEventCallbacks) {
@@ -17,6 +18,7 @@ export function useEditEvent(original: OrganizerEvent, options: EditEventCallbac
   const [saved, setSaved] = useState(false);
   const [blocked, setBlocked] = useState(false);
   const [error, setError] = useState("");
+  const [deleteError, setDeleteError] = useState("");
   const pending = useRef(false);
   const committed = useRef<UpdateEventResult | null>(null);
   const version = useRef(0);
@@ -68,5 +70,29 @@ export function useEditEvent(original: OrganizerEvent, options: EditEventCallbac
       if (current === version.current) setLoading(false);
     }
   };
-  return { loading, saved, blocked, error, submit, close: () => { if (!pending.current) { setError(""); callbacks.current.onClose(); } } };
+  const remove = async () => {
+    if (pending.current || blocked || committed.current) return;
+    if (!callbacks.current.isCurrent()) { callbacks.current.onClose(); return; }
+    pending.current = true;
+    const current = version.current;
+    setLoading(true); setDeleteError("");
+    controller.current = new AbortController();
+    try {
+      if (original.role !== "OWNER") throw new EventDeleteError(403, "Only the event owner can delete this event.");
+      const result = await deleteEvent(original.event_id, controller.current.signal, callbacks.current.userId);
+      if (current !== version.current || !callbacks.current.isCurrent()) return;
+      if (callbacks.current.onDeleted) callbacks.current.onDeleted(result);
+      else callbacks.current.onComplete();
+    } catch (failure) {
+      if (current !== version.current || !callbacks.current.isCurrent()) return;
+      if (failure instanceof EventSessionError) callbacks.current.onSessionExpired();
+      setDeleteError(failure instanceof EventDeleteError || failure instanceof EventSessionError ? failure.message
+        : "Unable to delete your event. Check your connection and try again.");
+    } finally {
+      pending.current = false;
+      if (current === version.current) setLoading(false);
+    }
+  };
+  return { loading, saved, blocked, error, deleteError, submit, remove, clearDeleteError: () => setDeleteError(""),
+    close: () => { if (!pending.current) { setError(""); setDeleteError(""); callbacks.current.onClose(); } } };
 }

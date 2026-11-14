@@ -7,15 +7,21 @@ import { useEditEvent, type EditEventCallbacks } from "../hooks/useEditEvent";
 import { localToday, validateEventForm } from "../utils/eventFormValidation";
 import { useEventValidation } from "../hooks/useEventValidation";
 import "../eventForms.css";
+import { DeleteEventDialog } from "./DeleteEventDialog";
 
 export function EditEventModal({ event, ...callbacks }: EditEventCallbacks & { event: OrganizerEvent }) {
   const [draft, setDraft] = useState(() => eventEditDraft(event));
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const validation = useEventValidation((value) => validateEventForm(value, false));
   const { errors } = validation;
-  const reset = () => { setDraft(eventEditDraft(event)); validation.reset(); };
-  const { loading, saved, blocked, error, submit, close } = useEditEvent(event, { ...callbacks,
+  const reset = (next = eventEditDraft(event)) => { setDraft(next); validation.reset(); setConfirmingDelete(false); };
+  const { loading, saved, blocked, error, deleteError, submit, remove, clearDeleteError, close } = useEditEvent(event, { ...callbacks,
     onClose: () => { reset(); callbacks.onClose(); },
     onComplete: () => { reset(); callbacks.onComplete(); },
+    onDeleted: (result) => {
+      reset({ name: "", template_id: "", event_date: "", venue: "", total_budget: "" });
+      if (callbacks.onDeleted) callbacks.onDeleted(result); else callbacks.onComplete();
+    },
   });
   const [templates, setTemplates] = useState<EventTemplate[] | null>(null);
   const [templateError, setTemplateError] = useState(false);
@@ -37,7 +43,7 @@ export function EditEventModal({ event, ...callbacks }: EditEventCallbacks & { e
   if (event.role !== "OWNER") return null;
   let changed = true;
   try { changed = Object.keys(buildEventPatch(event, draft)).length > 0; } catch { /* Show validation on Save. */ }
-  const disabled = loading || saved || blocked;
+  const disabled = loading || saved || blocked || confirmingDelete;
   const templateChanged = draft.template_id !== (event.template_id ?? "");
   const validTemplate = !templateChanged || !draft.template_id || !!templates?.some((item) => item.templateId === draft.template_id);
   const unavailableSelection = !!draft.template_id && !templates?.some((item) => item.templateId === draft.template_id);
@@ -46,14 +52,16 @@ export function EditEventModal({ event, ...callbacks }: EditEventCallbacks & { e
   };
   const handleSubmit = async (submission: FormEvent) => {
     submission.preventDefault();
-    if (loading || blocked || (!saved && (!validation.check(draft) || !validTemplate))) return;
+    if (loading || blocked || confirmingDelete || (!saved && (!validation.check(draft) || !validTemplate))) return;
     const fields = await submit(draft);
     if (fields) validation.serverErrors(fields);
   };
   return (
-    <Modal title="Edit event" onClose={close} footer={<>
-      <Button variant="secondary" onClick={close} disabled={loading}>Cancel</Button>
-      <Button type="submit" form="edit-event-form" disabled={loading || blocked || (!saved && (!changed || !validTemplate))}>
+    <Modal title="Edit event" onClose={() => { if (confirmingDelete) { if (!loading) setConfirmingDelete(false); } else close(); }} footer={<>
+      <span className="event-delete-action"><Button type="button" variant="danger" disabled={disabled}
+        onClick={() => { clearDeleteError(); setConfirmingDelete(true); }}>Delete Event</Button></span>
+      <Button variant="secondary" onClick={close} disabled={loading || confirmingDelete}>Cancel</Button>
+      <Button type="submit" form="edit-event-form" disabled={loading || blocked || confirmingDelete || (!saved && (!changed || !validTemplate))}>
         {loading ? "Please wait..." : saved ? "Retry loading event" : "Save changes"}
       </Button>
     </>}>
@@ -87,6 +95,8 @@ export function EditEventModal({ event, ...callbacks }: EditEventCallbacks & { e
         <Field label="Venue or location (optional)" name="venue" error={errors.venue} onBlur={() => validation.blur("venue", draft)} placeholder="Not set" value={draft.venue} onChange={(e) => change("venue", e.target.value)} disabled={disabled} />
         <Field label="Total budget *" name="totalBudget" error={errors.total_budget} onBlur={() => validation.blur("total_budget", draft)} inputMode="decimal" value={draft.total_budget} onChange={(e) => change("total_budget", e.target.value)} required disabled={disabled} />
       </form>
+      {confirmingDelete && <DeleteEventDialog name={event.name} loading={loading} error={deleteError}
+        onClose={() => { if (!loading) { clearDeleteError(); setConfirmingDelete(false); } }} onConfirm={() => { void remove(); }} />}
     </Modal>
   );
 }

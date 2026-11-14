@@ -67,7 +67,7 @@ function WorkspaceCreateEvent({ open, onClose }: { open: boolean; onClose: () =>
     }} />;
 }
 
-function WorkspaceLayout({ onSignOut, onSessionExpired }: { onSignOut: () => void; onSessionExpired: () => void }) {
+function WorkspaceLayout({ onSignOut, onSessionExpired, onEventDeleted }: { onSignOut: () => void; onSessionExpired: () => void; onEventDeleted: () => void }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const openCreate = useCallback(() => setCreateOpen(true), []);
@@ -79,7 +79,8 @@ function WorkspaceLayout({ onSignOut, onSessionExpired }: { onSignOut: () => voi
   const goToPage = (page: Page) => navigate(pagePath(page));
 
   return (
-    <EventsProvider onSessionExpired={onSessionExpired} onCreate={openCreate} onEdit={closeCreate}>
+    <EventsProvider onSessionExpired={onSessionExpired} onCreate={openCreate} onEdit={closeCreate}
+      onDeleted={() => { closeCreate(); navigate("/app/events"); onEventDeleted(); }}>
       <div className="app-shell">
         <Sidebar
           page={currentPage}
@@ -246,7 +247,8 @@ export default function App() {
         <Route
           path="/app"
           element={
-            authenticated ? <WorkspaceLayout onSignOut={signOut} onSessionExpired={onEventSessionExpired} /> : <Navigate to="/login" replace />
+            authenticated ? <WorkspaceLayout onSignOut={signOut} onSessionExpired={onEventSessionExpired}
+              onEventDeleted={() => notify("Event deleted successfully.")} /> : <Navigate to="/login" replace />
           }
         >
           <Route index element={<Navigate to="dashboard" replace />} />
