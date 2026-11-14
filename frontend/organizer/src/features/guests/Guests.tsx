@@ -1,24 +1,105 @@
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Badge, Button, Card, Icon } from "../../components/ui";
-import { EmptyState, PageHeader } from "../../components/page";
-import { guestsSeed } from "../../data/mockData";
+import { EmptyState, ErrorState, LoadingState, PageHeader } from "../../components/page";
+import { useResource } from "../../hooks/useResource";
+import { useEvents } from "../events/EventsContext";
+import {
+  GUESTS_USE_MOCK,
+  isRsvpStatus,
+  listGuests,
+  RSVP_LABELS,
+  RSVP_STATUSES,
+  type GuestRecord,
+  type RsvpStatus,
+} from "./services/guestApi";
+import { EditGuestModal } from "./EditGuestModal";
+import "./guests.css";
 
-function rsvpTone(rsvp: string) {
-  if (rsvp === "Attending") return "success";
-  if (rsvp === "Declined") return "danger";
-  return "neutral";
+const rsvpTone: Record<RsvpStatus, string> = {
+  UNINVITED: "neutral",
+  PENDING: "warning",
+  ACCEPTED: "success",
+  REJECTED: "danger",
+};
+
+const rsvpDisplay = Object.fromEntries(
+  RSVP_STATUSES.map((status) => [status, { label: RSVP_LABELS[status], tone: rsvpTone[status] }]),
+) as Record<RsvpStatus, { label: string; tone: string }>;
+
+type StatusFilter = "ALL" | RsvpStatus;
+
+function guestName(guest: GuestRecord) {
+  return [guest.firstName, guest.lastName].filter(Boolean).join(" ") || guest.email || "Unnamed guest";
 }
 
 const initials = (name: string) =>
   name
-    .split(" ")
-    .map((x) => x[0])
+    .split(/[\s@.]+/)
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase())
     .slice(0, 2)
     .join("");
 
+function errorText(error: unknown) {
+  return error instanceof Error && error.message ? error.message : "Unable to load your guest list.";
+}
+
 export function Guests({ onAdd }: { onAdd: () => void }) {
   const [query, setQuery] = useState("");
-  const guests = guestsSeed;
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+  const { selectedEvent, status: eventsStatus } = useEvents();
+  // The hardcoded guests belong to event "42"; show them even when no event is selected.
+  const eventId = selectedEvent?.event_id ?? (GUESTS_USE_MOCK ? "42" : null);
+
+  const loadGuests = useCallback(
+    () => (eventId ? listGuests(eventId) : Promise.resolve<GuestRecord[]>([])),
+    [eventId],
+  );
+  const { data, loading, error, reload, update } = useResource(loadGuests);
+  const guests = useMemo(() => data ?? [], [data]);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const editingGuest = editingId ? guests.find((g) => g.guestId === editingId) : undefined;
+
+  const counts = useMemo(() => {
+    const byStatus = Object.fromEntries(RSVP_STATUSES.map((status) => [status, 0])) as Record<
+      RsvpStatus,
+      number
+    >;
+    for (const guest of guests) byStatus[guest.rsvpStatus] += 1;
+    return byStatus;
+  }, [guests]);
+
+  if (!eventId)
+    return (
+      <>
+        <PageHeader page="guests" />
+        {eventsStatus === "loading" ? (
+          <LoadingState label="Loading your events..." />
+        ) : (
+          <EmptyState
+            title="Select an event"
+            message="Choose an event in the sidebar to see its guest list."
+            icon="calendar"
+          />
+        )}
+      </>
+    );
+
+  if (loading)
+    return (
+      <>
+        <PageHeader page="guests" />
+        <LoadingState label="Loading your guest list..." />
+      </>
+    );
+
+  if (error)
+    return (
+      <>
+        <PageHeader page="guests" />
+        <ErrorState message={errorText(error)} onRetry={reload} />
+      </>
+    );
 
   if (!guests.length)
     return (
@@ -26,7 +107,7 @@ export function Guests({ onAdd }: { onAdd: () => void }) {
         <PageHeader page="guests" />
         <EmptyState
           title="Your guest list is ready to grow"
-          message="Add guests one by one or import a list to begin collecting RSVPs."
+          message="Add guests one by one to begin collecting RSVPs."
           action={
             <Button onClick={onAdd} icon="plus">
               Add guest
@@ -36,47 +117,44 @@ export function Guests({ onAdd }: { onAdd: () => void }) {
       </>
     );
 
-  const filtered = guests.filter((x) => x.name.toLowerCase().includes(query.toLowerCase()));
+  const needle = query.trim().toLowerCase();
+  const filtered = guests.filter(
+    (g) =>
+      (statusFilter === "ALL" || g.rsvpStatus === statusFilter) &&
+      (!needle ||
+        guestName(g).toLowerCase().includes(needle) ||
+        (g.email ?? "").toLowerCase().includes(needle)),
+  );
+
   return (
     <>
       <PageHeader
         page="guests"
         action={
-          <>
-            <Button variant="secondary" icon="upload">
-              Import guests
-            </Button>
-            <Button onClick={onAdd} icon="plus">
-              Add guest
-            </Button>
-          </>
+          <Button onClick={onAdd} icon="plus">
+            Add guest
+          </Button>
         }
       />
       <div className="guest-summary">
         <div>
-          <div className="guest-ring">
-            <strong>86</strong>
-            <span>responses</span>
-          </div>
-        </div>
-        <div>
-          <b>72</b>
-          <span>Attending</span>
+          <b>{counts.ACCEPTED}</b>
+          <span>Accepted</span>
           <i className="green" />
         </div>
         <div>
-          <b>14</b>
-          <span>Declined</span>
+          <b>{counts.REJECTED}</b>
+          <span>Rejected</span>
           <i className="coral" />
         </div>
         <div>
-          <b>34</b>
-          <span>Awaiting</span>
+          <b>{counts.PENDING}</b>
+          <span>Pending</span>
           <i className="gray" />
         </div>
         <div>
-          <b>120</b>
-          <span>Total invited</span>
+          <b>{guests.length}</b>
+          <span>Total guests</span>
         </div>
       </div>
       <Card>
@@ -91,23 +169,28 @@ export function Guests({ onAdd }: { onAdd: () => void }) {
             />
           </div>
           <div className="toolbar-actions">
-            <button className="filter-btn">
-              All groups <Icon name="down" size={14} />
-            </button>
-            <button className="filter-btn">
-              RSVP status <Icon name="down" size={14} />
-            </button>
+            <select
+              className="guest-status-filter"
+              aria-label="Filter by RSVP status"
+              value={statusFilter}
+              onChange={(e) =>
+                setStatusFilter(isRsvpStatus(e.target.value) ? e.target.value : "ALL")
+              }
+            >
+              <option value="ALL">All RSVP statuses</option>
+              {RSVP_STATUSES.map((status) => (
+                <option value={status} key={status}>
+                  {rsvpDisplay[status].label}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>
-                  <input type="checkbox" aria-label="Select all guests" />
-                </th>
-                <th>Guest / Household</th>
-                <th>Group</th>
+                <th>Guest</th>
                 <th>Party size</th>
                 <th>RSVP</th>
                 <th>Meal choice</th>
@@ -115,43 +198,71 @@ export function Guests({ onAdd }: { onAdd: () => void }) {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((g) => (
-                <tr key={g.name}>
-                  <td>
-                    <input type="checkbox" aria-label={`Select ${g.name}`} />
-                  </td>
-                  <td>
-                    <div className="guest-name">
-                      <span>{initials(g.name)}</span>
-                      <b>
-                        {g.name}
-                        {g.name === "Sofia Martinez" && <small> + plus-one</small>}
-                      </b>
-                    </div>
-                  </td>
-                  <td>{g.group}</td>
-                  <td>{g.party}</td>
-                  <td>
-                    <Badge tone={rsvpTone(g.rsvp)}>{g.rsvp}</Badge>
-                  </td>
-                  <td>{g.meal}</td>
-                  <td>
-                    <button className="icon-btn" aria-label="More options">
-                      <Icon name="more" />
+              {filtered.map((g) => {
+                const name = guestName(g);
+                const status = rsvpDisplay[g.rsvpStatus];
+                const hasName = Boolean(g.firstName || g.lastName);
+                return (
+                  <tr key={g.guestId}>
+                    <td>
+                      <div className="guest-name">
+                        <span>{initials(name)}</span>
+                        <b>
+                          {name}
+                          {g.plusOneAllowed && <small> + plus-one</small>}
+                          {hasName && g.email && <small> · {g.email}</small>}
+                        </b>
+                      </div>
+                    </td>
+                    <td>{g.plusOneAllowed ? 2 : 1}</td>
+                    <td>
+                      <Badge tone={status.tone}>{status.label}</Badge>
+                    </td>
+                    <td>{g.mealChoice ?? "Not selected"}</td>
+                    <td>
+                      <button
+                        className="icon-btn"
+                        aria-label={`Edit ${name}`}
+                        title="Edit guest"
+                        onClick={() => setEditingId(g.guestId)}
+                      >
+                        <Icon name="more" />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="guest-no-match">
+                    No guests match your filters.{" "}
+                    <button
+                      className="text-link"
+                      onClick={() => {
+                        setQuery("");
+                        setStatusFilter("ALL");
+                      }}
+                    >
+                      Clear filters
                     </button>
                   </td>
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </div>
-        <div className="pagination">
-          <span>{filtered.length} households · 120 total guests</span>
-          <Button variant="ghost" icon="download">
-            Export CSV
-          </Button>
-        </div>
       </Card>
+      {editingGuest && (
+        <EditGuestModal
+          key={editingGuest.guestId}
+          guest={editingGuest}
+          onClose={() => setEditingId(null)}
+          onSave={(saved) => {
+            update((list) => list.map((g) => (g.guestId === saved.guestId ? saved : g)));
+            setEditingId(null);
+          }}
+        />
+      )}
     </>
   );
 }

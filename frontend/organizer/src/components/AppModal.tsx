@@ -38,10 +38,7 @@ const forms: Record<FormModal, { title: string; body: ReactNode; saved: string }
           <Field label="First name" placeholder="First name" />
           <Field label="Last name" placeholder="Last name" />
         </div>
-        <div className="form-row">
-          <Field label="Email" type="email" placeholder="guest@example.com" />
-          <Field label="Group" placeholder="Family, friends..." />
-        </div>
+        <Field label="Email" type="email" placeholder="guest@example.com" />
         <label className="check-field">
           <input type="checkbox" />
           <div>
