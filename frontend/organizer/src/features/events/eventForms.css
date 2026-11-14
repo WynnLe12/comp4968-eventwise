@@ -1,0 +1,19 @@
+@import "../expenses/expenses.css";
+
+/* Keep the shared Field layout while matching Expense's validation appearance. */
+.event-form .field-error {
+  color: #bc2940;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.event-form .field input[aria-invalid="true"],
+.event-form .field select[aria-invalid="true"] {
+  border-color: #d72d49;
+  box-shadow: none;
+}
+.event-delete-action { margin-right: auto; display: flex; }
+@media (max-width: 640px) {
+  .modal-footer:has(.event-delete-action) { flex-wrap: wrap; }
+  .event-delete-action { flex-basis: 100%; margin-right: 0; }
+  .event-delete-action .btn { width: 100%; }
+}

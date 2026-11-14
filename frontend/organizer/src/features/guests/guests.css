@@ -1,0 +1,52 @@
+/* RSVP status filter: a native select styled like the toolbar's .filter-btn. */
+.guest-status-filter {
+  height: 31px;
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #fff
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236d697a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+    no-repeat right 10px center;
+  padding: 0 30px 0 10px;
+  font-size: 9.5px;
+  color: #6d697a;
+  cursor: pointer;
+  outline: none;
+}
+.guest-status-filter:focus-visible {
+  border-color: var(--purple);
+  box-shadow: 0 0 0 3px #7958e81a;
+}
+
+.guest-no-match {
+  text-align: center;
+  color: var(--muted);
+  padding: 22px 12px;
+}
+
+.guest-form-error {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: #fff0ed;
+  color: #b8412f;
+  font-size: 11px;
+}
+.guest-form-fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+/* Edit guest footer: Delete (or the delete confirmation text) sits on the left. */
+.guest-footer-start {
+  margin-right: auto;
+  display: flex;
+  align-items: center;
+}
+.guest-delete-prompt {
+  font-size: 11px;
+  font-weight: 700;
+  color: #c95145;
+}

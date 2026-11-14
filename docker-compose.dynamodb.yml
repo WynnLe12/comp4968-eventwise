@@ -1,0 +1,26 @@
+# Local DynamoDB for the guest list (Feature 7). Not used in AWS (the real table is
+# EventWise_Guests in us-west-2). Kept separate from docker-compose.yml (MySQL).
+#
+#   npm run ddb:up             start (run from backend/)
+#   npm run ddb:create-table   create the guests table (once; safe to repeat)
+#   npm run ddb:down           stop; data is kept
+#   npm run ddb:reset          stop and wipe the data
+#
+# Point the backend at it with DYNAMODB_ENDPOINT=http://127.0.0.1:8000 in .env.
+name: eventwise-dynamodb
+
+services:
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: eventwise-dynamodb-local
+    # root so the image can write to the named volume
+    user: root
+    working_dir: /home/dynamodblocal
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/home/dynamodblocal/data"]
+    ports:
+      - "127.0.0.1:8000:8000" # localhost only
+    volumes:
+      - dynamodb-data:/home/dynamodblocal/data
+
+volumes:
+  dynamodb-data:
