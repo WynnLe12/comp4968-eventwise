@@ -1,5 +1,5 @@
 import { Button, Card, Icon } from "../../components/ui";
-import { PageHeader, StatCard } from "../../components/page";
+import { StatCard } from "../../components/page";
 import { useEvents } from "../events/EventsContext";
 import { eventDate, eventInitials, eventRole } from "../events/eventPresentation";
 import type { Page } from "../../types";
@@ -9,7 +9,11 @@ export function Dashboard({ go }: { go: (p: Page) => void }) {
   if (!selectedEvent) return null;
   return (
     <>
-      <PageHeader page="dashboard" action={<><Button variant="secondary" onClick={() => go("events")} icon="grid">View events</Button><Button onClick={openCreate} icon="plus">Create event</Button>{selectedEvent.role === "OWNER" && <Button variant="secondary" onClick={openEdit}>Edit event</Button>}</>} />
+      <div role="toolbar" aria-label="Event actions" style={{ display: "flex", justifyContent: "flex-end", flexWrap: "wrap", gap: 9, marginBottom: 16 }}>
+        <Button variant="secondary" onClick={() => go("events")} icon="grid">View events</Button>
+        <Button onClick={openCreate} icon="plus">Create event</Button>
+        {selectedEvent.role === "OWNER" && <Button variant="secondary" onClick={openEdit}>Edit event</Button>}
+      </div>
       <div className="dashboard-banner">
         <div>
           <div className="eyebrow">YOUR EVENT</div>
