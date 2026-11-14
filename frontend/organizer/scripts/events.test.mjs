@@ -1022,7 +1022,7 @@ test("merged template dropdown draft submits the chosen templateId and totalBudg
     assert.match(html, /42%/);
     assert.match(html, /42.00/);
     assert.match(html, /58.01/);
-    assert.match(html, /Preview only/);
+    assert.doesNotMatch(html, /Preview only/);
   });
 });
 

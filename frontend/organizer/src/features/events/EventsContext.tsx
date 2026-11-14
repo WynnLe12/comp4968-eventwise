@@ -8,6 +8,28 @@ import { useEventDetails } from "./hooks/useEventDetails";
 type EventState = { userId: string | null; events: OrganizerEvent[]; selectedId: string | null; status: "loading" | "ready" | "empty" | "error"; error: string };
 const initialState: EventState = { userId: null, events: [], selectedId: null, status: "loading", error: "" };
 
+const selectedEventKey = (userId: string) => `eventwise:selected-event:${userId}`;
+
+function readSelectedEvent(userId: string): string | null {
+  try {
+    return window.sessionStorage.getItem(selectedEventKey(userId));
+  } catch {
+    return null;
+  }
+}
+
+function rememberSelectedEvent(userId: string, eventId: string | null) {
+  try {
+    if (eventId) {
+      window.sessionStorage.setItem(selectedEventKey(userId), eventId);
+    } else {
+      window.sessionStorage.removeItem(selectedEventKey(userId));
+    }
+  } catch {
+    // Selection still works if browser storage is unavailable.
+  }
+}
+
 export function useEventList(onSessionExpired: () => void) {
   const [state, setState] = useState<EventState>(initialState);
   const selection = useRef<{ userId: string; id: string | null } | null>(null);
@@ -45,9 +67,10 @@ export function useEventList(onSessionExpired: () => void) {
       const result = await listEvents(controller.signal);
       if (current !== version.current) return false;
       const preferredId = preferred?.userId === result.userId ? preferred.id : null;
-      const previousId = preferredId ?? (selection.current?.userId === result.userId ? selection.current.id : null);
+      const previousId = preferredId ?? (selection.current?.userId === result.userId ? selection.current.id : null) ?? readSelectedEvent(result.userId);
       const id = result.events.find((event) => event.event_id === previousId)?.event_id ?? result.events[0]?.event_id ?? null;
       selection.current = { userId: result.userId, id };
+      rememberSelectedEvent(result.userId, id);
       setState({ userId: result.userId, events: result.events, selectedId: id, status: result.events.length ? "ready" : "empty", error: "" });
       return !preferred || (preferred.userId === result.userId && id === preferred.id);
     } catch (error) {
@@ -86,6 +109,7 @@ export function useEventList(onSessionExpired: () => void) {
   const selectEvent = (id: string) => {
     if (state.status !== "ready" || !state.events.some((event) => event.event_id === id)) return;
     if (selection.current) selection.current.id = id;
+    if (state.userId) rememberSelectedEvent(state.userId, id);
     setState((previous) => ({ ...previous, selectedId: id }));
   };
   const isCurrentEvent = useCallback((userId: string, id: string) => selection.current?.userId === userId && selection.current.id === id, []);
