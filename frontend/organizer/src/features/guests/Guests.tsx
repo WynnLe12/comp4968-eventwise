@@ -141,9 +141,9 @@ export function Guests({
   const filtered = guests.filter(
     (g) =>
       (statusFilter === "ALL" || g.rsvpStatus === statusFilter) &&
+      // Name only: first + last name. Not the email, even when it's shown in place of a name.
       (!needle ||
-        guestName(g).toLowerCase().includes(needle) ||
-        (g.email ?? "").toLowerCase().includes(needle)),
+        [g.firstName, g.lastName].filter(Boolean).join(" ").toLowerCase().includes(needle)),
   );
 
   return (
@@ -182,8 +182,8 @@ export function Guests({
           <div className="search-input">
             <Icon name="search" />
             <input
-              placeholder="Search guests..."
-              aria-label="Search guests"
+              placeholder="Search by name..."
+              aria-label="Search guests by name"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
