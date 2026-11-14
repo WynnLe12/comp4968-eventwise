@@ -19,7 +19,11 @@
     "db:check": "tsx shared/db/check.ts",
     "test:db": "npm run build && node dist/verification/expenses-mysql.js",
     "test:payments:db": "npm run build && node dist/verification/payments-mysql.js",
-    "test:summary:db": "npm run build && node dist/verification/summary-mysql.js"
+    "test:summary:db": "npm run build && node dist/verification/summary-mysql.js",
+    "ddb:up": "docker compose -f ../docker-compose.dynamodb.yml up -d",
+    "ddb:down": "docker compose -f ../docker-compose.dynamodb.yml down",
+    "ddb:reset": "docker compose -f ../docker-compose.dynamodb.yml down -v",
+    "ddb:create-table": "tsx guest-service/scripts/createLocalTable.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

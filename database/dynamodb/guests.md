@@ -91,5 +91,27 @@ New attributes need no migration; the index can be added to the existing table.
 
 ## Local development
 
-The repository's `GuestRepository` connects to DynamoDB Local when `DYNAMODB_ENDPOINT`
-is set (for example `http://127.0.0.1:8000`) and uses the same table definition.
+The same code runs against either database. Only `.env` changes:
+
+| Mode | `.env` | Database |
+| --- | --- | --- |
+| Local | `DYNAMODB_ENDPOINT=http://127.0.0.1:8000` | DynamoDB Local in Docker. No AWS keys needed |
+| AWS | `DYNAMODB_ENDPOINT` not set | The real `EventWise_Guests` table in us-west-2. Needs AWS credentials (`aws configure`) when run on your machine; on Lambda the execution role is used |
+
+To run locally (Docker Desktop must be running), from `backend/`:
+
+```sh
+npm run ddb:up             # start DynamoDB Local on 127.0.0.1:8000 (docker-compose.dynamodb.yml)
+npm run ddb:create-table   # create EventWise_Guests in DynamoDB Local; safe to run again
+```
+
+Then set `DYNAMODB_ENDPOINT=http://127.0.0.1:8000` in `.env` and start the backend as usual.
+
+- `npm run ddb:down` stops DynamoDB Local and keeps the data; `npm run ddb:reset` also wipes it
+  (run `ddb:create-table` again after a reset).
+- `ddb:create-table` refuses to run unless `DYNAMODB_ENDPOINT` points at this machine, so it
+  never creates or changes the AWS table.
+- With `DYNAMODB_ENDPOINT` set, the client always uses dummy credentials, so real AWS keys are
+  never sent to the local endpoint.
+- DynamoDB Local is kept in its own `docker-compose.dynamodb.yml` and does not change the MySQL
+  `docker-compose.yml`.
