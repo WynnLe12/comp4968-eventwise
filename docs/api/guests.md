@@ -12,10 +12,11 @@ Guest data lives in the DynamoDB table `EventWise_Guests`
 Every route requires a signed-in organizer and checks that the user is a member
 of `{eventId}` (`event_members`, either role) before doing anything else.
 
-- Send `Authorization: Bearer <Cognito access token>`, the same header as the Events API.
-  The backend verifies it with `backend/shared/auth/verifyToken.ts`.
-- Responses are plain JSON with no `{ "data": ... }` wrapper, matching the Events API.
+- Send `Authorization: Bearer <Cognito access token>`, the same header as the other APIs.
+- Responses are plain JSON with no `{ "data": ... }` wrapper, like the Vendors and Events APIs.
 - `eventId` and `guestId` are strings, as with `event_id` in the Events API.
+- The routes use the shared route shape (`backend/shared/http/routes.ts`) and membership check
+  (`backend/shared/auth/requireMember.ts`), like the Vendors routes.
 
 | Method | Path | Request body | Success |
 | --- | --- | --- | --- |
@@ -99,20 +100,26 @@ by Feature 7. RSVP counts (attending/declined/awaiting) come with Feature 8.
 
 ## 4. Errors
 
-Errors use the same format as the Events, Budget and Templates code on `dev`: one
-human-readable message.
+Errors use the shared `ApiError` format, the same as the Vendors and Expenses routes under
+`/events/{eventId}/...`:
 
 ```json
-{ "error": "firstName is required and must contain at most 100 characters" }
+{ "error": { "code": "VALIDATION_ERROR", "message": "Check the submitted fields.", "fields": { "firstName": "Required." } } }
 ```
 
-| Status | When |
-| --- | --- |
-| 400 | Malformed JSON, an invalid `eventId`, or a field that breaks the rules in section 2 |
-| 401 | Missing, invalid or expired token |
-| 403 | The user is not a member of the event |
-| 404 | The event does not exist, or the guest does not exist in this event |
-| 500 | Anything unexpected (generic message; details are only logged) |
+`fields` appears only on `422`. Its keys are the JSON field names, so the frontend can show
+each message under its input.
+
+| Status | `code` | When |
+| --- | --- | --- |
+| 400 | `BAD_REQUEST` | Malformed JSON |
+| 401 | `UNAUTHENTICATED` | Missing, invalid or expired token |
+| 403 | `FORBIDDEN` | The user is not a member of the event. Also returned when the event does not exist or `eventId` is not a valid ID, so the API never reveals which events exist |
+| 404 | `NOT_FOUND` | The guest does not exist in this event (including a guest of another event) |
+| 413 | `PAYLOAD_TOO_LARGE` | Request body over 16 KiB |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | Body sent without `Content-Type: application/json` |
+| 422 | `VALIDATION_ERROR` | A field breaks the rules in section 2, or a PATCH body has no editable field |
+| 500 | `INTERNAL_ERROR` | Anything unexpected (generic message; details are only logged) |
 
 ## 5. Examples
 
@@ -144,8 +151,7 @@ Content-Type: application/json
 | --- | --- | --- |
 | 1 | Guest fields: first/last name vs one name field? Plus-one as a checkbox, or households with a party size as in the mockup? Fixed meal options or free text? Fixed groups or free text? | Hei, Heather |
 | 2 | Headcount numbers to show on the Guests page | Hei, Heather |
-| 3 | Do guest routes run inside the Event API Lambda or in a separate Guests Lambda? The local `server.ts` currently runs every route in one process. Does not change this contract | Wynn, Nico |
+| 3 | Confirm that guest routes run inside the Event API Lambda, as `shared/http/routes.ts` describes for every feature, rather than a separate Guests Lambda. Does not change this contract | Wynn, Nico |
 
-Decided by the code merged into `dev` (PR #2): `Bearer` access token, plain response bodies,
-IDs as strings, and the error format in section 4 (adopted for now; revisit if the team
-moves to a shared format).
+Decided by the code on `dev`: `Bearer` access token, plain response bodies, IDs as strings,
+and the shared `ApiError` format with `requireMember()` (section 4).
