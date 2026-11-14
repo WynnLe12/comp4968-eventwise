@@ -1,20 +1,9 @@
+import { createCognitoAuthenticator } from "./cognito";
 
-import { CognitoJwtVerifier } from "aws-jwt-verify";
+// Keep the event handler API; verify lazily so health checks and isolated tests
+// don't require Cognito configuration until an authenticated request is made.
+const authenticate = createCognitoAuthenticator();
 
-const userPoolId = process.env.COGNITO_USER_POOL_ID;
-const clientId = process.env.COGNITO_CLIENT_ID;
-
-if (!userPoolId || !clientId) {
-  throw new Error("Missing Cognito environment configuration");
-}
-
-const verifier = CognitoJwtVerifier.create({
-  userPoolId,
-  tokenUse: "access",
-  clientId,
-});
-
-export async function verifyToken(token: string): Promise<string> {
-  const payload = await verifier.verify(token);
-  return payload.sub;
+export function verifyToken(token: string): Promise<string> {
+  return authenticate("Bearer " + token);
 }

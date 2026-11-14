@@ -1,4 +1,4 @@
-import type { Pool, RowDataPacket } from "mysql2/promise";
+import type { Pool, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { db } from "../../shared/db/db";
 
 export interface EventInput {
@@ -24,10 +24,136 @@ export interface EventWithMembership extends EventRecord {
   role: ListedEvent["role"] | null;
 }
 
-export class InvalidTemplateError extends Error {}
+export class InvalidTemplateError extends Error { }
+export class EventDeletionBlockedError extends Error {
+  constructor(readonly reason: "payments" | "references") { super(reason); }
+}
+
+interface TemplateCategoryRow extends RowDataPacket {
+  template_category_id: string;
+  name: string;
+  default_percentage: string;
+  sort_order: number;
+}
+
+function allocateTemplateBudget(
+  totalBudget: string,
+  categories: TemplateCategoryRow[],
+): string[] {
+  if (!categories.length) return [];
+
+  const [whole, fraction = ""] = totalBudget.split(".");
+  const totalCents =
+    BigInt(whole) * 100n + BigInt(fraction.padEnd(2, "0"));
+
+  const percentageUnits = categories.map((category) => {
+    const value = String(category.default_percentage);
+
+    if (!/^\d{1,3}(\.\d{1,2})?$/.test(value)) {
+      throw new InvalidTemplateError("Invalid template percentage");
+    }
+
+    const [integer, decimal = ""] = value.split(".");
+    const units =
+      BigInt(integer) * 100n +
+      BigInt(decimal.padEnd(2, "0"));
+
+    if (units > 10000n) {
+      throw new InvalidTemplateError("Invalid template percentage");
+    }
+
+    return units;
+  });
+
+  const percentageTotal = percentageUnits.reduce(
+    (sum, value) => sum + value,
+    0n,
+  );
+
+  if (percentageTotal !== 10000n) {
+    throw new InvalidTemplateError(
+      "Template allocations must total 100%",
+    );
+  }
+
+  const products = percentageUnits.map(
+    (percentage) => totalCents * percentage,
+  );
+
+  const amounts = products.map(
+    (product) => product / 10000n,
+  );
+
+  const allocated = amounts.reduce(
+    (sum, amount) => sum + amount,
+    0n,
+  );
+
+  const remaining = Number(totalCents - allocated);
+
+  const order = products
+    .map((product, index) => ({
+      index,
+      remainder: product % 10000n,
+    }))
+    .sort((a, b) => {
+      if (a.remainder === b.remainder) {
+        return a.index - b.index;
+      }
+
+      return a.remainder > b.remainder ? -1 : 1;
+    });
+
+  for (let index = 0; index < remaining; index++) {
+    amounts[order[index].index] += 1n;
+  }
+
+  return amounts.map(
+    (cents) =>
+      `${cents / 100n}.${String(cents % 100n).padStart(2, "0")}`,
+  );
+}
 
 export class EventRepository {
-  constructor(private readonly pool: Pick<Pool, "getConnection"> = db) {}
+  constructor(private readonly pool: Pick<Pool, "getConnection"> = db) { }
+
+  async delete(eventId: string, cognitoSub: string, authorize: (event: Pick<EventWithMembership, "role"> | undefined) => void): Promise<void> {
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [events] = await connection.execute<(RowDataPacket & Pick<EventWithMembership, "role">)[]>(
+        `SELECT m.role FROM events e LEFT JOIN event_members m
+         ON m.event_id = e.event_id AND m.cognito_sub = ? WHERE e.event_id = ? FOR UPDATE`, [cognitoSub, eventId],
+      );
+      authorize(events[0]);
+      // Lock parents before checking references, preventing new FK references during deletion.
+      await connection.execute("SELECT expense_id FROM expenses WHERE event_id = ? FOR UPDATE", [eventId]);
+      await connection.execute("SELECT member_id FROM event_members WHERE event_id = ? FOR UPDATE", [eventId]);
+      await connection.execute("SELECT document_id FROM event_documents WHERE event_id = ? FOR UPDATE", [eventId]);
+      const [payments] = await connection.execute<RowDataPacket[]>(
+        `SELECT p.payment_id FROM expense_payments p JOIN expenses e ON e.expense_id = p.expense_id
+         WHERE e.event_id = ? LIMIT 1 FOR UPDATE`, [eventId],
+      );
+      if (payments.length) throw new EventDeletionBlockedError("payments");
+      const [tasks] = await connection.execute<RowDataPacket[]>(
+        `SELECT t.task_id FROM tasks t JOIN event_members m ON m.member_id = t.assigned_member_id
+         WHERE m.event_id = ? AND t.event_id <> ? LIMIT 1 FOR UPDATE`, [eventId, eventId],
+      );
+      const [drafts] = await connection.execute<RowDataPacket[]>(
+        `SELECT b.draft_id FROM draft_budget_items b JOIN event_documents d ON d.document_id = b.document_id
+         WHERE d.event_id = ? AND b.event_id <> ? LIMIT 1 FOR UPDATE`, [eventId, eventId],
+      );
+      if (tasks.length || drafts.length) throw new EventDeletionBlockedError("references");
+      // RESTRICT links to vendors/categories require expenses to be removed first.
+      await connection.execute("DELETE FROM expenses WHERE event_id = ?", [eventId]);
+      const [result] = await connection.execute<ResultSetHeader>("DELETE FROM events WHERE event_id = ?", [eventId]);
+      if (result.affectedRows !== 1) throw new Error("Event deletion was not completed");
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally { connection.release(); }
+  }
 
   async update(
     eventId: string,
@@ -146,11 +272,52 @@ export class EventRepository {
       );
       const event = events[0];
       if (!event) throw new Error("Created event could not be read");
+
       await connection.execute(
         "INSERT INTO event_members (event_id, cognito_sub, role) VALUES (?, ?, 'OWNER')",
         [event.event_id, cognitoSub],
       );
+
+      // Initialize budget categories from the selected event template.
+      if (input.template_id !== null) {
+        const [templateCategories] =
+          await connection.execute<TemplateCategoryRow[]>(
+            `SELECT
+         CAST(template_category_id AS CHAR) AS template_category_id,
+         name,
+         CAST(default_percentage AS CHAR) AS default_percentage,
+         sort_order
+       FROM template_budget_categories
+       WHERE template_id = ?
+       ORDER BY sort_order, template_category_id`,
+            [input.template_id],
+          );
+
+        const plannedAmounts = allocateTemplateBudget(
+          input.total_budget,
+          templateCategories,
+        );
+
+        for (let index = 0; index < templateCategories.length; index++) {
+          const category = templateCategories[index];
+
+          await connection.execute(
+            `INSERT INTO budget_categories
+         (event_id, name, allocation_percentage, planned_amount, sort_order)
+       VALUES (?, ?, ?, ?, ?)`,
+            [
+              event.event_id,
+              category.name,
+              category.default_percentage,
+              plannedAmounts[index],
+              category.sort_order,
+            ],
+          );
+        }
+      }
+
       await connection.commit();
+
       return event;
     } catch (error) {
       await connection.rollback();

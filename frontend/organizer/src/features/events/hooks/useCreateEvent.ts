@@ -52,6 +52,7 @@ export function useCreateEvent(options: CreateEventCallbacks) {
     } catch (failure) {
       if (current !== version.current) return;
       if (failure instanceof EventSessionError) callbacks.current.onSessionExpired();
+      if (failure instanceof EventCreateError && failure.fieldErrors && Object.values(failure.fieldErrors).some(Boolean)) return failure.fieldErrors;
       setError(failure instanceof EventValidationError || failure instanceof EventCreateError || failure instanceof EventSessionError
         ? failure.message : "Unable to complete the request. Check your connection and event list before retrying.");
     } finally {
@@ -59,5 +60,5 @@ export function useCreateEvent(options: CreateEventCallbacks) {
       if (current === version.current) setLoading(false);
     }
   };
-  return { loading, created, error, submit, close: () => { if (!pending.current) callbacks.current.onClose(); } };
+  return { loading, created, error, submit, close: () => { if (!pending.current) { setError(""); callbacks.current.onClose(); } } };
 }

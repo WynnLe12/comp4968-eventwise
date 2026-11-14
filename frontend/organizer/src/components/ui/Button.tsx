@@ -8,7 +8,7 @@ export function Button({
   icon,
   onClick,
   type = "button",
-  disabled = false,
+  disabled,
   form,
 }: {
   children: ReactNode;
@@ -17,10 +17,17 @@ export function Button({
   onClick?: () => void;
   type?: "button" | "submit";
   disabled?: boolean;
+  /** Id of the form this button submits when it sits outside the form (e.g. a modal footer). */
   form?: string;
 }) {
   return (
-    <button type={type} className={`btn btn-${variant}`} onClick={onClick} disabled={disabled} form={form}>
+    <button
+      type={type}
+      className={`btn btn-${variant}`}
+      onClick={onClick}
+      disabled={disabled}
+      form={form}
+    >
       {icon && <Icon name={icon} size={16} />} {children}
     </button>
   );

@@ -21,6 +21,7 @@ export function StatCard({
   detail,
   icon,
   tone = "purple",
+  selected,
   onClick,
 }: {
   label: string;
@@ -28,16 +29,17 @@ export function StatCard({
   detail: string;
   icon: string;
   tone?: string;
+  selected?: boolean;
   onClick?: () => void;
 }) {
   return (
-    <Card className="stat-card">
+    <Card className={selected ? "stat-card stat-card-selected" : "stat-card"}>
       <div className={`stat-icon ${tone}`}>
         <Icon name={icon} />
       </div>
       <div className="stat-top">
         <span>{label}</span>
-        <button onClick={onClick} aria-label={`Open ${label}`}>
+        <button onClick={onClick} aria-label={`Open ${label}`} aria-pressed={selected}>
           <Icon name="chevron" size={15} />
         </button>
       </div>
@@ -61,19 +63,36 @@ export function EmptyState({
   title,
   message,
   action,
+  icon = "spark",
 }: {
   title: string;
   message: string;
   action?: ReactNode;
+  icon?: string;
 }) {
   return (
     <div className="state-card">
       <div className="state-icon">
-        <Icon name="spark" />
+        <Icon name={icon} />
       </div>
       <h2>{title}</h2>
       <p>{message}</p>
       {action}
+    </div>
+  );
+}
+
+export function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="state-card state-error" role="alert">
+      <div className="state-icon">
+        <Icon name="bell" />
+      </div>
+      <h2>We hit a little snag</h2>
+      <p>{message}</p>
+      <button className="btn btn-primary" onClick={onRetry}>
+        Try again
+      </button>
     </div>
   );
 }

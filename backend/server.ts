@@ -1,3 +1,13 @@
+import "./shared/config/environment";
+import { ExpenseService } from "./expense-service/services/expenses";
+import { MySqlExpenseRepository } from "./expense-service/repositories/mysql-expenses";
+import { expenseHttpHandler } from "./expense-service/handlers/http";
+import { createCognitoAuthenticator, type Authenticate } from "./shared/auth/cognito";
+
+export interface AppDependencies {
+  expenses?: ExpenseService;
+  authenticate?: Authenticate;
+}
 import { createServer, type Server } from "node:http";
 import { handleTemplates } from "./event-service/handlers/templates";
 import { handleBudgetCategories } from "./event-service/handlers/budgetCategories";
@@ -31,18 +41,25 @@ import {
   updateEventHandler,
   type UpdateEventDependencies,
 } from "./event-service/handlers/updateEventHandler";
+import { deleteEventHandler, type DeleteEventDependencies } from "./event-service/handlers/deleteEventHandler";
 
 export function createAppServer(
-  eventDependencies: Partial<CreateEventDependencies> = {},
+  eventDependencies: Partial<CreateEventDependencies> & AppDependencies = {},
   listDependencies: Partial<ListEventsDependencies> = {},
   getDependencies: Partial<GetEventDependencies> = {},
   updateDependencies: Partial<UpdateEventDependencies> = {},
+  deleteDependencies: Partial<DeleteEventDependencies> = {},
 ): Server {
   // Feature 1: Event Management (Wynn)
   const handleCreateEvent = createEventHandler(eventDependencies);
   const handleListEvents = listEventsHandler(listDependencies);
   const handleGetEvent = getEventHandler(getDependencies);
   const handleUpdateEvent = updateEventHandler(updateDependencies);
+  const handleDeleteEvent = deleteEventHandler(deleteDependencies);
+  const expenses = expenseHttpHandler(
+    eventDependencies.expenses ?? new ExpenseService(new MySqlExpenseRepository()),
+    eventDependencies.authenticate ?? createCognitoAuthenticator(),
+  );
 
   return createServer((request, response) => {
     const path = request.url?.split("?")[0] ?? "/";
@@ -70,6 +87,12 @@ export function createAppServer(
     // Feature 1: Update event
     if (request.method === "PATCH" && eventMatch) {
       void handleUpdateEvent(request, response, eventMatch[1]);
+      return;
+    }
+
+    // Feature 1: Delete event
+    if (request.method === "DELETE" && eventMatch) {
+      void handleDeleteEvent(request, response, eventMatch[1]);
       return;
     }
 
@@ -217,8 +240,8 @@ export function createAppServer(
 
     // Feature 11: Event Templates (Lulu)
     void handleTemplates(request.method, path, response)
-      .then((handled) => {
-        if (!handled) {
+      .then(async (handled) => {
+        if (!handled && !await expenses(request, response)) {
           sendJson<ErrorResponse>(response, 404, {
             error: "Not found",
           });

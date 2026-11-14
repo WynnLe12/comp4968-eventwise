@@ -1,12 +1,34 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Hub } from "aws-amplify/utils";
-import { EventSessionError, listEvents, type OrganizerEvent } from "./services/eventApi";
+import { EventSessionError, listEvents, type DeleteEventResult, type OrganizerEvent } from "./services/eventApi";
 
 import { EditEventModal } from "./components/EditEventModal";
 import { useEventDetails } from "./hooks/useEventDetails";
 
 type EventState = { userId: string | null; events: OrganizerEvent[]; selectedId: string | null; status: "loading" | "ready" | "empty" | "error"; error: string };
 const initialState: EventState = { userId: null, events: [], selectedId: null, status: "loading", error: "" };
+
+const selectedEventKey = (userId: string) => `eventwise:selected-event:${userId}`;
+
+function readSelectedEvent(userId: string): string | null {
+  try {
+    return window.sessionStorage.getItem(selectedEventKey(userId));
+  } catch {
+    return null;
+  }
+}
+
+function rememberSelectedEvent(userId: string, eventId: string | null) {
+  try {
+    if (eventId) {
+      window.sessionStorage.setItem(selectedEventKey(userId), eventId);
+    } else {
+      window.sessionStorage.removeItem(selectedEventKey(userId));
+    }
+  } catch {
+    // Selection still works if browser storage is unavailable.
+  }
+}
 
 export function useEventList(onSessionExpired: () => void) {
   const [state, setState] = useState<EventState>(initialState);
@@ -45,9 +67,10 @@ export function useEventList(onSessionExpired: () => void) {
       const result = await listEvents(controller.signal);
       if (current !== version.current) return false;
       const preferredId = preferred?.userId === result.userId ? preferred.id : null;
-      const previousId = preferredId ?? (selection.current?.userId === result.userId ? selection.current.id : null);
+      const previousId = preferredId ?? (selection.current?.userId === result.userId ? selection.current.id : null) ?? readSelectedEvent(result.userId);
       const id = result.events.find((event) => event.event_id === previousId)?.event_id ?? result.events[0]?.event_id ?? null;
       selection.current = { userId: result.userId, id };
+      rememberSelectedEvent(result.userId, id);
       setState({ userId: result.userId, events: result.events, selectedId: id, status: result.events.length ? "ready" : "empty", error: "" });
       return !preferred || (preferred.userId === result.userId && id === preferred.id);
     } catch (error) {
@@ -86,14 +109,29 @@ export function useEventList(onSessionExpired: () => void) {
   const selectEvent = (id: string) => {
     if (state.status !== "ready" || !state.events.some((event) => event.event_id === id)) return;
     if (selection.current) selection.current.id = id;
+    if (state.userId) rememberSelectedEvent(state.userId, id);
     setState((previous) => ({ ...previous, selectedId: id }));
   };
   const isCurrentEvent = useCallback((userId: string, id: string) => selection.current?.userId === userId && selection.current.id === id, []);
-  return { isCurrentEvent, expireSession: () => sessionExpired.current(), ...state, selectedEvent: state.events.find((event) => event.event_id === state.selectedId) ?? null, selectEvent, refresh };
+  const removeEvent = useCallback((result: DeleteEventResult) => {
+    if (selection.current?.userId !== result.userId) return false;
+    ++version.current;
+    pending.current?.abort();
+    const id = selection.current.id === result.eventId ? null : selection.current.id;
+    selection.current = { userId: result.userId, id };
+    rememberSelectedEvent(result.userId, id);
+    setState((previous) => {
+      if (previous.userId !== result.userId) return previous;
+      const events = previous.events.filter((event) => event.event_id !== result.eventId);
+      return { ...previous, events, selectedId: id, status: events.length ? "ready" : "empty", error: "" };
+    });
+    return true;
+  }, []);
+  return { isCurrentEvent, removeEvent, expireSession: () => sessionExpired.current(), ...state, selectedEvent: state.events.find((event) => event.event_id === state.selectedId) ?? null, selectEvent, refresh };
 }
 
 const EventsContext = createContext<(ReturnType<typeof useEventList> & ReturnType<typeof useEventDetails> & { openCreate: () => void; openEdit: () => void }) | null>(null);
-export function EventsProvider({ children, onSessionExpired, onCreate }: { children: ReactNode; onSessionExpired: () => void; onCreate: () => void }) {
+export function EventsProvider({ children, onSessionExpired, onCreate, onEdit, onDeleted }: { children: ReactNode; onSessionExpired: () => void; onCreate: () => void; onEdit?: () => void; onDeleted?: () => void }) {
   const events = useEventList(onSessionExpired);
   const details = useEventDetails(events.selectedId, events.userId, onSessionExpired);
   const [editing, setEditing] = useState<{ userId: string; event: OrganizerEvent } | null>(null);
@@ -102,15 +140,21 @@ export function EventsProvider({ children, onSessionExpired, onCreate }: { child
   useEffect(() => { if (editing && !visible) setEditing(null); }, [editing, visible]);
   const openEdit = () => {
     if (events.userId && details.eventDetails?.role === "OWNER") {
+      onEdit?.();
       setEditing({ userId: events.userId, event: details.eventDetails });
     }
   };
-  return <EventsContext.Provider value={{ ...events, ...details, openCreate: onCreate, openEdit }}>
+  return <EventsContext.Provider value={{ ...events, ...details, openCreate: () => { setEditing(null); onCreate(); }, openEdit }}>
     {children}
     {editing && visible && <EditEventModal
       key={`${editing.userId}/${editing.event.event_id}`} event={editing.event} userId={editing.userId}
       isCurrent={() => events.isCurrentEvent(editing.userId, editing.event.event_id)}
       onClose={() => setEditing(null)} onComplete={() => setEditing(null)} onSessionExpired={onSessionExpired}
+      onDeleted={(result) => {
+        if (!events.removeEvent(result)) return;
+        setEditing(null);
+        onDeleted?.();
+      }}
       onUpdated={async (result) => {
         if (!events.isCurrentEvent(editing.userId, editing.event.event_id) || result.userId !== editing.userId) return false;
         const refreshed = await events.refresh({ userId: editing.userId, id: editing.event.event_id });

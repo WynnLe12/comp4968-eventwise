@@ -14,6 +14,12 @@ function loadModule(path, imports, replacements = {}) {
   });
   const module = { exports: {} };
   new Function("require", "module", "exports", outputText)((name) => {
+    if (!(name in imports)) {
+      if (name.endsWith("/utils/eventFormValidation")) return loadModule("../src/features/events/utils/eventFormValidation.ts", {});
+      if (name.endsWith("/hooks/useEventValidation")) return loadModule("../src/features/events/hooks/useEventValidation.ts", { react: imports.react });
+      if (name.endsWith(".css")) return {};
+      if (name === "./DeleteEventDialog") return loadModule("../src/features/events/components/DeleteEventDialog.tsx", { "react/jsx-runtime": jsxRuntime, "../../../components/ui": imports["../../../components/ui"] });
+    }
     assert.ok(name in imports, `Unexpected import: ${name}`);
     return imports[name];
   }, module, module.exports);
@@ -63,6 +69,30 @@ test("empty backend results stay empty, without mock events", async () => {
   await withApi(async () => Response.json([]), async (api) => {
     assert.deepEqual(await api.listEvents(), { userId: "user-a", events: [] });
   });
+});
+
+test("delete API uses the exact event ID, Cognito token and DELETE /api/events/:id with no body", async () => {
+  const controller = new AbortController();
+  await withApi(async (url, options) => {
+    assert.equal(url, `/api/events/${first.event_id}`); assert.equal(options.method, "DELETE");
+    assert.deepEqual(options.headers, { Authorization: "Bearer access-token-a" });
+    assert.equal(options.body, undefined); assert.equal(options.signal, controller.signal);
+    return new Response(null, { status: 204 });
+  }, async (api) => assert.deepEqual(await api.deleteEvent(first.event_id, controller.signal, "user-a"), { userId: "user-a", eventId: first.event_id }));
+  await withApi(async () => assert.fail("No request allowed"), async (api) => {
+    await assert.rejects(api.deleteEvent("0"), api.EventValidationError);
+    await assert.rejects(api.deleteEvent(first.event_id, undefined, "other-account"), /account changed/);
+  });
+});
+
+test("delete API handles 401/403/404/409/500 safely, and rejects stale account results", async () => {
+  for (const status of [401, 403, 404, 409, 500]) await withApi(async () => Response.json({ error: "private SQL data" }, { status }), async (api) => {
+    await assert.rejects(api.deleteEvent(first.event_id), (error) => status === 401 ? error instanceof api.EventSessionError
+      : error instanceof api.EventDeleteError && error.status === status && !error.message.includes("private"));
+  });
+  await withApi(async () => new Response(null, { status: 204 }), async (api) => {
+    await assert.rejects(api.deleteEvent(first.event_id), /account changed/);
+  }, { getCurrentUser: async () => ({ userId: "other-account" }) });
 });
 
 test("expired sessions/401 never return cached events and authentication failures skip fetch", async () => {
@@ -191,6 +221,22 @@ test("event selection is shared, rejects foreign IDs, and survives refresh only 
   });
 });
 
+test("confirmed deletion clears selection, removes only that user's event, and invalidates stale list requests", async () => {
+  await withListHook(async ({ render, requests, settle }) => {
+    requests[0].resolve({ userId: "user-a", events: [first, second] }); await settle();
+    const pending = render().refresh(undefined, true);
+    assert.equal(render().removeEvent({ userId: "other-account", eventId: first.event_id }), false);
+    assert.deepEqual(render().events, [first, second]);
+    assert.equal(render().removeEvent({ userId: "user-a", eventId: first.event_id }), true);
+    assert.equal(render().selectedEvent, null); assert.equal(render().selectedId, null);
+    assert.deepEqual(render().events, [second]); assert.ok(requests[1].signal.aborted);
+    requests[1].resolve({ userId: "user-a", events: [first, second] }); await pending;
+    assert.deepEqual(render().events, [second]);
+    render().removeEvent({ userId: "user-a", eventId: second.event_id });
+    assert.deepEqual(render().events, []); assert.equal(render().status, "empty");
+  });
+});
+
 test("empty/error states clear events and support retry, while session errors notify the app", async () => {
   await withListHook(async ({ render, requests, settle, expired, EventSessionError }) => {
     requests[0].resolve({ userId: "user-a", events: [] });
@@ -305,8 +351,13 @@ test("event workspace renders loading, empty, retry, and unavailable states inst
   assert.match(render(), /Try again/);
   state = { ...state, status: "ready" };
   assert.match(render(), /LIVE CONTENT/);
-  assert.match(render("vendors"), /not available for this event/);
-  assert.doesNotMatch(render("vendors"), /LIVE CONTENT/);
+  assert.match(render("guests"), /not available for this event/);
+  assert.doesNotMatch(render("guests"), /LIVE CONTENT/);
+  for (const feature of ["vendors", "expenses"]) {
+    assert.match(render(feature), /Preview: sample vendors and expenses/);
+    assert.match(render(feature), /aren&#x27;t saved to your selected event|aren't saved to your selected event/);
+    assert.match(render(feature), /LIVE CONTENT/);
+  }
 });
 
 
@@ -509,7 +560,7 @@ test("logout or account changes abort submission and ignore late creation result
 
 test("the reused create modal starts blank, uses a real submit form, and displays pending/retry states", () => {
   let submission = { loading: false, created: false, error: "", submit: () => {}, close: () => {} };
-  const Field = loadModule("../src/components/ui/Field.tsx", { "react/jsx-runtime": jsxRuntime }).Field;
+  const Field = loadModule("../src/components/ui/Field.tsx", { react: { useId: () => "test-field-message" }, "react/jsx-runtime": jsxRuntime }).Field;
   const Button = loadModule("../src/components/ui/Button.tsx", { "react/jsx-runtime": jsxRuntime, "./Icon": { Icon: ui.Icon } }).Button;
   const api = loadModule("../src/features/events/components/CreateEventModal.tsx", {
     react: React, "react/jsx-runtime": jsxRuntime,
@@ -736,6 +787,9 @@ test("detail loading and authorization errors hide dashboard content but keep ev
   const render = (currentPage = "dashboard") => renderToStaticMarkup(React.createElement(api.EventWorkspace, { page: currentPage }, "EVENT CONTENT"));
   assert.match(render(), /Loading event details/);
   assert.doesNotMatch(render(), /EVENT CONTENT/);
+  state = { ...state, detailsStatus: "idle" };
+  assert.match(render(), /Select an event/);
+  assert.doesNotMatch(render(), /Loading event details|EVENT CONTENT/);
   for (const status of [403, 404]) {
     state = { ...state, detailsStatus: "error", detailsErrorStatus: status, detailsError: "Select another event or refresh your events." };
     assert.match(render(), /Refresh events/);
@@ -768,7 +822,8 @@ test("edit draft preserves actual values and unchanged fields including decimal 
     assert.deepEqual(api.buildEventPatch(first, draft), {});
     assert.deepEqual(api.buildEventPatch(first, { ...draft, name: ` ${first.name} ` }), {});
     assert.deepEqual(api.buildEventPatch({ ...first, total_budget: "123.40" }, { ...draft, total_budget: "123.4" }), {});
-    assert.deepEqual(api.buildEventPatch(first, { ...draft, event_date: "", venue: "", template_id: "7" }), { template_id: "7", event_date: null, venue: null });
+    assert.throws(() => api.buildEventPatch(first, { ...draft, event_date: "" }), /Event date is required\./);
+    assert.deepEqual(api.buildEventPatch(first, { ...draft, venue: "", template_id: "7" }), { template_id: "7", venue: null });
     await assert.rejects(api.updateEvent(first.event_id, {}), api.EventValidationError);
   });
 });
@@ -956,7 +1011,7 @@ test("only OWNER details display an Edit action, and the edit form uses real pre
   event = second;
   assert.doesNotMatch(renderToStaticMarkup(React.createElement(dashboard.Dashboard, { go: () => {} })), /Edit event/);
   await withApi(async () => { assert.fail(); }, async (api) => {
-    const Field = loadModule("../src/components/ui/Field.tsx", { "react/jsx-runtime": jsxRuntime }).Field;
+    const Field = loadModule("../src/components/ui/Field.tsx", { react: { useId: () => "test-field-message" }, "react/jsx-runtime": jsxRuntime }).Field;
     const Button = loadModule("../src/components/ui/Button.tsx", { "react/jsx-runtime": jsxRuntime, "./Icon": { Icon: ui.Icon } }).Button;
     const modal = loadModule("../src/features/events/components/EditEventModal.tsx", {
       react: React, "react/jsx-runtime": jsxRuntime,
@@ -978,12 +1033,13 @@ test("only OWNER details display an Edit action, and the edit form uses real pre
 
 
 function templateForm(draft, details, submit, overrides = {}) {
-  const values = [draft, [{ templateId: "42", templateKey: "birthday", name: "Birthday", description: null }], false, 0, details, null, 0];
+  const values = [draft, [{ templateId: "42", templateKey: "birthday", name: "Birthday", description: null }], false, 0, details, null, 0,
+    { attempted: false, touched: {}, errors: {} }];
   let index = 0;
   const form = loadModule("../src/features/events/components/CreateEventModal.tsx", {
     react: { ...React, useEffect: () => {}, useState: () => [values[index++], () => {}] },
     "react/jsx-runtime": jsxRuntime,
-    "../../../components/ui": { ...ui, Modal: ({ children, footer }) => React.createElement("div", null, children, footer) },
+    "../../../components/ui": { ...ui, Field: loadModule("../src/components/ui/Field.tsx", { react: React, "react/jsx-runtime": jsxRuntime }).Field, Modal: ({ children, footer }) => React.createElement("div", null, children, footer) },
     "../../../services/eventTemplates": { listEventTemplates: async () => [], getEventTemplate: async () => null },
     "../utils/budgetPreview": loadModule("../src/features/events/utils/budgetPreview.ts", {}),
     "../hooks/useCreateEvent": { useCreateEvent: () => ({ loading: false, created: false, error: "", close: () => {}, submit, ...overrides }) },
@@ -1017,7 +1073,7 @@ test("merged template dropdown draft submits the chosen templateId and totalBudg
     assert.match(html, /42%/);
     assert.match(html, /42.00/);
     assert.match(html, /58.01/);
-    assert.match(html, /Preview only/);
+    assert.doesNotMatch(html, /Preview only/);
   });
 });
 
@@ -1064,7 +1120,7 @@ async function withEditTemplateForm(api, original, submit, run) {
   const states = [], effects = [], requests = [];
   let stateIndex = 0, effectIndex = 0;
   const scheduled = [];
-  const Field = loadModule("../src/components/ui/Field.tsx", { "react/jsx-runtime": jsxRuntime }).Field;
+  const Field = loadModule("../src/components/ui/Field.tsx", { react: { useId: () => "test-field-message" }, "react/jsx-runtime": jsxRuntime }).Field;
   const Button = loadModule("../src/components/ui/Button.tsx", { "react/jsx-runtime": jsxRuntime, "./Icon": { Icon: ui.Icon } }).Button;
   const modal = loadModule("../src/features/events/components/EditEventModal.tsx", {
     react: {
@@ -1158,7 +1214,7 @@ test("Edit keeps unchanged templates through catalog errors and retries without 
       assert.doesNotMatch(renderToStaticMarkup(element), /private catalog details/);
       assert.equal(findElement(element, "select").props.value, "701");
       const form = findElement(element, "form");
-      const nameField = form.props.children.find((child) => child?.props?.label === "Event name");
+      const nameField = form.props.children.find((child) => child?.props?.label === "Event name *");
       nameField.props.onChange({ target: { value: "Renamed while catalog unavailable" } });
       element = render();
       findElement(element, "form").props.onSubmit({ preventDefault() {} });

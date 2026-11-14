@@ -26,10 +26,10 @@ test("health endpoint returns JSON with an OK status", async () => {
   assert.deepEqual(await response.json(), { status: "ok" });
 });
 
-test("event deletion routes remain unimplemented", async () => {
+test("event deletion routes require authentication", async () => {
   const response = await fetch(`${baseUrl}/events/42`, { method: "DELETE" });
-  assert.equal(response.status, 404);
-  assert.deepEqual(await response.json(), { error: "Not found" });
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: "Missing or invalid authentication token" });
 });
 
 test("unsupported health methods return 404", async () => {

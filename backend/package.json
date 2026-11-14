@@ -7,14 +7,19 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "dev": "node --env-file=.env --import tsx --watch server.ts",
+    "dev": "tsx watch server.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "npm run build && node --test \"dist/tests/**/*.test.js\"",
+    "test": "npm run build && cd dist && node --test",
     "db:up": "docker compose -f ../docker-compose.yml up -d --wait",
     "db:seed": "node ../scripts/db-seed.mjs",
-    "db:reset": "docker compose -f ../docker-compose.yml down -v && npm run db:up && npm run db:seed"
+    "db:reset": "docker compose -f ../docker-compose.yml down -v && npm run db:up && npm run db:seed",
+    "test:vendors:db": "npm run build && node dist/verification/vendors-mysql.js",
+    "db:check": "tsx shared/db/check.ts",
+    "test:db": "npm run build && node dist/verification/expenses-mysql.js",
+    "test:payments:db": "npm run build && node dist/verification/payments-mysql.js",
+    "test:summary:db": "npm run build && node dist/verification/summary-mysql.js"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
@@ -25,6 +30,7 @@
     "@aws-sdk/client-dynamodb": "^3.1168.0",
     "@aws-sdk/lib-dynamodb": "^3.1168.0",
     "aws-jwt-verify": "^5.2.1",
+    "dotenv": "^18.0.10",
     "mysql": "^2.18.1",
     "mysql2": "^3.24.6"
   }

@@ -11,6 +11,8 @@ import { EventWorkspace } from "./features/events/EventWorkspace";
 import { pagePath } from "./routes/navigation";
 import type { Page, PublicPage } from "./types";
 
+type ToastTone = "success" | "error";
+
 const named = <K extends string, P extends object>(load: () => Promise<Record<K, React.ComponentType<P>>>, key: K) =>
   lazy(() => load().then((module) => ({ default: module[key] })));
 
@@ -65,7 +67,7 @@ function WorkspaceCreateEvent({ open, onClose }: { open: boolean; onClose: () =>
     }} />;
 }
 
-function WorkspaceLayout({ onSignOut, onSessionExpired }: { onSignOut: () => void; onSessionExpired: () => void }) {
+function WorkspaceLayout({ onSignOut, onSessionExpired, onEventDeleted }: { onSignOut: () => void; onSessionExpired: () => void; onEventDeleted: () => void }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const openCreate = useCallback(() => setCreateOpen(true), []);
@@ -77,7 +79,8 @@ function WorkspaceLayout({ onSignOut, onSessionExpired }: { onSignOut: () => voi
   const goToPage = (page: Page) => navigate(pagePath(page));
 
   return (
-    <EventsProvider onSessionExpired={onSessionExpired} onCreate={openCreate}>
+    <EventsProvider onSessionExpired={onSessionExpired} onCreate={openCreate} onEdit={closeCreate}
+      onDeleted={() => { closeCreate(); navigate("/app/events"); onEventDeleted(); }}>
       <div className="app-shell">
         <Sidebar
           page={currentPage}
@@ -110,7 +113,7 @@ export default function App() {
   const sessionVersion = useRef(0);
   const signOutPending = useRef(false);
   const [modal, setModal] = useState<ModalName | null>(null);
-  const [toast, setToast] = useState("");
+  const [toast, setToast] = useState<{ message: string; tone: ToastTone } | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
   const navigate = useNavigate();
   const go = (page: Page) => navigate(pagePath(page));
@@ -122,9 +125,9 @@ export default function App() {
     setSigningOut(true);
     try {
       await cognitoSignOut();
-      setToast("Your session has expired. Please sign in again.");
+      setToast({ message: "Your session has expired. Please sign in again.", tone: "error" });
     } catch {
-      setToast("Your session is unavailable. Please sign in again.");
+      setToast({ message: "Your session is unavailable. Please sign in again.", tone: "error" });
     } finally {
       signOutPending.current = false;
       setAuthenticated(false);
@@ -136,12 +139,18 @@ export default function App() {
 
   const openModal = useCallback((name: ModalName) => setModal(name), []);
   const closeModal = useCallback(() => setModal(null), []);
-  const showSaved = useCallback((message: string) => {
-    setModal(null);
-    setToast(message);
+  const notify = useCallback((message: string, tone: ToastTone = "success") => {
+    setToast({ message, tone });
     window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(""), 2600);
+    toastTimer.current = window.setTimeout(() => setToast(null), tone === "error" ? 4500 : 2600);
   }, []);
+  const showSaved = useCallback(
+    (message: string) => {
+      setModal(null);
+      notify(message);
+    },
+    [notify],
+  );
 
   useEffect(() => () => window.clearTimeout(toastTimer.current), []);
 
@@ -211,10 +220,10 @@ export default function App() {
       await cognitoSignOut();
       setAuthenticated(false);
       setModal(null);
-      setToast("");
+      setToast(null);
       navigate("/");
     } catch (error) {
-      setToast(`Sign out failed. ${authErrorMessage(error)}`);
+      setToast({ message: `Sign out failed. ${authErrorMessage(error)}`, tone: "error" });
     } finally {
       signOutPending.current = false;
       setSigningOut(false);
@@ -238,15 +247,16 @@ export default function App() {
         <Route
           path="/app"
           element={
-            authenticated ? <WorkspaceLayout onSignOut={signOut} onSessionExpired={onEventSessionExpired} /> : <Navigate to="/login" replace />
+            authenticated ? <WorkspaceLayout onSignOut={signOut} onSessionExpired={onEventSessionExpired}
+              onEventDeleted={() => notify("Event deleted successfully.")} /> : <Navigate to="/login" replace />
           }
         >
           <Route index element={<Navigate to="dashboard" replace />} />
           <Route path="dashboard" element={<Dashboard go={go} />} />
           <Route path="events" element={<Events go={go} />} />
           <Route path="budget" element={<Budget openReset={() => openModal("template")} />} />
-          <Route path="expenses" element={<Expenses onAdd={() => openModal("expense")} />} />
-          <Route path="vendors" element={<Vendors onAdd={() => openModal("vendor")} />} />
+          <Route path="expenses" element={<Expenses />} />
+          <Route path="vendors" element={<Vendors onToast={notify} />} />
           <Route path="guests" element={<Guests onAdd={() => openModal("guest")} />} />
           <Route path="templates" element={<Templates />} />
           <Route path="tasks" element={<Tasks />} />
@@ -263,9 +273,12 @@ export default function App() {
 
       <AppModal modal={authenticated ? modal : null} onClose={closeModal} onSaved={showSaved} />
       {toast && (
-        <div className="toast" role="status">
-          <span>✓</span>
-          {toast}
+        <div
+          className={`toast${toast.tone === "error" ? " toast-error" : ""}`}
+          role={toast.tone === "error" ? "alert" : "status"}
+        >
+          <span aria-hidden="true">{toast.tone === "error" ? "!" : "✓"}</span>
+          {toast.message}
         </div>
       )}
     </>

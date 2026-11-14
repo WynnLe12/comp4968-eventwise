@@ -49,7 +49,7 @@ export function Sidebar({
             <label htmlFor="current-event"><small>Current event</small></label>
             <select id="current-event" value={selectedEvent?.event_id ?? ""} disabled={status !== "ready"}
               onChange={(event) => selectEvent(event.target.value)}>
-              {!selectedEvent && <option value="">{status === "loading" ? "Loading events..." : status === "error" ? "Events unavailable" : "No events"}</option>}
+              {!selectedEvent && <option value="">{status === "loading" ? "Loading events..." : status === "error" ? "Events unavailable" : events.length ? "Select an event" : "No events"}</option>}
               {events.map((event) => <option key={event.event_id} value={event.event_id}>{event.event_id === eventDetails?.event_id ? eventDetails.name : event.name}</option>)}
             </select>
             <span>{eventDetails ? eventRole(eventDetails.role) : selectedEvent ? detailsStatus === "loading" ? "Loading role..." : "Event unavailable" : "No event selected"}</span>
