@@ -36,7 +36,7 @@ function calculatePlannedCents(
 }
 
 export function Budget({ openReset }: BudgetProps) {
-  const { selectedId: eventId, eventDetails, } = useEvents();
+  const { selectedId: eventId, eventDetails, reloadDetails, } = useEvents();
   // Track the currently selected event across asynchronous requests.
   const activeEventIdRef = useRef(eventId);
   activeEventIdRef.current = eventId;
@@ -564,6 +564,9 @@ export function Budget({ openReset }: BudgetProps) {
           ...category,
         }))
       );
+      
+      // Refresh shared event details so Dashboard shows the updated total.
+      reloadDetails();
 
       setEditingTotal(false);
       setSaveMessage(

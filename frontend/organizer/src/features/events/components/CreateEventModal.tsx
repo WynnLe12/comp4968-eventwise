@@ -104,7 +104,6 @@ export function CreateEventModal(callbacks: CreateEventCallbacks) {
         {draft.totalBudget !== "" && allocateBudget(draft.totalBudget, [{ templateCategoryId: "validation", defaultPercentage: "100" }]) === null
           && <p role="alert">Enter a valid budget, for example 2000.00.</p>}
         <section aria-label="Budget allocation preview" aria-live="polite">
-          <p className="modal-copy">Preview only. These provisional allocations are not saved as event budget categories.</p>
           {!draft.templateId ? <p className="modal-copy">Select an event type to see its budget categories.</p>
             : detailErrorId === draft.templateId ? <div role="alert"><p>Couldn't load budget defaults.</p><Button variant="secondary" onClick={() => setDetailAttempt(value => value + 1)}>Retry budget defaults</Button></div>
             : !template ? <p role="status">Loading budget defaults...</p>
