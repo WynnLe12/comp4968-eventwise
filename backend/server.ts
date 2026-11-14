@@ -41,18 +41,21 @@ import {
   updateEventHandler,
   type UpdateEventDependencies,
 } from "./event-service/handlers/updateEventHandler";
+import { deleteEventHandler, type DeleteEventDependencies } from "./event-service/handlers/deleteEventHandler";
 
 export function createAppServer(
   eventDependencies: Partial<CreateEventDependencies> & AppDependencies = {},
   listDependencies: Partial<ListEventsDependencies> = {},
   getDependencies: Partial<GetEventDependencies> = {},
   updateDependencies: Partial<UpdateEventDependencies> = {},
+  deleteDependencies: Partial<DeleteEventDependencies> = {},
 ): Server {
   // Feature 1: Event Management (Wynn)
   const handleCreateEvent = createEventHandler(eventDependencies);
   const handleListEvents = listEventsHandler(listDependencies);
   const handleGetEvent = getEventHandler(getDependencies);
   const handleUpdateEvent = updateEventHandler(updateDependencies);
+  const handleDeleteEvent = deleteEventHandler(deleteDependencies);
   const expenses = expenseHttpHandler(
     eventDependencies.expenses ?? new ExpenseService(new MySqlExpenseRepository()),
     eventDependencies.authenticate ?? createCognitoAuthenticator(),
@@ -84,6 +87,12 @@ export function createAppServer(
     // Feature 1: Update event
     if (request.method === "PATCH" && eventMatch) {
       void handleUpdateEvent(request, response, eventMatch[1]);
+      return;
+    }
+
+    // Feature 1: Delete event
+    if (request.method === "DELETE" && eventMatch) {
+      void handleDeleteEvent(request, response, eventMatch[1]);
       return;
     }
 
