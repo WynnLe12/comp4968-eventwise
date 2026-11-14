@@ -60,6 +60,7 @@ export function useEditEvent(original: OrganizerEvent, options: EditEventCallbac
       if (current !== version.current || !callbacks.current.isCurrent()) return;
       if (failure instanceof EventSessionError) callbacks.current.onSessionExpired();
       if (failure instanceof EventUpdateError && (failure.status === 403 || failure.status === 404)) setBlocked(true);
+      if (failure instanceof EventUpdateError && failure.fieldErrors && Object.values(failure.fieldErrors).some(Boolean)) return failure.fieldErrors;
       setError(failure instanceof EventValidationError || failure instanceof EventUpdateError || failure instanceof EventSessionError
         ? failure.message : "Unable to complete the request. Check your connection and refresh the event before retrying.");
     } finally {
@@ -67,5 +68,5 @@ export function useEditEvent(original: OrganizerEvent, options: EditEventCallbac
       if (current === version.current) setLoading(false);
     }
   };
-  return { loading, saved, blocked, error, submit, close: () => { if (!pending.current) callbacks.current.onClose(); } };
+  return { loading, saved, blocked, error, submit, close: () => { if (!pending.current) { setError(""); callbacks.current.onClose(); } } };
 }

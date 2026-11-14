@@ -1,0 +1,13 @@
+@import "../expenses/expenses.css";
+
+/* Keep the shared Field layout while matching Expense's validation appearance. */
+.event-form .field-error {
+  color: #bc2940;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.event-form .field input[aria-invalid="true"],
+.event-form .field select[aria-invalid="true"] {
+  border-color: #d72d49;
+  box-shadow: none;
+}

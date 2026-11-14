@@ -14,6 +14,11 @@ function loadModule(path, imports, replacements = {}) {
   });
   const module = { exports: {} };
   new Function("require", "module", "exports", outputText)((name) => {
+    if (!(name in imports)) {
+      if (name.endsWith("/utils/eventFormValidation")) return loadModule("../src/features/events/utils/eventFormValidation.ts", {});
+      if (name.endsWith("/hooks/useEventValidation")) return loadModule("../src/features/events/hooks/useEventValidation.ts", { react: imports.react });
+      if (name.endsWith(".css")) return {};
+    }
     assert.ok(name in imports, `Unexpected import: ${name}`);
     return imports[name];
   }, module, module.exports);
@@ -773,7 +778,8 @@ test("edit draft preserves actual values and unchanged fields including decimal 
     assert.deepEqual(api.buildEventPatch(first, draft), {});
     assert.deepEqual(api.buildEventPatch(first, { ...draft, name: ` ${first.name} ` }), {});
     assert.deepEqual(api.buildEventPatch({ ...first, total_budget: "123.40" }, { ...draft, total_budget: "123.4" }), {});
-    assert.deepEqual(api.buildEventPatch(first, { ...draft, event_date: "", venue: "", template_id: "7" }), { template_id: "7", event_date: null, venue: null });
+    assert.throws(() => api.buildEventPatch(first, { ...draft, event_date: "" }), /Event date is required\./);
+    assert.deepEqual(api.buildEventPatch(first, { ...draft, venue: "", template_id: "7" }), { template_id: "7", venue: null });
     await assert.rejects(api.updateEvent(first.event_id, {}), api.EventValidationError);
   });
 });
@@ -983,12 +989,13 @@ test("only OWNER details display an Edit action, and the edit form uses real pre
 
 
 function templateForm(draft, details, submit, overrides = {}) {
-  const values = [draft, [{ templateId: "42", templateKey: "birthday", name: "Birthday", description: null }], false, 0, details, null, 0];
+  const values = [draft, [{ templateId: "42", templateKey: "birthday", name: "Birthday", description: null }], false, 0, details, null, 0,
+    { attempted: false, touched: {}, errors: {} }];
   let index = 0;
   const form = loadModule("../src/features/events/components/CreateEventModal.tsx", {
     react: { ...React, useEffect: () => {}, useState: () => [values[index++], () => {}] },
     "react/jsx-runtime": jsxRuntime,
-    "../../../components/ui": { ...ui, Modal: ({ children, footer }) => React.createElement("div", null, children, footer) },
+    "../../../components/ui": { ...ui, Field: loadModule("../src/components/ui/Field.tsx", { react: React, "react/jsx-runtime": jsxRuntime }).Field, Modal: ({ children, footer }) => React.createElement("div", null, children, footer) },
     "../../../services/eventTemplates": { listEventTemplates: async () => [], getEventTemplate: async () => null },
     "../utils/budgetPreview": loadModule("../src/features/events/utils/budgetPreview.ts", {}),
     "../hooks/useCreateEvent": { useCreateEvent: () => ({ loading: false, created: false, error: "", close: () => {}, submit, ...overrides }) },
@@ -1163,7 +1170,7 @@ test("Edit keeps unchanged templates through catalog errors and retries without 
       assert.doesNotMatch(renderToStaticMarkup(element), /private catalog details/);
       assert.equal(findElement(element, "select").props.value, "701");
       const form = findElement(element, "form");
-      const nameField = form.props.children.find((child) => child?.props?.label === "Event name");
+      const nameField = form.props.children.find((child) => child?.props?.label === "Event name *");
       nameField.props.onChange({ target: { value: "Renamed while catalog unavailable" } });
       element = render();
       findElement(element, "form").props.onSubmit({ preventDefault() {} });

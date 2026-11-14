@@ -4,10 +4,19 @@ import type { EventTemplate } from "../../../types/eventTemplates";
 import { Button, Field, Modal } from "../../../components/ui";
 import { buildEventPatch, eventEditDraft, type EventEditDraft, type OrganizerEvent } from "../services/eventApi";
 import { useEditEvent, type EditEventCallbacks } from "../hooks/useEditEvent";
+import { localToday, validateEventForm } from "../utils/eventFormValidation";
+import { useEventValidation } from "../hooks/useEventValidation";
+import "../eventForms.css";
 
 export function EditEventModal({ event, ...callbacks }: EditEventCallbacks & { event: OrganizerEvent }) {
   const [draft, setDraft] = useState(() => eventEditDraft(event));
-  const { loading, saved, blocked, error, submit, close } = useEditEvent(event, callbacks);
+  const validation = useEventValidation((value) => validateEventForm(value, false));
+  const { errors } = validation;
+  const reset = () => { setDraft(eventEditDraft(event)); validation.reset(); };
+  const { loading, saved, blocked, error, submit, close } = useEditEvent(event, { ...callbacks,
+    onClose: () => { reset(); callbacks.onClose(); },
+    onComplete: () => { reset(); callbacks.onComplete(); },
+  });
   const [templates, setTemplates] = useState<EventTemplate[] | null>(null);
   const [templateError, setTemplateError] = useState(false);
   const [templateAttempt, setTemplateAttempt] = useState(0);
@@ -32,8 +41,15 @@ export function EditEventModal({ event, ...callbacks }: EditEventCallbacks & { e
   const templateChanged = draft.template_id !== (event.template_id ?? "");
   const validTemplate = !templateChanged || !draft.template_id || !!templates?.some((item) => item.templateId === draft.template_id);
   const unavailableSelection = !!draft.template_id && !templates?.some((item) => item.templateId === draft.template_id);
-  const change = (field: keyof EventEditDraft, value: string) => setDraft((previous) => ({ ...previous, [field]: value }));
-  const handleSubmit = (submission: FormEvent) => { submission.preventDefault(); if (validTemplate || saved) void submit(draft); };
+  const change = (field: keyof EventEditDraft, value: string) => {
+    const next = { ...draft, [field]: value }; setDraft(next); validation.change(field, next);
+  };
+  const handleSubmit = async (submission: FormEvent) => {
+    submission.preventDefault();
+    if (loading || blocked || (!saved && (!validation.check(draft) || !validTemplate))) return;
+    const fields = await submit(draft);
+    if (fields) validation.serverErrors(fields);
+  };
   return (
     <Modal title="Edit event" onClose={close} footer={<>
       <Button variant="secondary" onClick={close} disabled={loading}>Cancel</Button>
@@ -41,22 +57,26 @@ export function EditEventModal({ event, ...callbacks }: EditEventCallbacks & { e
         {loading ? "Please wait..." : saved ? "Retry loading event" : "Save changes"}
       </Button>
     </>}>
-      <form id="edit-event-form" onSubmit={handleSubmit} aria-busy={loading}>
+      <form id="edit-event-form" noValidate className="event-form" onSubmit={handleSubmit} aria-busy={loading}>
+        {validation.showSummary && <p className="expense-form-error" role="alert">Please fix the highlighted fields and try again.</p>}
         {error && <p role="alert">{error}</p>}
-        <Field label="Event name" value={draft.name} onChange={(e) => change("name", e.target.value)} required disabled={disabled} />
+        <Field label="Event name *" name="name" error={errors.name} onBlur={() => validation.blur("name", draft)} value={draft.name} onChange={(e) => change("name", e.target.value)} required disabled={disabled} />
         <div className="form-row">
           <label className="field"><span>Event type</span>
             <select name="templateId" value={draft.template_id} disabled={disabled || templates === null}
               aria-busy={templates === null && !templateError}
-              onChange={(e) => change("template_id", e.target.value)}>
+              onChange={(e) => change("template_id", e.target.value)} onBlur={() => validation.blur("template_id", draft)}
+              aria-invalid={Boolean(errors.template_id)} aria-describedby={errors.template_id ? "edit-type-error" : undefined}>
               <option value="">{templates === null && !templateError ? "Loading event types..." : "No event type"}</option>
               {unavailableSelection && <option value={draft.template_id} disabled>
                 {templates === null && !templateError ? "Loading current event type..." : "Current event type unavailable"}
               </option>}
               {templates?.map((item) => <option key={item.templateId} value={item.templateId}>{item.name}</option>)}
             </select>
+            {errors.template_id && <small id="edit-type-error" className="expense-field-error">{errors.template_id}</small>}
           </label>
-          <Field label="Event date" type="date" min="1000-01-01" max="9999-12-31" value={draft.event_date} onChange={(e) => change("event_date", e.target.value)} disabled={disabled} />
+          <Field label="Event date *" name="eventDate" type="date" required min={localToday()} max="9999-12-31" value={draft.event_date} error={errors.event_date}
+            onBlur={() => validation.blur("event_date", draft)} onChange={(e) => change("event_date", e.target.value)} disabled={disabled} />
         </div>
         {templateError && <div role="alert"><p>Couldn't load event types. Your saved event type is unchanged.</p>
           <Button variant="secondary" disabled={disabled} onClick={() => setTemplateAttempt((value) => value + 1)}>Retry event types</Button>
@@ -64,8 +84,8 @@ export function EditEventModal({ event, ...callbacks }: EditEventCallbacks & { e
         {templates?.length === 0 && <p role="status">No event types are available. You can keep the saved type unchanged or select No event type.</p>}
         {templates !== null && unavailableSelection && <p role="status">The saved event type is unavailable. Keep it unchanged or choose another type.</p>}
         <p className="modal-copy">Changing event type does not reallocate existing budget items or change other event data.</p>
-        <Field label="Venue or location" placeholder="Not set" value={draft.venue} onChange={(e) => change("venue", e.target.value)} disabled={disabled} />
-        <Field label="Total budget" inputMode="decimal" value={draft.total_budget} onChange={(e) => change("total_budget", e.target.value)} required disabled={disabled} />
+        <Field label="Venue or location (optional)" name="venue" error={errors.venue} onBlur={() => validation.blur("venue", draft)} placeholder="Not set" value={draft.venue} onChange={(e) => change("venue", e.target.value)} disabled={disabled} />
+        <Field label="Total budget *" name="totalBudget" error={errors.total_budget} onBlur={() => validation.blur("total_budget", draft)} inputMode="decimal" value={draft.total_budget} onChange={(e) => change("total_budget", e.target.value)} required disabled={disabled} />
       </form>
     </Modal>
   );

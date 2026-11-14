@@ -1,5 +1,6 @@
 import { apiUrl } from "../../../services/apiConfig";
 import { getCurrentUser, requireAuthSession } from "../../auth/services/authService";
+import { apiFieldErrors, eventDateError, type EventFieldErrors } from "../utils/eventFormValidation";
 
 export interface OrganizerEvent {
   event_id: string;
@@ -37,7 +38,9 @@ export interface CreateEventInput {
   total_budget?: string;
 }
 export class EventValidationError extends Error {}
-export class EventCreateError extends Error {}
+export class EventCreateError extends Error {
+  constructor(message: string, readonly fieldErrors: EventFieldErrors = {}) { super(message); }
+}
 
 export function validateCreateEvent(body: unknown): CreateEventInput {
   const invalid = (message: string): never => { throw new EventValidationError(message); };
@@ -55,9 +58,9 @@ export function validateCreateEvent(body: unknown): CreateEventInput {
   }
   const date = fields.event_date ?? null;
   if (date !== null) {
-    if (typeof date !== "string" || !/^[1-9][0-9]{3}-[0-9]{2}-[0-9]{2}$/.test(date)) return invalid("Enter an event date in YYYY-MM-DD format (years 1000-9999).");
-    const parsed = new Date(`${date}T00:00:00Z`);
-    if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) return invalid("Enter a real calendar date.");
+    if (typeof date !== "string") return invalid("Enter a valid event date.");
+    const dateError = eventDateError(date);
+    if (dateError) return invalid(dateError);
   }
   const venue = fields.venue ?? null;
   if (venue !== null && (typeof venue !== "string" || [...venue].length > 255)) return invalid("Venue must contain at most 255 characters.");
@@ -109,7 +112,7 @@ export async function createEvent(body: unknown, signal?: AbortSignal): Promise<
     const error = await response.json().catch(() => null) as { error?: string } | null;
     throw new EventCreateError(error?.error === "template_id does not exist"
       ? "That template does not exist. Check its ID or create without a template."
-      : "Check your event details and try again.");
+      : "Check your event details and try again.", apiFieldErrors(error?.error));
   }
   if (response.status !== 201) throw new EventCreateError("Unable to create your event. Please try again.");
   const event = parseEvent(await response.json());
@@ -166,7 +169,7 @@ export type EventPatch = Partial<CreateEventInput>;
 export type EventEditDraft = Record<keyof CreateEventInput, string>;
 export interface UpdateEventResult { userId: string; event: OrganizerEvent }
 export class EventUpdateError extends Error {
-  constructor(readonly status: number, message: string) { super(message); }
+  constructor(readonly status: number, message: string, readonly fieldErrors: EventFieldErrors = {}) { super(message); }
 }
 
 export function eventEditDraft(event: OrganizerEvent): EventEditDraft {
@@ -184,6 +187,8 @@ export function validateEventPatch(body: unknown): EventPatch {
 }
 
 export function buildEventPatch(original: OrganizerEvent, draft: EventEditDraft): EventPatch {
+  const dateError = eventDateError(draft.event_date);
+  if (dateError) throw new EventValidationError(dateError);
   const initial = eventEditDraft(original);
   const changed: Record<string, string | null> = {};
   for (const field of ["name", "template_id", "event_date", "venue", "total_budget"] as const) {
@@ -217,7 +222,7 @@ export async function updateEvent(eventId: string, body: unknown, signal?: Abort
     const error = await response.json().catch(() => null) as { error?: string } | null;
     throw new EventUpdateError(400, error?.error === "template_id does not exist"
       ? "That template does not exist. Check its ID or clear the template field."
-      : "Check your changed event details and try again.");
+      : "Check your changed event details and try again.", apiFieldErrors(error?.error));
   }
   if (!response.ok) throw new EventUpdateError(response.status, "Unable to save your event. Please try again.");
   const event = parseEvents([await response.json()])[0];

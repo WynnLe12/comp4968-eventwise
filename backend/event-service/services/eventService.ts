@@ -1,4 +1,5 @@
 import { EventRepository, InvalidTemplateError, type EventInput, type EventRecord, type ListedEvent } from "../repositories/eventRepository";
+import { localToday, validDate } from "../../shared/utils/dateOnly";
 
 export class EventValidationError extends Error {}
 export class EventNotFoundError extends Error {}
@@ -19,7 +20,7 @@ function invalid(message: string): never {
   throw new EventValidationError(message);
 }
 
-export function validateEventInput(body: unknown): EventInput {
+export function validateEventInput(body: unknown, today = localToday()): EventInput {
   if (!body || typeof body !== "object" || Array.isArray(body)) invalid("Body must be a JSON object");
   const fields = body as Record<string, unknown>;
   const allowed = new Set(["name", "template_id", "event_date", "venue", "total_budget"]);
@@ -41,13 +42,8 @@ export function validateEventInput(body: unknown): EventInput {
   }
   const eventDate = fields.event_date ?? null;
   if (eventDate !== null) {
-    if (typeof eventDate !== "string" || !/^[1-9][0-9]{3}-[0-9]{2}-[0-9]{2}$/.test(eventDate)) {
-      invalid("event_date must be a valid YYYY-MM-DD date between years 1000 and 9999, or null");
-    }
-    const date = new Date(`${eventDate}T00:00:00Z`);
-    if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== eventDate) {
-      invalid("event_date must be a real calendar date");
-    }
+    if (!validDate(eventDate)) invalid("Enter a valid event date.");
+    if (eventDate < today) invalid("Event date cannot be in the past.");
   }
   const venue = fields.venue ?? null;
   if (venue !== null && (typeof venue !== "string" || [...venue].length > 255)) {
@@ -64,28 +60,30 @@ export function validateEventInput(body: unknown): EventInput {
   };
 }
 
-export function validateEventPatch(body: unknown): Partial<EventInput> {
+export function validateEventPatch(body: unknown, today = localToday()): Partial<EventInput> {
   if (!body || typeof body !== "object" || Array.isArray(body)) invalid("Body must be a JSON object");
   const fields = body as Record<string, unknown>;
   const keys = Object.keys(fields);
   if (!keys.length) invalid("At least one event field is required");
   // Reuse creation's schema checks without applying its defaults to omitted fields.
-  const validated = validateEventInput({ name: "Event", ...fields });
+  const validated = validateEventInput({ name: "Event", ...fields }, today);
   return Object.fromEntries(keys.map((key) => [key, validated[key as keyof EventInput]]));
 }
 
 export class EventService {
-  constructor(private readonly repository: Pick<EventRepository, "create"> & Partial<Pick<EventRepository, "list" | "getById" | "update">> = new EventRepository()) {}
+  constructor(private readonly repository: Pick<EventRepository, "create"> & Partial<Pick<EventRepository, "list" | "getById" | "update">> = new EventRepository(), private readonly today = localToday) {}
 
   async update(eventId: string, body: unknown, cognitoSub: string): Promise<ListedEvent> {
     if (!cognitoSub || cognitoSub.length > 128) throw new Error("Verified Cognito identity is required");
     const id = validateEventId(eventId);
-    const patch = validateEventPatch(body);
+    const patch = validateEventPatch(body, this.today());
     if (!this.repository.update) throw new Error("Event update repository is not configured");
     try {
       const event = await this.repository.update(id, patch, cognitoSub, (current) => {
         if (!current) throw new EventNotFoundError("Event not found");
         if (current.role !== "OWNER") throw new EventAccessDeniedError("Only the event owner can update this event");
+        const effectiveDate = patch.event_date === undefined ? current.event_date : patch.event_date;
+        if (effectiveDate && effectiveDate < this.today()) invalid("Event date cannot be in the past.");
       });
       return { ...event, role: "OWNER" };
     } catch (error) {
@@ -114,7 +112,7 @@ export class EventService {
 
   async create(body: unknown, cognitoSub: string): Promise<EventRecord> {
     if (!cognitoSub || cognitoSub.length > 128) throw new Error("Verified Cognito identity is required");
-    const input = validateEventInput(body);
+    const input = validateEventInput(body, this.today());
     try {
       return await this.repository.create(input, cognitoSub);
     } catch (error) {

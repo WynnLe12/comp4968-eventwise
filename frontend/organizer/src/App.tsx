@@ -79,7 +79,7 @@ function WorkspaceLayout({ onSignOut, onSessionExpired }: { onSignOut: () => voi
   const goToPage = (page: Page) => navigate(pagePath(page));
 
   return (
-    <EventsProvider onSessionExpired={onSessionExpired} onCreate={openCreate}>
+    <EventsProvider onSessionExpired={onSessionExpired} onCreate={openCreate} onEdit={closeCreate}>
       <div className="app-shell">
         <Sidebar
           page={currentPage}

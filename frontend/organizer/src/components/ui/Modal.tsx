@@ -17,15 +17,21 @@ export function Modal({
   footer?: ReactNode;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
 
   // Move focus into the dialog on open (first field in the body, else the dialog),
   // and give it back to whatever had it when the dialog closes.
   useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
+    // Keep the original opener when Strict Mode repeats this effect's setup.
+    const previous = previousFocusRef.current ?? document.activeElement as HTMLElement | null;
+    previousFocusRef.current = previous;
     const dialog = dialogRef.current;
     const target = dialog?.querySelector<HTMLElement>(`.modal-body :is(${FOCUSABLE})`) ?? dialog;
     target?.focus();
     return () => {
+      // Strict Mode also runs cleanup while the dialog is still mounted.
+      // Restoring focus then blurs untouched fields and creates validation errors.
+      if (dialog?.isConnected) return;
       if (previous?.isConnected) previous.focus();
     };
   }, []);

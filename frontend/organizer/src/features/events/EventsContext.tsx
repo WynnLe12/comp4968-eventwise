@@ -117,7 +117,7 @@ export function useEventList(onSessionExpired: () => void) {
 }
 
 const EventsContext = createContext<(ReturnType<typeof useEventList> & ReturnType<typeof useEventDetails> & { openCreate: () => void; openEdit: () => void }) | null>(null);
-export function EventsProvider({ children, onSessionExpired, onCreate }: { children: ReactNode; onSessionExpired: () => void; onCreate: () => void }) {
+export function EventsProvider({ children, onSessionExpired, onCreate, onEdit }: { children: ReactNode; onSessionExpired: () => void; onCreate: () => void; onEdit?: () => void }) {
   const events = useEventList(onSessionExpired);
   const details = useEventDetails(events.selectedId, events.userId, onSessionExpired);
   const [editing, setEditing] = useState<{ userId: string; event: OrganizerEvent } | null>(null);
@@ -126,10 +126,11 @@ export function EventsProvider({ children, onSessionExpired, onCreate }: { child
   useEffect(() => { if (editing && !visible) setEditing(null); }, [editing, visible]);
   const openEdit = () => {
     if (events.userId && details.eventDetails?.role === "OWNER") {
+      onEdit?.();
       setEditing({ userId: events.userId, event: details.eventDetails });
     }
   };
-  return <EventsContext.Provider value={{ ...events, ...details, openCreate: onCreate, openEdit }}>
+  return <EventsContext.Provider value={{ ...events, ...details, openCreate: () => { setEditing(null); onCreate(); }, openEdit }}>
     {children}
     {editing && visible && <EditEventModal
       key={`${editing.userId}/${editing.event.event_id}`} event={editing.event} userId={editing.userId}
