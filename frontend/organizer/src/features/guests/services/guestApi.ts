@@ -111,6 +111,37 @@ export async function createGuest(eventId: string, input: NewGuestInput): Promis
   return guestId;
 }
 
+/** Fields the edit form sends. A null value clears that field on the backend. */
+export interface GuestChanges {
+  firstName: string;
+  lastName: string | null;
+  email: string | null;
+  plusOneAllowed: boolean;
+  rsvpStatus: RsvpStatus;
+  mealChoice: string | null;
+}
+
+/**
+ * Updates one guest: PATCH <GUESTS_API_URL> with body { guest: { eventId, guestId, ...changes } }.
+ * Sent without a Content-Type header for the same CORS reason as createGuest.
+ */
+export async function updateGuest(
+  eventId: string,
+  guestId: string,
+  changes: GuestChanges,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(GUESTS_API_URL, {
+      method: "PATCH",
+      body: JSON.stringify({ guest: { eventId, guestId, ...changes } }),
+    });
+  } catch {
+    throw new GuestApiError("We couldn't reach the guest service. Check your connection and try again.");
+  }
+  if (!response.ok) throw new GuestApiError("Unable to save this guest. Please try again.");
+}
+
 /**
  * Deletes one guest: DELETE <GUESTS_API_URL> with body { guest: { eventId, guestId } }.
  * Sent without a Content-Type header for the same CORS reason as createGuest.

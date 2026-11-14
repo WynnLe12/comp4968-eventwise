@@ -59,7 +59,7 @@ export function Guests({
     () => (eventId ? listGuests(eventId) : Promise.resolve<GuestRecord[]>([])),
     [eventId],
   );
-  const { data, loading, error, reload, update } = useResource(loadGuests);
+  const { data, loading, error, reload } = useResource(loadGuests);
   const guests = useMemo(() => data ?? [], [data]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const editingGuest = editingId ? guests.find((g) => g.guestId === editingId) : undefined;
@@ -284,9 +284,10 @@ export function Guests({
             onToast(`${name} removed from your guest list`);
             reload(); // Show the list as the backend now has it.
           }}
-          onSave={(saved) => {
-            update((list) => list.map((g) => (g.guestId === saved.guestId ? saved : g)));
+          onSaved={(name) => {
             setEditingId(null);
+            onToast(name ? `${name}'s details saved` : "Guest details saved");
+            reload(); // Show the guest as the backend now has it.
           }}
         />
       )}
