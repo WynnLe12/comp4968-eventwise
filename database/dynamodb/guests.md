@@ -79,8 +79,10 @@ guest that is not in the event changes nothing and returns "not found".
 
 DynamoDB has no foreign keys or `ON DELETE CASCADE`. When an event is deleted in RDS,
 its guests must be removed by calling `GuestRepository.deleteAllForEvent(eventId)`.
-`DELETE /events/{eventId}` (event-service) should call it after the MySQL transaction
-commits, so guests are only removed once the event is really gone.
+`EventService.delete` (`DELETE /events/{eventId}`) calls it after the MySQL transaction
+commits, so guests are only removed once the event is really gone. If the DynamoDB call
+fails, the error is logged and the request still returns 204: the event is already deleted,
+and its leftover guests are unreachable because the event has no members.
 
 ## Post-MVP (not created yet)
 

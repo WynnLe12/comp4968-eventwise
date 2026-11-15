@@ -59,13 +59,16 @@ async function fixture() {
 test("MySQL: owner deletion handles all dependent rows, protects other events and shared templates", { skip: !enabled }, async () => {
   const f = await fixture(); const [a, b] = f.records;
   try {
-    const service = new EventService();
+    const guestCleanups: string[] = [];
+    const service = new EventService(undefined, undefined, { deleteAllForEvent: async (id) => { guestCleanups.push(id); return 0; } });
     const co = `co-${randomUUID()}`;
     await db.execute("INSERT INTO event_members (event_id, cognito_sub, role) VALUES (?, ?, 'CO_PLANNER')", [a.id, co]);
     const before = await snapshot(a.id), other = await snapshot(b.id);
     for (const sub of [co, `other-${randomUUID()}`]) await assert.rejects(service.delete(a.id, sub), EventAccessDeniedError);
     assert.deepEqual(await snapshot(a.id), before);
+    assert.deepEqual(guestCleanups, []);
     await service.delete(a.id, f.owner);
+    assert.deepEqual(guestCleanups, [String(a.id)]);
     assert.ok(Object.values(await snapshot(a.id)).every((count) => count === 0));
     assert.deepEqual(await snapshot(b.id), other);
     const [templates] = await db.execute<RowDataPacket[]>("SELECT template_id FROM event_templates WHERE template_id = ?", [f.templateId]);

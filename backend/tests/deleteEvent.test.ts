@@ -8,7 +8,7 @@ import { EventRepository } from "../event-service/repositories/eventRepository";
 import { EventService } from "../event-service/services/eventService";
 import type { DeleteEventDependencies } from "../event-service/handlers/deleteEventHandler";
 
-function fixture(options: { role?: "OWNER" | "CO_PLANNER" | null; missing?: boolean; payments?: boolean; crossTask?: boolean; crossDraft?: boolean; failure?: "expenses" | "event" | "commit" } = {}) {
+function fixture(options: { role?: "OWNER" | "CO_PLANNER" | null; missing?: boolean; payments?: boolean; crossTask?: boolean; crossDraft?: boolean; failure?: "expenses" | "event" | "commit"; guestFailure?: boolean } = {}) {
   const calls: string[] = [], queries: { sql: string; values?: unknown[] }[] = [];
   const connection = {
     beginTransaction: async () => { calls.push("begin"); },
@@ -26,7 +26,12 @@ function fixture(options: { role?: "OWNER" | "CO_PLANNER" | null; missing?: bool
     commit: async () => { calls.push("commit"); if (options.failure === "commit") throw new Error("private SQL"); },
     rollback: async () => { calls.push("rollback"); }, release: () => { calls.push("release"); },
   } as unknown as PoolConnection;
-  return { service: new EventService(new EventRepository({ getConnection: async () => connection })), calls, queries };
+  const guests = { deleteAllForEvent: async (eventId: string) => {
+    calls.push(`guests:${eventId}`);
+    if (options.guestFailure) throw new Error("DynamoDB unavailable");
+    return 0;
+  } };
+  return { service: new EventService(new EventRepository({ getConnection: async () => connection }), undefined, guests), calls, queries };
 }
 async function withServer(deps: Partial<DeleteEventDependencies>, run: (url: string) => Promise<void>) {
   const server = createAppServer({}, {}, {}, {}, deps);
@@ -53,7 +58,7 @@ test("OWNER deletion uses bound exact BIGINT IDs and removes expenses before cas
     assert.equal(response.status, 204); assert.equal(await response.text(), "");
     for (const id of ["0", "-1", "1.5", "18446744073709551616", "1%20OR%201=1"]) assert.equal((await remove(`${url}/${id}`)).status, 400);
   });
-  assert.deepEqual(f.calls, ["begin", "expenses", "event", "commit", "release"]);
+  assert.deepEqual(f.calls, ["begin", "expenses", "event", "commit", "release", "guests:18446744073709551615"]);
   assert.match(f.queries[0].sql, /FOR UPDATE$/);
   for (const query of f.queries) assert.ok(query.values?.includes("18446744073709551615"));
   assert.ok(!f.queries.some(({ sql }) => /DELETE FROM (event_templates|template_budget_categories)/.test(sql)));
@@ -93,4 +98,14 @@ test("expense deletion, event deletion, and commit failures roll back and return
     });
     assert.deepEqual(f.calls.slice(-2), ["rollback", "release"]);
   }
+});
+
+test("guest cleanup failure after the MySQL commit is logged and still returns 204", async (t) => {
+  const logged = t.mock.method(console, "error", () => {});
+  const f = fixture({ guestFailure: true });
+  await withServer({ service: f.service, verifyToken: async () => "owner" }, async (url) => {
+    assert.equal((await remove(`${url}/7`)).status, 204);
+  });
+  assert.deepEqual(f.calls, ["begin", "expenses", "event", "commit", "release", "guests:7"]);
+  assert.equal(logged.mock.callCount(), 1);
 });
