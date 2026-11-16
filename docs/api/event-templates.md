@@ -142,3 +142,10 @@ node --env-file=.env --test dist/tests/createEvent.mysql.test.js dist/tests/list
    failure after successful creation (retry GET only, not a second POST).
 
 No Terraform, deployments, schema changes, or merge commit are part of this work.
+
+## Dedicated Lambda entry point
+
+Templates also supports a separate REST API Gateway Lambda proxy entry point at
+`backend/event-service/lambda/templates.ts`. See [deployment instructions](event-templates-lambda.md)
+for packaging, private RDS access, CORS, API Gateway routes and frontend configuration.
+The local HTTP entry point and existing API contracts are preserved.

@@ -1099,7 +1099,7 @@ test("template and event clients share the configured API base and preserve temp
     return Response.json(url.endsWith("/42") ? { template: previewTemplate } : { templates: [previewTemplate] });
   };
   try {
-    const client = loadModule("../src/services/eventTemplates.ts", { "./apiConfig": config });
+    const client = loadModule("../src/services/eventTemplates.ts", { "./apiConfig": config }, { "import.meta.env": "{}" });
     assert.deepEqual(await client.listEventTemplates(), [previewTemplate]);
     assert.deepEqual(await client.getEventTemplate("42"), previewTemplate);
     assert.deepEqual(calls, ["https://example.invalid/api/event-templates", "https://example.invalid/api/event-templates/42"]);
