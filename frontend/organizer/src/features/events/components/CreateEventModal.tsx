@@ -122,6 +122,7 @@ export function CreateEventModal(callbacks: CreateEventCallbacks) {
           {!draft.templateId ? <p className="modal-copy">Select an event type to see its budget categories.</p>
             : detailErrorId === draft.templateId ? <div role="alert"><p>Couldn't load budget defaults.</p><Button variant="secondary" onClick={() => setDetailAttempt(value => value + 1)}>Retry budget defaults</Button></div>
             : !template ? <p role="status">Loading budget defaults...</p>
+            : template.categories.length === 0 ? <p role="status">No budget defaults yet. Please try another event type.</p>
             : !validDefaults ? <p role="alert">Budget defaults are unavailable or do not total 100%. Please try another event type.</p>
             : <>
               {!amounts && <p>Enter a valid total budget to preview category amounts.</p>}
