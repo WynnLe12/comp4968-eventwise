@@ -15,15 +15,14 @@ export interface TemplatesProxyResponse {
 
 export function createTemplatesHandler(
   dependencies?: TemplateRepository,
-  allowedOrigin = process.env.TEMPLATES_CORS_ORIGIN,
 ) {
   return async (event: TemplatesProxyEvent): Promise<TemplatesProxyResponse> => {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (allowedOrigin) {
-      headers["Access-Control-Allow-Origin"] = allowedOrigin;
-      headers["Access-Control-Allow-Methods"] = "GET,OPTIONS";
-      headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization";
-    }
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET,OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type,Authorization",
+    };
     const respond = (statusCode: number, body: object): TemplatesProxyResponse => ({
       statusCode, headers, body: JSON.stringify(body), isBase64Encoded: false,
     });
