@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "tsx watch server.ts",
     "typecheck": "tsc --noEmit",
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-certificates.mjs",
     "start": "node dist/server.js",
     "test": "npm run build && cd dist && node --test",
     "db:up": "docker compose -f ../docker-compose.yml up -d --wait",
@@ -23,7 +23,8 @@
     "ddb:up": "docker compose -f ../docker-compose.dynamodb.yml up -d",
     "ddb:down": "docker compose -f ../docker-compose.dynamodb.yml down",
     "ddb:reset": "docker compose -f ../docker-compose.dynamodb.yml down -v",
-    "ddb:create-table": "tsx guest-service/scripts/createLocalTable.ts"
+    "ddb:create-table": "tsx guest-service/scripts/createLocalTable.ts",
+    "package:templates": "npm run build && node scripts/package-templates.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
@@ -32,6 +33,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1168.0",
+    "@aws-sdk/client-secrets-manager": "^3.1169.0",
     "@aws-sdk/lib-dynamodb": "^3.1168.0",
     "aws-jwt-verify": "^5.2.1",
     "dotenv": "^18.0.10",
