@@ -400,6 +400,8 @@ function EventVendors({
       <VendorForm
         key={editing?.id ?? "new"}
         formId={VENDOR_FORM_ID}
+        eventId={editing?.eventId ?? eventId ?? ""}
+        accountId={userId ?? ""}
         vendor={editing}
         onSubmit={saveVendor}
       />

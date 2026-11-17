@@ -26,6 +26,7 @@ import type {
   VendorFields,
   VendorUpdateInput,
 } from "../../types";
+import { useEventCategories } from "../categories/useEventCategories";
 
 /** What the page returns when a save fails: the banner message, plus inline messages by field. */
 export interface VendorFormSubmitError {
@@ -146,15 +147,26 @@ function fieldError(field: VendorField, values: FormValues) {
 
 export function VendorForm({
   formId,
+  eventId,
+  accountId,
   vendor,
   onSubmit,
 }: {
   formId: string;
+  /** The event whose budget categories fill the Category list. */
+  eventId: string;
+  accountId: string;
   /** The vendor being edited, or null when adding. */
   vendor: Vendor | null;
   onSubmit: (body: VendorUpdateInput) => Promise<VendorFormSubmitError | null>;
 }) {
   const [saved] = useState(() => savedFields(vendor));
+  const {
+    categories,
+    loading: categoriesLoading,
+    error: categoriesError,
+    retry: retryCategories,
+  } = useEventCategories(eventId, accountId);
   const [values, setValues] = useState<FormValues>(() => initialValues(saved));
   const [errors, setErrors] = useState<VendorFieldErrors>({});
   const [banner, setBanner] = useState("");
@@ -262,6 +274,28 @@ export function VendorForm({
   };
 
   const formState = toFields(values);
+
+  // Category choices come from this event's budget. A saved category that is no longer
+  // in the budget stays selectable so editing other fields doesn't silently clear it.
+  const budgetNames = [...new Set(categories.map((category) => category.name.trim()))];
+  const savedCategory = saved.category?.trim() ?? "";
+  const categoryOptions = [
+    { value: "", label: categoriesLoading ? "Loading categories..." : "No category" },
+    ...(savedCategory && !categoriesLoading && !budgetNames.includes(savedCategory)
+      ? [{ value: savedCategory, label: `${savedCategory} (not in budget)` }]
+      : []),
+    ...budgetNames.map((name) => ({ value: name, label: name })),
+  ];
+  const categoryHint = categoriesError ? (
+    <>
+      {categoriesError}{" "}
+      <button type="button" className="btn btn-ghost" onClick={retryCategories}>
+        Retry
+      </button>
+    </>
+  ) : !categoriesLoading && budgetNames.length === 0 ? (
+    "Add categories in Budget to choose one here."
+  ) : undefined;
   const noContract = values.contractStatus === "NOT_STARTED";
 
   const bookingHint =
@@ -289,7 +323,7 @@ export function VendorForm({
       )}
 
       <Field
-        label="Business name"
+        label="Business name *"
         name="name"
         placeholder="e.g. Rosewood Bakery"
         value={values.name}
@@ -301,15 +335,16 @@ export function VendorForm({
         required
       />
       <div className="form-row">
-        <Field
+        <SelectField
           label="Category"
           name="category"
-          placeholder="e.g. Catering"
           value={values.category}
           onChange={(event) => set("category", event.target.value)}
           onBlur={() => validateOnBlur("category")}
           error={errors.category}
-          maxLength={MAX_LENGTH.category}
+          disabled={categoriesLoading}
+          hint={categoryHint}
+          options={categoryOptions}
         />
         <Field
           label="Contact name"
