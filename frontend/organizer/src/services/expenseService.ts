@@ -98,7 +98,82 @@ export class ExpenseDeleteError extends Error {
   constructor(message: string, public readonly code?: string) { super(message); this.name = "ExpenseDeleteError"; }
 }
 
+export interface SavedExpensePayment {
+  paymentId: string;
+  expenseId: string;
+  amount: string;
+  paidAt: string;
+  paymentType: "PAYMENT" | "DEPOSIT" | "REFUND";
+  notes: string | null;
+}
+export interface RecordPaymentInput {
+  amount: string;
+  paidAt: string;
+  paymentType: "PAYMENT" | "DEPOSIT";
+}
+function checkPayment(payment: SavedExpensePayment, expenseId: string): SavedExpensePayment {
+  if (!payment || payment.expenseId !== expenseId || typeof payment.paymentId !== "string" ||
+      typeof payment.amount !== "string" || !/^\d{1,10}\.\d{2}$/.test(payment.amount) || Number(payment.amount) <= 0 ||
+      typeof payment.paidAt !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(payment.paidAt) ||
+      !["PAYMENT", "DEPOSIT", "REFUND"].includes(payment.paymentType) ||
+      !(payment.notes === null || typeof payment.notes === "string")) throw invalidResponse();
+  return payment;
+}
+async function paymentRequest(eventId: string, expenseId: string, offset?: number, input?: RecordPaymentInput) {
+  let token: string | undefined;
+  try { token = (await requireAuthSession()).session.tokens?.accessToken?.toString(); } catch { /* Show the sign-in message below. */ }
+  if (!token) throw new ExpenseSaveError("Your session has expired. Please sign in again.");
+  let response: Response;
+  try {
+    response = await fetch(apiUrl("/events/" + encodeURIComponent(eventId) + "/expenses/" + encodeURIComponent(expenseId) + "/payments" +
+      (input ? "" : "?limit=100&offset=" + offset)), {
+      method: input ? "POST" : "GET", headers: { Authorization: "Bearer " + token, ...(input ? { "Content-Type": "application/json" } : {}) },
+      body: input ? JSON.stringify({ amount: input.amount, paidAt: input.paidAt, paymentType: input.paymentType, notes: null }) : undefined,
+    });
+  } catch { throw new ExpenseSaveError("We couldn't reach the server. Check your connection and try again."); }
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    if (response.status === 409 && body?.error?.code === "PAYMENT_EXCEEDS_BALANCE") {
+      throw new ExpenseSaveError("The remaining balance has changed. Close this form and refresh before recording another payment.", { amount: "Payment cannot exceed the remaining balance." });
+    }
+    if (response.status === 422) {
+      const fields: Record<string, string> = {};
+      const messages: Record<string, string> = { amount: "Enter a valid payment greater than 0, with up to 2 decimals.", paidAt: "Enter a valid payment date no later than today.", paymentType: "Choose Payment or Deposit." };
+      for (const field of Object.keys(body?.error?.fields ?? {})) if (Object.hasOwn(messages, field)) fields[field] = messages[field]!;
+      throw new ExpenseSaveError("Please check the payment details and try again.", fields);
+    }
+    const messages: Record<number, string> = { 401: "Your session has expired. Please sign in again.", 403: "You don't have access to this event.", 404: "This expense is no longer available. Refresh the page." };
+    throw new ExpenseSaveError(messages[response.status] ?? (input ? "We couldn't record this payment. Please try again." : "We couldn't load payment history. Please try again."));
+  }
+  if (!body) throw invalidResponse();
+  return body;
+}
+
 export const expenseService = {
+  async recordPayment(eventId: string, expenseId: string, input: RecordPaymentInput): Promise<Expense> {
+    const body = await paymentRequest(eventId, expenseId, undefined, input);
+    checkPayment(body.data?.payment, expenseId);
+    const expense = mapExpense(body.data?.expense, eventId);
+    if (expense.id !== expenseId) throw invalidResponse();
+    return expense;
+  },
+  async listPayments(eventId: string, expenseId: string): Promise<SavedExpensePayment[]> {
+    const payments: SavedExpensePayment[] = [], ids = new Set<string>();
+    let offset = 0;
+    while (true) {
+      const page = await paymentRequest(eventId, expenseId, offset);
+      if (!Array.isArray(page.data) || !Number.isSafeInteger(page.total) || page.total < 0 || page.offset !== offset ||
+          !Number.isInteger(page.limit) || page.limit < 1 || page.limit > 100 || page.data.length > page.limit) throw invalidResponse();
+      for (const row of page.data) {
+        const payment = checkPayment(row, expenseId);
+        if (ids.has(payment.paymentId)) throw invalidResponse();
+        ids.add(payment.paymentId); payments.push(payment);
+      }
+      offset += page.data.length;
+      if (offset >= page.total) return payments;
+      if (!page.data.length) throw invalidResponse();
+    }
+  },
   async remove(eventId: string, expenseId: string): Promise<void> {
     let token: string | undefined;
     try { token = (await requireAuthSession()).session.tokens?.accessToken?.toString(); } catch { /* Show the sign-in message below. */ }

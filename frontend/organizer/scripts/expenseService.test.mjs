@@ -154,3 +154,52 @@ test("expense deletion preserves payment history and provides safe retry/sign-in
   assert.equal(expired.calls.length, 0);
   await assert.rejects(client([new Error("private")]).service.remove("10", "900"), /couldn\x27t reach/);
 });
+
+const paymentRow = overrides => ({ paymentId: "77", expenseId: "900", amount: "25.01", paidAt: "2020-11-15", paymentType: "PAYMENT", notes: null, ...overrides });
+const paymentInput = { amount: "25.01", paidAt: "2020-11-15", paymentType: "DEPOSIT" };
+const paidResponse = overrides => ({ ok: true, status: 201, json: async () => ({ data: {
+  payment: paymentRow({ paymentType: "DEPOSIT" }), expense: row({ expenseId: "900", committedAmount: "250.01", paidTotal: "25.01", paymentStatus: "PARTIALLY_PAID", ...overrides })
+} }) });
+test("record payment sends only writable fields and uses server balances and status", async () => {
+  const h = client([paidResponse()]);
+  const expense = await h.service.recordPayment("10", "900", { ...paymentInput, paidTotal: "999", eventId: "other" });
+  assert.equal(h.calls[0].url, "/api/events/10/expenses/900/payments");
+  assert.equal(h.calls[0].method, "POST");
+  assert.equal(h.calls[0].headers.Authorization, "Bearer test-token");
+  assert.deepEqual(JSON.parse(h.calls[0].body), { ...paymentInput, notes: null });
+  assert.equal(expense.paid, 25.01); assert.equal(expense.status, "Partially paid");
+  await assert.rejects(client([paidResponse({ eventId: "20" })]).service.recordPayment("10", "900", paymentInput), /couldn\x27t read/);
+  await assert.rejects(client([paidResponse({ expenseId: "901" })]).service.recordPayment("10", "900", paymentInput), /couldn\x27t read/);
+});
+test("payment history follows pagination, preserves server ordering and includes deposits and refunds", async () => {
+  const h = client([page([paymentRow({ paymentId: "78", paymentType: "REFUND" })], 2), page([paymentRow({ paymentType: "DEPOSIT" })], 2, 1)]);
+  const history = await h.service.listPayments("10", "900");
+  assert.deepEqual(history.map(p => p.paymentType), ["REFUND", "DEPOSIT"]);
+  assert.match(h.calls[1].url, /\/900\/payments\?limit=100&offset=1$/);
+  assert.equal(h.calls[0].headers.Authorization, "Bearer test-token");
+  assert.deepEqual(await client([page([])]).service.listPayments("10", "900"), []);
+});
+test("payment history rejects cross-expense records, duplicate IDs, malformed amounts, and incomplete pages", async () => {
+  for (const overrides of [{ expenseId: "901" }, { amount: "NaN" }, { paymentType: "UNKNOWN" }]) {
+    await assert.rejects(client([page([paymentRow(overrides)])]).service.listPayments("10", "900"), /couldn\x27t read/);
+  }
+  await assert.rejects(client([page([paymentRow(), paymentRow()])]).service.listPayments("10", "900"), /couldn\x27t read/);
+  await assert.rejects(client([page([], 1)]).service.listPayments("10", "900"), /couldn\x27t read/);
+});
+test("payment conflicts and validation errors are actionable; auth/network failures preserve the draft", async () => {
+  const conflict = client([{ ok: false, status: 409, json: async () => ({ error: { code: "PAYMENT_EXCEEDS_BALANCE" } }) }]);
+  await assert.rejects(conflict.service.recordPayment("10", "900", paymentInput), error => {
+    assert.match(error.message, /balance has changed/); assert.match(error.fields.amount, /remaining balance/); return true;
+  });
+  const invalid = client([{ ok: false, status: 422, json: async () => ({ error: { fields: { paidAt: "private", paymentType: "private" } } }) }]);
+  await assert.rejects(invalid.service.recordPayment("10", "900", paymentInput), error => {
+    assert.match(error.fields.paidAt, /no later than today/); assert.equal(error.fields.paymentType, "Choose Payment or Deposit."); return true;
+  });
+  for (const [status, message] of [[401, /sign in/], [403, /access/], [404, /no longer/], [500, /couldn\x27t record/]]) {
+    await assert.rejects(client([{ ok: false, status, json: async () => ({ error: { message: "private" } }) }]).service.recordPayment("10", "900", paymentInput), message);
+  }
+  const expired = client([], true);
+  await assert.rejects(expired.service.recordPayment("10", "900", paymentInput), /sign in/);
+  assert.equal(expired.calls.length, 0);
+  await assert.rejects(client([new Error("private")]).service.recordPayment("10", "900", paymentInput), /couldn\x27t reach/);
+});

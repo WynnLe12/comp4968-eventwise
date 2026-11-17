@@ -9,6 +9,8 @@ import { EmptyState, ErrorState, LoadingState, PageHeader, StatCard } from "../.
 import { useEvents } from "../events/EventsContext";
 import { useEventCategories } from "../categories/useEventCategories";
 import type { Expense } from "../../types";
+import { ExpensePaymentForm } from "./ExpensePaymentForm";
+import { validateExpensePayment, type PaymentDraft, type PaymentErrors } from "./expensePayments";
 import { ExpenseDeleteDialog } from "./ExpenseDeleteDialog";
 import { ExpenseForm } from "./ExpenseForm";
 import { ExpenseActions } from "./ExpenseActions";
@@ -17,7 +19,7 @@ import { expenseSummary, matchesExpenseSummary, type ExpenseSummaryFilter } from
 const currency = (amount: number) =>
   amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
 
-const filters = ["All", "Unpaid", "Deposit", "Paid"];
+const filters = ["All", "Unpaid", "Partially paid", "Paid"];
 
 function statusTone(status: string) {
   if (status === "Paid") return "success";
@@ -48,6 +50,7 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
   const { data: expenseData, loading: expensesLoading, error: expensesError, reload: reloadExpenses, update: updateExpenses } = useResource(loadExpenses);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Expense | null>(null);
+  const [paying, setPaying] = useState<Expense | null>(null);
   const [deleting, setDeleting] = useState<Expense | null>(null);
   const [notice, setNotice] = useState("");
   const expenses = expenseData ?? [];
@@ -74,6 +77,18 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
     setAdding(false);
     setNotice(editing ? "Expense updated." : "Expense added.");
     setEditing(null);
+  };
+
+  const savePayment = async (draft: PaymentDraft): Promise<PaymentErrors> => {
+    if (!paying || paying.eventId !== eventId) throw new Error("Reopen this expense in its own event.");
+    const errors = validateExpensePayment(paying, draft);
+    if (Object.keys(errors).length) return errors;
+    const saved = await expenseService.recordPayment(eventId, paying.id, {
+      amount: Number(draft.amount.trim()).toFixed(2), paidAt: draft.paidAt, paymentType: draft.paymentType,
+    });
+    updateExpenses(current => current.map(row => row.id === saved.id ? saved : row));
+    setPaying(null); clearTableFilters(); setNotice("Payment recorded.");
+    return {};
   };
 
   const deleteExpense = async () => {
@@ -124,7 +139,6 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
           </Button>
         }
       />
-      <p className="feature-preview-notice" role="status">You can add, edit, delete, and view saved expenses. Recording payments will be available next.</p>
       {notice && <p role="status">{notice}</p>}
       {vendorsError ? (
         <ErrorState message="We couldn't load vendors. Retry to link expenses to a vendor." onRetry={reloadVendors} />
@@ -267,7 +281,7 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
                     <Badge tone={statusTone(x.status)}>{x.status}</Badge>
                   </td>
                   <td>
-                    <ExpenseActions vendorName={vendorNames.get(x.vendorId ?? "")} expense={x} readOnly allowEdit allowDelete onEdit={() => { setNotice(""); setEditing(x); }} onRecordPayment={() => {}} onDelete={() => { setNotice(""); setDeleting(x); }} />
+                    <ExpenseActions vendorName={vendorNames.get(x.vendorId ?? "")} expense={x} onEdit={() => { setNotice(""); setEditing(x); }} onRecordPayment={() => { setNotice(""); setPaying(x); }} onDelete={() => { setNotice(""); setDeleting(x); }} />
                   </td>
                 </tr>
               ))}
@@ -285,6 +299,7 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
           </div>
         </div>
       </Card>
+      {paying && <ExpensePaymentForm key={paying.id} expense={paying} onSave={savePayment} onClose={() => setPaying(null)} />}
       {deleting && <ExpenseDeleteDialog key={deleting.id} expense={deleting} onConfirm={deleteExpense} onClose={() => setDeleting(null)} />}
       {(adding || editing) && <ExpenseForm key={editing?.id ?? "new"} eventId={eventId} accountId={accountId} vendors={vendors}
         expense={editing ?? undefined} defaultVendorId={selectedVendor?.id} onSave={saveExpense}

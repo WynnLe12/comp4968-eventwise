@@ -265,7 +265,7 @@ function findAll(node, predicate) {
 function tableHost(vendorId = "") {
   let vendorLoader, expenseLoader;
   let expenseState;
-  const vendorRequests = [], createRequests = [], updateRequests = [], deleteRequests = [];
+  const vendorRequests = [], createRequests = [], updateRequests = [], deleteRequests = [], paymentRequests = [];
   const h = host();
   h.react.useCallback = callback => callback;
   let params = new URLSearchParams(vendorId ? "vendorId=" + vendorId + "&keep=yes" : "");
@@ -291,6 +291,11 @@ function tableHost(vendorId = "") {
       const original = expenses.find(expense => expense.id === expenseId);
       return { ...original, vendor: input.description, categoryId: input.categoryId, category: "Photography",
         vendorId: input.vendorId, total: Number(input.committedAmount), dueDate: input.dueDate };
+    }, recordPayment: async (eventId, expenseId, input) => {
+      paymentRequests.push({ eventId, expenseId, input });
+      const original = expenses.find(row => row.id === expenseId);
+      const paid = (Math.round(original.paid * 100) + Math.round(Number(input.amount) * 100)) / 100;
+      return { ...original, paid, status: paid === original.total ? "Paid" : "Partially paid" };
     }, remove: async (eventId, expenseId) => { deleteRequests.push({ eventId, expenseId }); } } },
     "../../components/ui": { Badge: () => null, Button: () => null, Card: () => null, Icon: () => null },
     "../../components/page": { EmptyState: () => null, ErrorState: () => null, PageHeader: () => null, StatCard: () => null },
@@ -301,14 +306,16 @@ function tableHost(vendorId = "") {
     } },
     "./ExpenseActions": { ExpenseActions: () => null }, "./ExpenseForm": { ExpenseForm: () => null },
     "./ExpenseDeleteDialog": { ExpenseDeleteDialog: () => null }, "./ExpensePaymentForm": { ExpensePaymentForm: () => null },
-    "./expensePayments": {}, "./expenseDraft": draftModule,
+    "./expensePayments": load("features/expenses/expensePayments.ts"), "./expenseDraft": draftModule,
   });
   const page = component.Expenses();
   const render = () => h.render(() => page.type(page.props));
   return {
     render,
     loadVendorOptions() { render(); return vendorLoader(); },
-    vendorRequests, createRequests, updateRequests, deleteRequests,
+    vendorRequests, createRequests, updateRequests, deleteRequests, paymentRequests,
+    openPayment(id) { find(render(), node => node.props?.expense?.id === id && node.props?.onRecordPayment).props.onRecordPayment(); },
+    paymentForm: () => find(render(), node => node.props?.onSave && node.props?.expense && !node.props?.accountId),
     openDelete(id) { find(render(), node => node.props?.expense?.id === id && node.props?.onDelete).props.onDelete(); },
     deleteDialog: () => find(render(), node => node.props?.onConfirm),
     openEdit(id) { find(render(), node => node.props?.expense?.id === id && node.props?.onEdit).props.onEdit(); },
@@ -511,4 +518,87 @@ test("backend payment-history conflicts turn the delete confirmation into a bloc
   h.confirm(); await tick();
   assert.equal(h.button(), null);
   assert.ok(find(h.render(), node => node.props?.role === "alert" && node.props.children === "Keep payment history."));
+});
+
+
+test("recording a payment replaces the expense with the server balance and never changes the commitment", async () => {
+  const h = tableHost(); h.openPayment("1");
+  const errors = await h.paymentForm().props.onSave({ amount: "25.01", paidAt: "2020-11-15", paymentType: "DEPOSIT" });
+  assert.deepEqual(errors, {});
+  assert.deepEqual(h.paymentRequests, [{ eventId: "10", expenseId: "1", input: { amount: "25.01", paidAt: "2020-11-15", paymentType: "DEPOSIT" } }]);
+  assert.equal(h.expense("1").total, 100); assert.equal(h.expense("1").paid, 25.01);
+  assert.equal(h.expense("1").status, "Partially paid");
+  assert.equal(h.paymentForm(), null);
+  h.openPayment("1");
+  assert.ok((await h.paymentForm().props.onSave({ amount: "100", paidAt: "2020-11-15", paymentType: "PAYMENT" })).amount);
+  assert.equal(h.paymentRequests.length, 1);
+});
+
+function paymentFormHost(onSave) {
+  const h = host(); let calls = 0, closes = 0;
+  const { ExpensePaymentForm } = load("features/expenses/ExpensePaymentForm.tsx", {
+    react: h.react, "react/jsx-runtime": jsx, "../../components/ui": { Button: () => null, Icon: () => null },
+    "../../services/expenseService": { ExpenseSaveError }, "./expensePayments": load("features/expenses/expensePayments.ts"),
+  });
+  const props = { expense: { id: "1", eventId: "10", vendor: "Cake", total: 100, paid: 0 },
+    onSave: draft => { calls++; return onSave(draft); }, onClose() { closes++; } };
+  const render = () => h.render(() => ExpensePaymentForm(props));
+  return { render, calls: () => calls, closes: () => closes,
+    change(name, value) { find(render(), node => node.props?.name === name).props.onChange({ target: { value } }); },
+    submit: () => find(render(), node => node.type === "form").props.onSubmit({ preventDefault() {} }),
+    close: () => find(render(), node => node.type === "dialog").props.onCancel({ preventDefault() {} }),
+  };
+}
+test("payment form rejects zero/negative/excess amounts and future dates before sending requests", async () => {
+  const h = paymentFormHost(async () => ({}));
+  for (const amount of ["0", "-1", "100.01"]) { h.change("amount", amount); await h.submit(); }
+  assert.equal(h.calls(), 0);
+  h.change("amount", "10"); h.change("paidAt", "9999-12-31"); await h.submit();
+  assert.equal(h.calls(), 0);
+});
+test("payment form prevents duplicate submissions and keeps the amount after a failed save", async () => {
+  let reject;
+  const h = paymentFormHost(() => new Promise((resolve, fail) => { reject = fail; }));
+  h.change("amount", "25.01"); h.change("paidAt", "2020-11-15");
+  const pending = h.submit(); await h.submit(); h.close();
+  assert.equal(h.calls(), 1); assert.equal(h.closes(), 0);
+  assert.equal(find(h.render(), node => node.type === "form").props["aria-busy"], true);
+  reject(new ExpenseSaveError("Balance changed.", { amount: "Check the remaining balance." })); await pending;
+  assert.equal(find(h.render(), node => node.props?.name === "amount").props.value, "25.01");
+  assert.ok(find(h.render(), node => node.props?.id === "payment-amount-error"));
+  h.close(); assert.equal(h.closes(), 1);
+});
+test("payment history shows loading, retry, empty data, and separate refund entries", async () => {
+  let state = { loading: true, data: null, error: null }, retries = 0, loader;
+  const { ExpensePaymentHistory } = load("features/expenses/ExpensePaymentHistory.tsx", {
+    react: { useCallback: fn => fn }, "react/jsx-runtime": jsx,
+    "../../hooks/useResource": { useResource: fn => { loader = fn; return { ...state, reload() { retries++; } }; } },
+    "../../services/expenseService": { expenseService: { listPayments: async (eventId, expenseId) => [eventId, expenseId] } },
+    "../../utils/dateFormat": { formatCalendarDate: date => date },
+  });
+  const render = () => ExpensePaymentHistory({ eventId: "10", expenseId: "900" });
+  assert.equal(render().props.role, "status");
+  assert.deepEqual(await loader(), ["10", "900"]);
+  state = { loading: false, data: null, error: new Error("Try again.") };
+  find(render(), node => node.type === "button").props.onClick(); assert.equal(retries, 1);
+  state = { loading: false, data: [], error: null };
+  assert.equal(render().props.children, "No payments recorded yet.");
+  state.data = [{ paymentId: "2", amount: "20.00", paidAt: "2020-11-15", paymentType: "REFUND", notes: "Returned" }, { paymentId: "1", amount: "50.00", paidAt: "2020-11-14", paymentType: "DEPOSIT", notes: null }];
+  const html = renderToStaticMarkup(render());
+  assert.match(html, /Refund/); assert.match(html, /-\$20.00/); assert.match(html, /Deposit/); assert.match(html, /Returned/);
+});
+test("payment history loads only when details are open and unmounts when the drawer closes", () => {
+  const h = host(); h.react.useId = () => "drawer";
+  const History = () => null;
+  const { ExpenseActions } = load("features/expenses/ExpenseActions.tsx", {
+    react: h.react, "react/jsx-runtime": jsx, "../../utils/dateFormat": { formatCalendarDate: date => date },
+    "../../components/ui": { Badge: () => null, Button: () => null, Icon: () => null },
+    "./ExpensePaymentHistory": { ExpensePaymentHistory: History },
+  });
+  const render = () => h.render(() => ExpenseActions({ expense: { id: "900", eventId: "10", total: 100, paid: 0 }, onEdit() {}, onRecordPayment() {}, onDelete() {} }));
+  assert.equal(find(render(), node => node.type === History), null);
+  find(render(), node => node.props?.ref && Array.isArray(node.props?.children) && node.props.children.includes(" View details")).props.onClick();
+  assert.equal(find(render(), node => node.type === History).props.expenseId, "900");
+  find(render(), node => node.type === "dialog").props.onClose();
+  assert.equal(find(render(), node => node.type === History), null);
 });
