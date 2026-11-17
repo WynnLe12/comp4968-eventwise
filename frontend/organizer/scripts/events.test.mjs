@@ -355,8 +355,7 @@ test("event workspace renders loading, empty, retry, and unavailable states inst
   assert.match(render("guests"), /LIVE CONTENT/);
   assert.match(render("coplanners"), /not available for this event/);
   assert.doesNotMatch(render("coplanners"), /LIVE CONTENT/);
-  assert.match(render("expenses"), /Preview: sample expenses/);
-  assert.match(render("expenses"), /aren&#x27;t saved to your selected event|aren't saved to your selected event/);
+  assert.doesNotMatch(render("expenses"), /Preview: sample expenses/);
   assert.match(render("expenses"), /LIVE CONTENT/);
   // Vendors are live API data: no sample-data notice.
   assert.doesNotMatch(render("vendors"), /Preview: sample/);

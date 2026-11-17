@@ -82,24 +82,14 @@ export function EventWorkspace({
         </div>
       );
   }
-  // Vendors use the real API; expenses are still sample data until the Expenses API is deployed.
-  if (page === "expenses")
-    return (
-      <>
-        <p className="feature-preview-notice" role="status">
-          Preview: sample expenses. Changes aren't saved to your selected event
-          and reset on refresh.
-        </p>
-        {children}
-      </>
-    );
   // Keep unconnected feature screens from presenting sample data as this event's data.
   if (
     page !== "dashboard" &&
     page !== "events" &&
     page !== "budget" &&
     page !== "guests" &&
-    page !== "vendors"
+    page !== "vendors" &&
+    page !== "expenses"
   )
     return (
       <>

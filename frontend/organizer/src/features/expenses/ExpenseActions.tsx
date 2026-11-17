@@ -8,8 +8,9 @@ function money(amount: number) {
   return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
-export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, onDelete }: {
+export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, onDelete, readOnly = false }: {
   expense: Expense;
+  readOnly?: boolean;
   vendorName?: string;
   onEdit: () => void;
   onRecordPayment: () => void;
@@ -73,7 +74,7 @@ export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, o
           <Icon name="receipt" size={16} /> View details
         </button>
         <button
-          type="button"
+          type="button" disabled={readOnly}
           onClick={() => {
             menuRef.current?.hidePopover();
             triggerRef.current?.focus();
@@ -83,7 +84,7 @@ export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, o
           <Icon name="edit" size={16} /> Edit expense
         </button>
         <button
-          type="button" disabled={fullyPaid}
+          type="button" disabled={readOnly || fullyPaid}
           title={fullyPaid ? "This expense is fully paid" : undefined}
           onClick={() => {
             menuRef.current?.hidePopover();
@@ -95,6 +96,7 @@ export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, o
         </button>
         <button
           type="button"
+          disabled={readOnly}
           className="expense-delete-action"
           onClick={() => {
             menuRef.current?.hidePopover();
@@ -145,9 +147,9 @@ export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, o
               <h3>Payment summary</h3>
               <Button
                 icon="receipt"
-                disabled={fullyPaid}
+                disabled={readOnly || fullyPaid}
                 onClick={() => {
-                  if (!fullyPaid) onRecordPayment();
+                  if (!readOnly && !fullyPaid) onRecordPayment();
                 }}
               >
                 Record payment
@@ -162,6 +164,7 @@ export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, o
           </section>
           <section className="expense-drawer-section">
             <h3>Payment history</h3>
+            {readOnly ? <p>Payment history will be available once payments are connected.</p> : <>
             {earlierPaid > 0 && <p>Previously paid: {money(earlierPaid)}</p>}
             {recordedPayments.length > 0 ? (
               <ul className="expense-payment-history">
@@ -176,6 +179,7 @@ export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, o
                 ))}
               </ul>
             ) : <p>{earlierPaid > 0 ? "Earlier payment details are not available." : "No payments recorded yet."}</p>}
+            </>}
           </section>
         </div>
       </dialog>

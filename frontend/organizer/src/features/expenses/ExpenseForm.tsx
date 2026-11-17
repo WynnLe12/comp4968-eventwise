@@ -3,6 +3,7 @@ import { Button, Icon } from "../../components/ui";
 import type { Expense, Vendor } from "../../types";
 import { expenseFromDraft, validateExpenseDraft, type ExpenseDraft, type ExpenseDraftErrors } from "./expenseDraft";
 import "./expenses.css";
+import { ExpenseSaveError } from "../../services/expenseService";
 import { CategorySelect } from "../categories/CategorySelect";
 import { useEventCategories } from "../categories/useEventCategories";
 
@@ -12,7 +13,7 @@ export function ExpenseForm({ eventId, accountId, expense, vendors, defaultVendo
   vendors: Vendor[];
   defaultVendorId?: string;
   expense?: Expense;
-  onSave: (expense: Expense) => void;
+  onSave: (expense: Expense) => void | Promise<void>;
   onClose: () => void;
 }) {
   const { categories, loading: categoriesLoading, error: categoriesError, retry: retryCategories } = useEventCategories(eventId, accountId);
@@ -38,17 +39,26 @@ export function ExpenseForm({ eventId, accountId, expense, vendors, defaultVendo
     }
     return fields;
   };
+  const pendingRef = useRef(false);
+  const activeRef = useRef(true);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const close = () => { if (!pendingRef.current) onClose(); };
   const [errors, setErrors] = useState<ExpenseDraftErrors>({});
 
   useEffect(() => {
+    activeRef.current = true;
     const previous = document.activeElement as HTMLElement | null;
     dialogRef.current?.showModal();
     return () => {
+      activeRef.current = false;
       if (previous?.isConnected) previous.focus();
     };
   }, []);
 
   const update = (field: keyof ExpenseDraft, value: string) => {
+    if (pendingRef.current) return;
+    setSaveError("");
     if (field === "dueDate") setDueDateChanged(true);
     setDraft((current) => ({ ...current, [field]: value }));
     if (errors[field]) {
@@ -59,8 +69,10 @@ export function ExpenseForm({ eventId, accountId, expense, vendors, defaultVendo
     }
   };
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (pendingRef.current) return;
+    setSaveError("");
     const nextErrors = validate(draft);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) {
@@ -69,7 +81,19 @@ export function ExpenseForm({ eventId, accountId, expense, vendors, defaultVendo
       return;
     }
     const category = categories.find(category => category.categoryId === draft.categoryId)!;
-    onSave({ ...expenseFromDraft({ ...draft, categoryName: category.name }, expense, dueDateChanged), eventId });
+    pendingRef.current = true;
+    setSaving(true);
+    try {
+      await onSave({ ...expenseFromDraft({ ...draft, categoryName: category.name }, expense, dueDateChanged), eventId });
+    } catch (error) {
+      if (activeRef.current) {
+        setSaveError(error instanceof Error ? error.message : "Couldn\'t save this expense. Please try again.");
+        if (error instanceof ExpenseSaveError) setErrors(error.fields);
+      }
+    } finally {
+      pendingRef.current = false;
+      if (activeRef.current) setSaving(false);
+    }
   };
 
   return (
@@ -77,9 +101,9 @@ export function ExpenseForm({ eventId, accountId, expense, vendors, defaultVendo
       ref={dialogRef}
       className="expense-form-dialog"
       aria-labelledby="expense-form-title"
-      onCancel={(event) => { event.preventDefault(); onClose(); }}
+      onCancel={(event) => { event.preventDefault(); close(); }}
       onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget) close();
       }}
     >
       <div className="expense-form-content">
@@ -88,12 +112,14 @@ export function ExpenseForm({ eventId, accountId, expense, vendors, defaultVendo
             <div className="eyebrow">EventWise</div>
             <h2 id="expense-form-title">{expense ? "Edit expense" : "Add an expense"}</h2>
           </div>
-          <button type="button" className="icon-btn" aria-label="Close expense form" onClick={onClose}>
+          <button type="button" className="icon-btn" aria-label="Close expense form" disabled={saving} onClick={close}>
             <Icon name="close" />
           </button>
         </header>
-        <form ref={formRef} onSubmit={submit} noValidate>
+        <form ref={formRef} onSubmit={submit} noValidate aria-busy={saving}>
           <div className="modal-body">
+            {saveError && <p className="expense-form-error" role="alert">{saveError}</p>}
+            <fieldset disabled={saving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
             {Object.values(errors).some(Boolean) && (
               <p className="expense-form-error" role="alert">Please fix the highlighted fields and try again.</p>
             )}
@@ -169,10 +195,11 @@ export function ExpenseForm({ eventId, accountId, expense, vendors, defaultVendo
                 {errors.dueDate && <small id="expense-date-error" className="expense-field-error">{errors.dueDate}</small>}
               </label>
             </div>
+            </fieldset>
           </div>
           <footer className="modal-footer">
-            <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={categoriesLoading || Boolean(categoriesError) || categories.length === 0}>{expense ? "Save changes" : "Add expense"}</Button>
+            <Button variant="secondary" disabled={saving} onClick={close}>Cancel</Button>
+            <Button type="submit" disabled={saving || categoriesLoading || Boolean(categoriesError) || categories.length === 0}>{saving ? "Saving..." : expense ? "Save changes" : "Add expense"}</Button>
           </footer>
         </form>
       </div>

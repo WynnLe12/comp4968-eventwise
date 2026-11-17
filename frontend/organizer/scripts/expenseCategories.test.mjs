@@ -150,25 +150,32 @@ function find(node, predicate) {
   if (Array.isArray(node)) { for (const child of node) { const hit = find(child, predicate); if (hit) return hit; } return null; }
   return predicate(node) ? node : find(node.props?.children, predicate);
 }
-function formHost(expense) {
+const { ExpenseSaveError } = load("services/expenseService.ts", {
+  "../features/auth/services/authService": {}, "./apiConfig": {},
+});
+function formHost(expense, onSave) {
   const h = host(), saves = [];
+  let closes = 0;
   let categoryState = { categories: [category()], loading: false, error: "", retry() {} };
   const Category = () => null;
   const { ExpenseForm } = load("features/expenses/ExpenseForm.tsx", {
     react: h.react, "react/jsx-runtime": jsx,
     "../../components/ui": { Button: () => null, Icon: () => null },
     "./expenseDraft": draftModule,
+    "../../services/expenseService": { ExpenseSaveError },
     "../categories/CategorySelect": { CategorySelect: Category },
     "../categories/useEventCategories": { useEventCategories: (eventId, accountId) => {
       assert.equal(eventId, "10"); assert.equal(accountId, "owner"); return categoryState;
     } },
   });
-  const props = { eventId: "10", accountId: "owner", vendors: [], expense, onSave: value => saves.push(value), onClose() {} };
+  const props = { eventId: "10", accountId: "owner", vendors: [], expense, onSave: value => { saves.push(value); return onSave?.(value); }, onClose() { closes++; } };
   const render = () => h.render(() => ExpenseForm(props));
   return { saves, render, category: () => find(render(), n => n.type === Category),
     change(name, value) { find(render(), n => n.props?.name === name).props.onChange({ target: { value } }); },
     select(value) { this.category().props.onChange(value); },
-    submit() { find(render(), n => n.type === "form").props.onSubmit({ preventDefault() {} }); },
+    submit() { return find(render(), n => n.type === "form").props.onSubmit({ preventDefault() {} }); },
+    close() { find(render(), n => n.type === "dialog").props.onCancel({ preventDefault() {} }); },
+    closes: () => closes,
     state(value) { categoryState = value; },
   };
 }
@@ -233,7 +240,7 @@ test("expense page resets its form state by selected account/event rather than t
   const { Expenses } = load("features/expenses/Expenses.tsx", {
     "react/jsx-runtime": jsx, react: {}, "react-router-dom": {},
     "../../utils/dateFormat": {}, "../../hooks/useResource": {}, "../../services/vendorService": {},
-    "../../services/mockExpenseStore": {}, "../../components/ui": {}, "../../components/page": {},
+    "../../services/expenseService": {}, "../../components/ui": {}, "../../components/page": {},
     "../../data/mockData": { CURRENT_EVENT_ID: "demo" },
     "../events/EventsContext": { useEvents: () => selection },
     "../categories/useEventCategories": {},
@@ -256,14 +263,15 @@ function findAll(node, predicate) {
   return [...(predicate(node) ? [node] : []), ...findAll(node.props?.children, predicate)];
 }
 function tableHost(vendorId = "") {
-  let vendorLoader;
-  const vendorRequests = [];
+  let vendorLoader, expenseLoader;
+  let expenseState;
+  const vendorRequests = [], createRequests = [];
   const h = host();
   h.react.useCallback = callback => callback;
   let params = new URLSearchParams(vendorId ? "vendorId=" + vendorId + "&keep=yes" : "");
   let retries = 0;
   let categoryState = { categories: [category("10", "123", "Photography"), category("10", "124", "Photography")], loading: false, error: "", retry: () => retries++ };
-  const expenses = [
+  let expenses = [
     { id: "1", eventId: "10", vendorId: "v1", vendor: "Venue fee", categoryId: "123", category: "Photography", total: 100, paid: 0, status: "Unpaid" },
     { id: "2", eventId: "10", vendorId: "v1", vendor: "Photo deposit", categoryId: "124", category: "Photography", total: 200, paid: 50, status: "Deposit paid" },
     { id: "3", eventId: "10", vendorId: "v2", vendor: "Photo balance", categoryId: "123", category: "Photography", total: 300, paid: 300, status: "Paid" },
@@ -273,9 +281,12 @@ function tableHost(vendorId = "") {
     react: h.react, "react/jsx-runtime": jsx,
     "react-router-dom": { useSearchParams: () => [params, change => { params = typeof change === "function" ? change(params) : change; }] },
     "../../utils/dateFormat": { formatCalendarDate: () => "No due date" },
-    "../../hooks/useResource": { useResource: loader => { vendorLoader = loader; return { data: [{ id: "v1", eventId: "10", name: "Vendor One" }, { id: "v2", eventId: "10", name: "Vendor Two" }], loading: false, error: null }; } },
+    "../../hooks/useResource": { useResource: loader => { if (String(loader).includes("expenseService")) { expenseLoader = loader; return expenseState ?? { data: expenses, loading: false, error: null, reload() {}, update(change) { expenses = change(expenses); } }; } vendorLoader = loader; return { data: [{ id: "v1", eventId: "10", name: "Vendor One" }, { id: "v2", eventId: "10", name: "Vendor Two" }], loading: false, error: null }; } },
     "../../services/vendorService": { vendorService: { list: async eventId => { vendorRequests.push(eventId); return []; } } },
-    "../../services/mockExpenseStore": { mockExpenseStore: { list: () => expenses } },
+    "../../services/expenseService": { expenseService: { list: async eventId => expenses.filter(expense => expense.eventId === eventId), create: async (eventId, input) => {
+      createRequests.push({ eventId, input }); return { id: "900", eventId, vendorId: input.vendorId, categoryId: input.categoryId,
+        vendor: input.description, category: "Photography", total: Number(input.committedAmount), paid: 0, status: "Unpaid", dueDate: input.dueDate };
+    } } },
     "../../components/ui": { Badge: () => null, Button: () => null, Card: () => null, Icon: () => null },
     "../../components/page": { EmptyState: () => null, ErrorState: () => null, PageHeader: () => null, StatCard: () => null },
     "../../data/mockData": { CURRENT_EVENT_ID: "demo" },
@@ -292,7 +303,11 @@ function tableHost(vendorId = "") {
   return {
     render,
     loadVendorOptions() { render(); return vendorLoader(); },
-    vendorRequests,
+    vendorRequests, createRequests,
+    openAdd() { find(render(), node => node.props?.page === "expenses").props.action.props.onClick(); },
+    form: () => find(render(), node => node.props?.onSave && node.props?.accountId),
+    loadExpenseRows() { render(); return expenseLoader(); },
+    expenseState: value => { expenseState = value; },
     filter: () => find(render(), node => node.props?.["aria-label"] === "Filter expenses by category"),
     select(id) { this.filter().props.onChange({ target: { value: id } }); },
     rows: () => findAll(render(), node => node.type === "tr" && node.props.className === "expense-row").map(node => node.key),
@@ -358,4 +373,48 @@ test("expense vendor loader calls the real adapter for the selected non-sample e
   const h = tableHost();
   await h.loadVendorOptions();
   assert.deepEqual(h.vendorRequests, ["10"]);
+});
+
+
+test("expense table loads saved rows and hides totals on loading or API failure", async () => {
+  const h = tableHost();
+  assert.equal((await h.loadExpenseRows()).length, 4);
+  h.expenseState({ loading: true, data: null, error: null });
+  assert.ok(find(h.render(), node => node.props?.label === "Loading expenses..."));
+  assert.deepEqual(h.rows(), []);
+  let retries = 0;
+  h.expenseState({ loading: false, data: null, error: new Error("Please sign in again."), reload() { retries++; } });
+  const error = find(h.render(), node => node.props?.message === "Please sign in again.");
+  assert.ok(error);
+  error.props.onRetry();
+  assert.equal(retries, 1);
+  assert.deepEqual(h.rows(), []);
+});
+
+
+test("expense creation waits for saving, blocks double submits/closing, and preserves the draft on failure", async () => {
+  let reject;
+  const h = formHost(undefined, () => new Promise((resolve, fail) => { reject = fail; }));
+  h.change("name", "Cake"); h.change("amount", "250"); h.select("123");
+  const pending = h.submit();
+  assert.equal(find(h.render(), node => node.type === "form").props["aria-busy"], true);
+  await h.submit(); h.close();
+  assert.equal(h.saves.length, 1); assert.equal(h.closes(), 0);
+  reject(new ExpenseSaveError("Check the selected category.", { categoryId: "Choose a category from this event." }));
+  await pending;
+  assert.equal(find(h.render(), node => node.props?.name === "name").props.value, "Cake");
+  assert.equal(h.category().props.error, "Choose a category from this event.");
+  assert.ok(find(h.render(), node => node.props?.role === "alert" && node.props.children === "Check the selected category."));
+  assert.equal(find(h.render(), node => node.type === "form").props["aria-busy"], false);
+  h.close(); assert.equal(h.closes(), 1);
+});
+
+test("successful expense creation sends the selected event and category, uses the saved ID, and clears table filters", async () => {
+  const h = tableHost();
+  h.select("123"); h.search("not visible"); h.openAdd();
+  await h.form().props.onSave({ id: "temporary", eventId: "10", categoryId: "123", vendorId: "v1", vendor: "New saved fee", total: 250.01, dueDate: null });
+  assert.deepEqual(h.createRequests, [{ eventId: "10", input: { categoryId: "123", vendorId: "v1", description: "New saved fee", committedAmount: "250.01", dueDate: null } }]);
+  assert.equal(h.form(), null);
+  assert.equal(h.rows()[0], "900");
+  assert.equal(h.filter().props.value, "");
 });
