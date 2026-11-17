@@ -13,3 +13,4 @@ coverage/
 *.tfvars
 *.tfvars.json
 .DS_Store
+backend/eventwise-budget.zip
