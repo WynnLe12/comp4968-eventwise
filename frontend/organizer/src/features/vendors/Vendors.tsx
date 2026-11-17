@@ -26,6 +26,8 @@ import type {
   VendorCreateInput,
   VendorUpdateInput,
 } from "../../types";
+import { expenseService } from "../../services/expenseService";
+import type { Expense } from "../../types";
 import { VendorActions } from "./VendorActions";
 import { VendorCard } from "./VendorCard";
 import { currency } from "./vendorFormat";
@@ -75,7 +77,12 @@ function sortVendors(list: Vendor[], sort: SortKey) {
   });
 }
 
-export function Vendors({
+export function Vendors({ onToast }: { onToast: (message: string, tone?: ToastTone) => void }) {
+  const { selectedEvent, userId } = useEvents();
+  return <EventVendors key={JSON.stringify([userId, selectedEvent?.event_id ?? null])} onToast={onToast} />;
+}
+
+function EventVendors({
   onToast,
 }: {
   onToast: (message: string, tone?: ToastTone) => void;
@@ -90,6 +97,13 @@ export function Vendors({
   );
   const { data, loading, error, reload, update } = useResource(loadVendors);
   const vendors = useMemo(() => data ?? [], [data]);
+  const loadExpenses = useCallback(
+    () => eventId ? expenseService.list(eventId) : Promise.resolve<Expense[]>([]), [eventId],
+  );
+  const { data: expenseData, loading: expensesLoading, error: expensesError, reload: reloadExpenses } = useResource(loadExpenses);
+  const linkedSummaries = useMemo(() => new Map(vendors.map(vendor => [vendor.id,
+    expenseData === null ? null : contractExpenseSummary(vendor, expenseData),
+  ])), [vendors, expenseData]);
 
   const [query, setQuery] = useState("");
   const [bookingFilter, setBookingFilter] = useState<BookingFilter>("all");
@@ -192,10 +206,8 @@ export function Vendors({
     return true;
   };
 
-  // TODO(expenses-api): canAddContractExpense, contractExpenseSummary and
-  // planContractExpense read mock expenses synchronously. Once they call the Expenses API,
-  // load each vendor's linked expenses with the vendor list (or per vendor) and pass that
-  // data in, instead of calling them during render and in these handlers.
+  // Contract creation/synchronization stays disabled until it uses the real expense API.
+  // Card comparisons use the separate read-only API snapshot above.
   const offerContractExpense = (vendor: Vendor) => {
     if (canAddContractExpense(vendor)) setContractOffer(vendor);
   };
@@ -442,6 +454,8 @@ export function Vendors({
     <>
       <PageHeader page="vendors" action={addButton} />
 
+      {expensesLoading && <p role="status">Loading linked expenses...</p>}
+      {expensesError && <ErrorState message="Couldn't load linked expenses. Vendor payment figures are still shown from the vendor API." onRetry={reloadExpenses} />}
       <div className="summary-strip vendor-summary" aria-label="Vendor summary">
         <div>
           <b>{metrics.booked}</b>
@@ -521,7 +535,7 @@ export function Vendors({
                   <Button variant="secondary" icon="receipt" onClick={() => setContractOffer(vendor)}>
                     Add contract to expenses
                   </Button>
-                ) : contractExpenseSummary(vendor).mismatch ? (
+                ) : !expensesLoading && !expensesError && linkedSummaries.get(vendor.id)?.mismatch ? (
                   <div className="vendor-expense-mismatch">
                     <dl>
                       <div>
@@ -530,13 +544,17 @@ export function Vendors({
                       </div>
                       <div>
                         <dt>Linked expenses</dt>
-                        <dd>{currency(contractExpenseSummary(vendor).total)}</dd>
+                        <dd>{currency(linkedSummaries.get(vendor.id)!.total)}</dd>
                       </div>
                     </dl>
                     <Button variant="ghost" onClick={() => viewExpenses(vendor)}>
                       Review expense breakdown
                     </Button>
                   </div>
+                ) : !expensesLoading && !expensesError && (linkedSummaries.get(vendor.id)?.expenses.length ?? 0) > 0 ? (
+                  <Button variant="ghost" onClick={() => viewExpenses(vendor)}>
+                    View linked expenses ({linkedSummaries.get(vendor.id)!.expenses.length})
+                  </Button>
                 ) : undefined
               }
               actions={

@@ -1,4 +1,4 @@
-import type { Vendor } from "../types";
+import type { Expense, Vendor } from "../types";
 import { mockExpenseStore } from "./mockExpenseStore";
 import { expenseFromDraft } from "../features/expenses/expenseDraft";
 
@@ -18,10 +18,11 @@ export const CONTRACT_EXPENSES_ENABLED = false;
 // instead of mockExpenseStore. That makes this (and canAddContractExpense /
 // planContractExpense, which call it) async, so callers in Vendors.tsx must change too.
 // Map the API's expense fields (committedAmount etc. are money strings) to total/paid here.
-export function contractExpenseSummary(vendor: Vendor) {
-  const expenses = CONTRACT_EXPENSES_ENABLED
-    ? mockExpenseStore.list(vendor.eventId, { vendorId: vendor.id })
-    : [];
+// An explicit API snapshot enables read-only comparisons without enabling the legacy mock mutations.
+export function contractExpenseSummary(vendor: Vendor, source?: readonly Expense[]) {
+  const expenses = source !== undefined
+    ? source.filter(expense => expense.eventId === vendor.eventId && expense.vendorId === vendor.id)
+    : CONTRACT_EXPENSES_ENABLED ? mockExpenseStore.list(vendor.eventId, { vendorId: vendor.id }) : [];
   const totalCents = expenses.reduce((sum, expense) => sum + Math.round(expense.total * 100), 0);
   const paidCents = expenses.reduce((sum, expense) => sum + Math.round(expense.paid * 100), 0);
   return {
