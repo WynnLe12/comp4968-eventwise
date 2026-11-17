@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ApiError } from "../expense-service/errors";
-import type { ApiRequest, RouteDef } from "../shared/http/routes";
-import { vendorRoutes } from "../vendor-service/handlers/vendorRoutes";
-import { createVendorsHandler, type VendorsProxyEvent } from "../vendor-service/lambda/vendors";
+import { ApiError } from "../../expense-service/errors";
+import type { ApiRequest, RouteDef } from "../../shared/http/routes";
+import { vendorRoutes } from "../../vendor-service/handlers/vendorRoutes";
+import { createVendorsHandler, type VendorsProxyEvent } from "../../vendor-service/lambda/vendors";
 
 const POOL = "us-west-2_testpool";
 const CLIENT = "testclient";
