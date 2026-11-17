@@ -1,10 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { verifyToken } from "../../shared/auth/verifyToken";
+import { authenticateEvent, type EventAuthentication } from "./authenticateEvent";
 import { sendJson } from "../../shared/utils/http";
 import { EventService, EventValidationError, EventNotFoundError, EventAccessDeniedError } from "../services/eventService";
 
-export interface UpdateEventDependencies {
-  verifyToken: (token: string) => Promise<string>;
+export interface UpdateEventDependencies extends EventAuthentication {
   service: Pick<EventService, "update">;
 }
 
@@ -32,22 +31,10 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
 }
 
 export function updateEventHandler(dependencies: Partial<UpdateEventDependencies> = {}) {
-  const verify = dependencies.verifyToken ?? verifyToken;
   const service = dependencies.service ?? new EventService();
   return async (request: IncomingMessage, response: ServerResponse, eventId: string): Promise<void> => {
-    const token = /^Bearer\s+(\S+)$/i.exec(request.headers.authorization ?? "")?.[1];
-    if (!token) {
-      sendJson(response, 401, { error: "Missing or invalid authentication token" });
-      return;
-    }
-    let cognitoSub: string;
-    try {
-      cognitoSub = await verify(token);
-      if (!cognitoSub || cognitoSub.length > 128) throw new Error("Invalid subject");
-    } catch {
-      sendJson(response, 401, { error: "Invalid or expired authentication token" });
-      return;
-    }
+    const cognitoSub = await authenticateEvent(request, response, dependencies);
+    if (cognitoSub === undefined) return;
     try {
       const event = await service.update(eventId, await readBody(request), cognitoSub);
       sendJson(response, 200, event);
