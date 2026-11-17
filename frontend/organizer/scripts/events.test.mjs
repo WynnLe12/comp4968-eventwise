@@ -351,13 +351,16 @@ test("event workspace renders loading, empty, retry, and unavailable states inst
   assert.match(render(), /Try again/);
   state = { ...state, status: "ready" };
   assert.match(render(), /LIVE CONTENT/);
-  assert.match(render("guests"), /not available for this event/);
-  assert.doesNotMatch(render("guests"), /LIVE CONTENT/);
-  for (const feature of ["vendors", "expenses"]) {
-    assert.match(render(feature), /Preview: sample vendors and expenses/);
-    assert.match(render(feature), /aren&#x27;t saved to your selected event|aren't saved to your selected event/);
-    assert.match(render(feature), /LIVE CONTENT/);
-  }
+  // Guests is connected to its API; unconnected sections still hide sample data.
+  assert.match(render("guests"), /LIVE CONTENT/);
+  assert.match(render("coplanners"), /not available for this event/);
+  assert.doesNotMatch(render("coplanners"), /LIVE CONTENT/);
+  assert.match(render("expenses"), /Preview: sample expenses/);
+  assert.match(render("expenses"), /aren&#x27;t saved to your selected event|aren't saved to your selected event/);
+  assert.match(render("expenses"), /LIVE CONTENT/);
+  // Vendors are live API data: no sample-data notice.
+  assert.doesNotMatch(render("vendors"), /Preview: sample/);
+  assert.match(render("vendors"), /LIVE CONTENT/);
 });
 
 

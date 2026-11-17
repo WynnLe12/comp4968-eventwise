@@ -25,7 +25,8 @@
     "ddb:reset": "docker compose -f ../docker-compose.dynamodb.yml down -v",
     "ddb:create-table": "tsx guest-service/scripts/createLocalTable.ts",
     "package:templates": "npm run build && node scripts/package-templates.mjs",
-    "package:events": "npm run build && node scripts/package-events.mjs"
+    "package:events": "npm run build && node scripts/package-events.mjs",
+    "package:vendors": "npm run build && node scripts/package-vendors.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
