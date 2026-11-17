@@ -37,7 +37,9 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   });
 }
 
-export function expenseHttpHandler(service: ExpenseService, authenticate: Authenticate) {
+export type ExpenseHttpService = Pick<ExpenseService, "summary" | "listPayments" | "recordPayment" | "list" | "get" | "create" | "update" | "remove">;
+
+export function expenseHttpHandler(service: ExpenseHttpService, authenticate: Authenticate) {
   return async (request: IncomingMessage, response: ServerResponse): Promise<boolean> => {
     const url = new URL(request.url ?? "/", "http://localhost");
     const match = /^\/events\/([^/]+)\/expenses(?:\/([^/]+)(\/payments)?)?$/.exec(url.pathname);
