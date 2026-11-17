@@ -2,8 +2,8 @@ import { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { EmptyState, ErrorState, LoadingState, PageHeader } from "../../components/page";
 import { Button, Card, Icon, Modal } from "../../components/ui";
-import { CURRENT_EVENT_ID } from "../../data/mockData";
 import { useResource } from "../../hooks/useResource";
+import { useEvents } from "../events/EventsContext";
 import { pagePath } from "../../routes/navigation";
 import {
   BOOKING_STATUSES,
@@ -81,7 +81,13 @@ export function Vendors({
   onToast: (message: string, tone?: ToastTone) => void;
 }) {
   const navigate = useNavigate();
-  const loadVendors = useCallback(() => vendorService.list(CURRENT_EVENT_ID), []);
+  const { selectedEvent, status: eventsStatus } = useEvents();
+  // The event chosen in the sidebar switcher. Changing it reloads that event's vendors.
+  const eventId = selectedEvent?.event_id ?? null;
+  const loadVendors = useCallback(
+    () => (eventId ? vendorService.list(eventId) : Promise.resolve<Vendor[]>([])),
+    [eventId],
+  );
   const { data, loading, error, reload, update } = useResource(loadVendors);
   const vendors = useMemo(() => data ?? [], [data]);
 
@@ -186,6 +192,10 @@ export function Vendors({
     return true;
   };
 
+  // TODO(expenses-api): canAddContractExpense, contractExpenseSummary and
+  // planContractExpense read mock expenses synchronously. Once they call the Expenses API,
+  // load each vendor's linked expenses with the vendor list (or per vendor) and pass that
+  // data in, instead of calling them during render and in these handlers.
   const offerContractExpense = (vendor: Vendor) => {
     if (canAddContractExpense(vendor)) setContractOffer(vendor);
   };
@@ -199,7 +209,7 @@ export function Vendors({
     if (!contractOffer || saving) return;
     setSaving(true);
     try {
-      replaceVendor(await vendorService.addContractExpense(CURRENT_EVENT_ID, contractOffer.id));
+      replaceVendor(await vendorService.addContractExpense(contractOffer.eventId, contractOffer.id));
       setContractOffer(null);
       onToast("Contract added to expenses");
     } catch (reason) {
@@ -225,13 +235,14 @@ export function Vendors({
             if (choice === null) return null;
           }
         }
-        const updated = await vendorService.update(CURRENT_EVENT_ID, editing.id, body, choice === "sync" ? "sync" : "keep");
+        const updated = await vendorService.update(editing.eventId, editing.id, body, choice === "sync" ? "sync" : "keep");
         replaceVendor(updated);
         if (choice === "review") viewExpenses(updated);
         else offerContractExpense(updated);
         onToast("Vendor updated");
       } else {
-        const created = await vendorService.create(CURRENT_EVENT_ID, body as VendorCreateInput);
+        if (!eventId) throw new VendorServiceError("Select an event first.", 400);
+        const created = await vendorService.create(eventId, body as VendorCreateInput);
         update((list) => [...list, created]);
         onToast("Vendor added");
         offerContractExpense(created);
@@ -257,7 +268,7 @@ export function Vendors({
   const applyUpdate = async (vendor: Vendor, input: VendorUpdateInput, successMessage: string) => {
     setSaving(true);
     try {
-      const updated = await vendorService.update(CURRENT_EVENT_ID, vendor.id, input);
+      const updated = await vendorService.update(vendor.eventId, vendor.id, input);
       replaceVendor(updated);
       offerContractExpense(updated);
       onToast(successMessage);
@@ -306,7 +317,7 @@ export function Vendors({
     const { vendor } = deleting;
     setSaving(true);
     try {
-      await vendorService.remove(CURRENT_EVENT_ID, vendor.id);
+      await vendorService.remove(vendor.eventId, vendor.id);
       update((list) => list.filter((item) => item.id !== vendor.id));
       if (selectedId === vendor.id) setSelectedId(null);
       setDeleting(null);
@@ -364,6 +375,23 @@ export function Vendors({
       />
     </Modal>
   );
+
+  if (!eventId) {
+    return (
+      <>
+        <PageHeader page="vendors" />
+        {eventsStatus === "loading" ? (
+          <LoadingState label="Loading your events..." />
+        ) : (
+          <EmptyState
+            icon="calendar"
+            title="Select an event"
+            message="Choose an event in the sidebar to see its vendors."
+          />
+        )}
+      </>
+    );
+  }
 
   if (loading) {
     return (
