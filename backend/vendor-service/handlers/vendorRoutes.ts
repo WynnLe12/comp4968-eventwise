@@ -1,14 +1,22 @@
-// The 5 vendor routes (docs/api/vendors.md), in the shared RouteDef shape.
+// Vendor routes (docs/api/vendors.md), in the shared RouteDef shape.
 // Paths must match the API Gateway resource paths exactly.
 // Each route checks event membership before doing anything else.
 import { requireMember } from "../../shared/auth/requireMember";
 import { idParam, type RouteDef } from "../../shared/http/routes";
+import { updateContractExpense } from "../services/contractExpenseUpdate";
 import * as vendors from "../services/vendorService";
 
 const LIST = "/events/{eventId}/vendors";
 const ONE = "/events/{eventId}/vendors/{vendorId}";
 
 export const vendorRoutes: RouteDef[] = [
+  {
+    method: "PATCH", path: ONE + "/contract-expense",
+    async handle({ params, sub, body }) {
+      const eventId = await requireMember(idParam(params.eventId), sub);
+      return { status: 200, body: await updateContractExpense(eventId, idParam(params.vendorId), sub, body) };
+    },
+  },
   {
     method: "GET",
     path: LIST,

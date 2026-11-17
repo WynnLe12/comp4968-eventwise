@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button, Icon } from "../../components/ui";
 import type { Expense } from "../../types";
+import { ExpenseSaveError } from "../../services/expenseService";
 import { validateExpensePayment, type PaymentDraft, type PaymentErrors } from "./expensePayments";
 import "./expenses.css";
 
 export function ExpensePaymentForm({ expense, onSave, onClose }: {
   expense: Expense;
-  onSave: (draft: PaymentDraft) => PaymentErrors;
+  onSave: (draft: PaymentDraft) => PaymentErrors | Promise<PaymentErrors>;
   onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -14,27 +15,51 @@ export function ExpensePaymentForm({ expense, onSave, onClose }: {
   const today = new Date().toISOString().slice(0, 10);
   const [draft, setDraft] = useState<PaymentDraft>({ amount: "", paidAt: today, paymentType: "PAYMENT" });
   const [errors, setErrors] = useState<PaymentErrors>({});
+  const pendingRef = useRef(false);
+  const activeRef = useRef(true);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const close = () => { if (!pendingRef.current) onClose(); };
   const balance = (Math.round(expense.total * 100) - Math.round(expense.paid * 100)) / 100;
 
   useEffect(() => {
+    activeRef.current = true;
     const previous = document.activeElement as HTMLElement | null;
     dialogRef.current?.showModal();
-    return () => { if (previous?.isConnected) previous.focus(); };
+    return () => { activeRef.current = false; if (previous?.isConnected) previous.focus(); };
   }, []);
 
   const update = (field: keyof PaymentDraft, value: string) => {
+    if (pendingRef.current) return;
+    setSaveError("");
     const next = { ...draft, [field]: value };
     setDraft(next);
     if (errors[field]) setErrors((current) => ({ ...current, [field]: validateExpensePayment(expense, next)[field] }));
   };
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    let nextErrors = validateExpensePayment(expense, draft);
-    if (!Object.keys(nextErrors).length) nextErrors = onSave(draft);
-    if (!Object.keys(nextErrors).length) return;
+    if (pendingRef.current) return;
+    setSaveError("");
+    const nextErrors = validateExpensePayment(expense, draft);
     setErrors(nextErrors);
-    formRef.current?.querySelector<HTMLElement>('[name="' + Object.keys(nextErrors)[0] + '"]')?.focus();
+    if (Object.keys(nextErrors).length) {
+      formRef.current?.querySelector<HTMLElement>('[name="' + Object.keys(nextErrors)[0] + '"]')?.focus();
+      return;
+    }
+    pendingRef.current = true; setSaving(true);
+    try {
+      const fields = await onSave(draft);
+      if (activeRef.current) setErrors(fields);
+    } catch (failure) {
+      if (activeRef.current) {
+        setSaveError(failure instanceof Error ? failure.message : "Couldn't record payment. Please try again.");
+        if (failure instanceof ExpenseSaveError) setErrors(failure.fields);
+      }
+    } finally {
+      pendingRef.current = false;
+      if (activeRef.current) setSaving(false);
+    }
   };
 
   return (
@@ -42,8 +67,8 @@ export function ExpensePaymentForm({ expense, onSave, onClose }: {
       ref={dialogRef}
       className="expense-form-dialog"
       aria-labelledby="expense-payment-title"
-      onCancel={(event) => { event.preventDefault(); onClose(); }}
-      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
+      onCancel={(event) => { event.preventDefault(); close(); }}
+      onClick={(event) => { if (event.target === event.currentTarget) close(); }}
     >
       <div className="expense-form-content">
         <header className="modal-head">
@@ -51,12 +76,14 @@ export function ExpensePaymentForm({ expense, onSave, onClose }: {
             <div className="eyebrow">EventWise</div>
             <h2 id="expense-payment-title">Record payment</h2>
           </div>
-          <button type="button" className="icon-btn" aria-label="Close payment form" onClick={onClose}>
+          <button type="button" className="icon-btn" aria-label="Close payment form" disabled={saving} onClick={close}>
             <Icon name="close" />
           </button>
         </header>
-        <form ref={formRef} onSubmit={submit} noValidate>
+        <form ref={formRef} onSubmit={submit} noValidate aria-busy={saving}>
           <div className="modal-body">
+            {saveError && <p className="expense-form-error" role="alert">{saveError}</p>}
+            <fieldset disabled={saving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
             <p className="expense-payment-context">
               <strong>{expense.vendor}</strong><br />
               Remaining balance: {balance.toLocaleString("en-US", { style: "currency", currency: "USD" })}
@@ -102,10 +129,11 @@ export function ExpensePaymentForm({ expense, onSave, onClose }: {
               </select>
               {errors.paymentType && <small id="payment-type-error" className="expense-field-error">{errors.paymentType}</small>}
             </label>
+            </fieldset>
           </div>
           <footer className="modal-footer">
-            <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit">Record payment</Button>
+            <Button variant="secondary" disabled={saving} onClick={close}>Cancel</Button>
+            <Button type="submit" disabled={saving}>{saving ? "Saving..." : "Record payment"}</Button>
           </footer>
         </form>
       </div>

@@ -1,6 +1,7 @@
 import { formatCalendarDate } from "../../utils/dateFormat";
 import { useId, useRef, useState } from "react";
 import { Badge, Button, Icon } from "../../components/ui";
+import { ExpensePaymentHistory } from "./ExpensePaymentHistory";
 import type { Expense } from "../../types";
 import "./expenses.css";
 
@@ -16,10 +17,7 @@ export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, o
   onDelete: () => void;
 }) {
   const fullyPaid = Math.round(expense.paid * 100) >= Math.round(expense.total * 100);
-  const recordedPayments = [...(expense.payments ?? [])].reverse()
-    .sort((a, b) => b.paidAt.localeCompare(a.paidAt));
-  const earlierPaid = (Math.round(expense.paid * 100) -
-    recordedPayments.reduce((sum, payment) => sum + Math.round(payment.amount * 100), 0)) / 100;
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const menuId = useId();
   const titleId = useId();
   const menuRef = useRef<HTMLDivElement>(null);
@@ -38,6 +36,7 @@ export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, o
 
   const openDetails = () => {
     menuRef.current?.hidePopover();
+    setDetailsOpen(true);
     drawerRef.current?.showModal();
   };
 
@@ -109,7 +108,7 @@ export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, o
         ref={drawerRef}
         className="expense-drawer"
         aria-labelledby={titleId}
-        onClose={() => triggerRef.current?.focus()}
+        onClose={() => { setDetailsOpen(false); triggerRef.current?.focus(); }}
         onClick={(event) => {
           if (event.target === event.currentTarget) drawerRef.current?.close();
         }}
@@ -147,7 +146,7 @@ export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, o
                 icon="receipt"
                 disabled={fullyPaid}
                 onClick={() => {
-                  if (!fullyPaid) onRecordPayment();
+                  if (!fullyPaid) { drawerRef.current?.close(); setDetailsOpen(false); onRecordPayment(); }
                 }}
               >
                 Record payment
@@ -162,20 +161,7 @@ export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, o
           </section>
           <section className="expense-drawer-section">
             <h3>Payment history</h3>
-            {earlierPaid > 0 && <p>Previously paid: {money(earlierPaid)}</p>}
-            {recordedPayments.length > 0 ? (
-              <ul className="expense-payment-history">
-                {recordedPayments.map((payment) => (
-                  <li key={payment.id}>
-                    <div>
-                      <strong>{payment.paymentType === "DEPOSIT" ? "Deposit" : "Payment"}</strong>
-                      <time dateTime={payment.paidAt}>{formatCalendarDate(payment.paidAt)}</time>
-                    </div>
-                    <span>{money(payment.amount)}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : <p>{earlierPaid > 0 ? "Earlier payment details are not available." : "No payments recorded yet."}</p>}
+            {detailsOpen && <ExpensePaymentHistory key={expense.eventId + ":" + expense.id} eventId={expense.eventId} expenseId={expense.id} />}
           </section>
         </div>
       </dialog>

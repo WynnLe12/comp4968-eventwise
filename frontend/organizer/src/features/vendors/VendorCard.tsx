@@ -92,7 +92,7 @@ export function VendorCard({
           <b>{currency(vendor.contractTotal ?? vendor.quoteAmount)}</b>
         </div>
         <div>
-          <small>{overpaid ? "Overpaid" : "Balance"}</small>
+          <small>{overpaid ? "Overpaid" : "Contract balance"}</small>
           <b>{overpaid ? currency(String(-Number(vendor.balance))) : currency(vendor.balance)}</b>
         </div>
       </div>

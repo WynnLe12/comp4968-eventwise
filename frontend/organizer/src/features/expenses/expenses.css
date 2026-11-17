@@ -236,3 +236,16 @@
   color: var(--muted);
   font-size: 13px;
 }
+
+.expense-category-filter {
+  display: block;
+  max-width: 220px;
+  cursor: pointer;
+}
+.expense-category-filter:disabled { cursor: default; opacity: 0.65; }
+.expense-category-filter:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 2px;
+}
+.expense-category-filter-status:not(:empty) { padding: 0 20px 12px; }
+.expense-category-filter-status p { margin: 0; font-size: 13px; }

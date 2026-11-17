@@ -151,9 +151,9 @@ test("unknown resources and methods are 404", async () => {
   assert.equal((await handler(event({ httpMethod: "PUT", resource: LIST }))).statusCode, 404);
 });
 
-test("the real vendor routes match the five API Gateway resources and methods", () => {
+test("the real vendor routes match the API Gateway resources and methods including atomic contract updates", () => {
   assert.deepEqual(
     vendorRoutes.map((r) => `${r.method} ${r.path}`).sort(),
-    [`DELETE ${ONE}`, `GET ${LIST}`, `GET ${ONE}`, `PATCH ${ONE}`, `POST ${LIST}`],
+    [`DELETE ${ONE}`, `GET ${LIST}`, `GET ${ONE}`, `PATCH ${ONE}`, `PATCH ${ONE}/contract-expense`, `POST ${LIST}`],
   );
 });

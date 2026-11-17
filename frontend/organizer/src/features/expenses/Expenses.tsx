@@ -1,24 +1,25 @@
 import { formatCalendarDate } from "../../utils/dateFormat";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useResource } from "../../hooks/useResource";
 import { vendorService } from "../../services/vendorService";
-import { mockExpenseStore } from "../../services/mockExpenseStore";
+import { expenseService } from "../../services/expenseService";
 import { Badge, Button, Card, Icon } from "../../components/ui";
-import { EmptyState, ErrorState, PageHeader, StatCard } from "../../components/page";
-import { CURRENT_EVENT_ID } from "../../data/mockData";
-import { ExpenseActions } from "./ExpenseActions";
-import { ExpenseForm } from "./ExpenseForm";
-import { ExpenseDeleteDialog } from "./ExpenseDeleteDialog";
-import { ExpensePaymentForm } from "./ExpensePaymentForm";
-import { recordExpensePayment, validateExpensePayment, type PaymentDraft, type PaymentErrors } from "./expensePayments";
-import { expenseSummary, matchesExpenseSummary, type ExpenseSummaryFilter } from "./expenseDraft";
+import { EmptyState, ErrorState, LoadingState, PageHeader, StatCard } from "../../components/page";
+import { useEvents } from "../events/EventsContext";
+import { useEventCategories } from "../categories/useEventCategories";
 import type { Expense } from "../../types";
+import { ExpensePaymentForm } from "./ExpensePaymentForm";
+import { validateExpensePayment, type PaymentDraft, type PaymentErrors } from "./expensePayments";
+import { ExpenseDeleteDialog } from "./ExpenseDeleteDialog";
+import { ExpenseForm } from "./ExpenseForm";
+import { ExpenseActions } from "./ExpenseActions";
+import { expenseSummary, matchesExpenseSummary, type ExpenseSummaryFilter } from "./expenseDraft";
 
 const currency = (amount: number) =>
   amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
 
-const filters = ["All", "Unpaid", "Deposit", "Paid"];
+const filters = ["All", "Unpaid", "Partially paid", "Paid"];
 
 function statusTone(status: string) {
   if (status === "Paid") return "success";
@@ -27,75 +28,75 @@ function statusTone(status: string) {
 }
 
 export function Expenses() {
+  const { selectedId, userId } = useEvents();
+  if (!selectedId || !userId) return <EmptyState title="Select an event" message="Choose an event to manage its expenses." />;
+  return <EventExpenses key={JSON.stringify([userId, selectedId])} eventId={selectedId} accountId={userId} />;
+}
+
+function EventExpenses({ eventId, accountId }: { eventId: string; accountId: string }) {
   const [params, setParams] = useSearchParams();
   const vendorId = params.get("vendorId") || null;
-  const loadVendors = useCallback(() => vendorService.list(CURRENT_EVENT_ID), []);
+  const loadVendors = useCallback(() => vendorService.list(eventId), [eventId]);
   const { data: vendorData, loading: vendorsLoading, error: vendorsError, reload: reloadVendors } = useResource(loadVendors);
   const vendors = vendorData ?? [];
   const selectedVendor = vendors.find((vendor) => vendor.id === vendorId);
   const vendorNames = new Map(vendors.map((vendor) => [vendor.id, vendor.name]));
+  const { categories, loading: categoriesLoading, error: categoriesError, retry: retryCategories } = useEventCategories(eventId, accountId);
+  const [categoryId, setCategoryId] = useState("");
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [summaryFilter, setSummaryFilter] = useState<ExpenseSummaryFilter>("all");
-  const [expenses, setExpenses] = useState<Expense[]>(() => mockExpenseStore.list(CURRENT_EVENT_ID));
+  const loadExpenses = useCallback(() => expenseService.list(eventId), [eventId]);
+  const { data: expenseData, loading: expensesLoading, error: expensesError, reload: reloadExpenses, update: updateExpenses } = useResource(loadExpenses);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Expense | null>(null);
   const [paying, setPaying] = useState<Expense | null>(null);
   const [deleting, setDeleting] = useState<Expense | null>(null);
-  const [toast, setToast] = useState("");
+  const [notice, setNotice] = useState("");
+  const expenses = expenseData ?? [];
   const vendorExpenses = vendorId ? expenses.filter((expense) => expense.vendorId === vendorId) : expenses;
   const summary = expenseSummary(vendorExpenses);
-  const onAdd = () => setAdding(true);
 
-  useEffect(() => {
-    if (!toast) return;
-    const timer = window.setTimeout(() => setToast(""), 2600);
-    return () => window.clearTimeout(timer);
-  }, [toast]);
-
-  const saveExpense = (expense: Expense) => {
-    mockExpenseStore.save(CURRENT_EVENT_ID, expense);
-    setExpenses(mockExpenseStore.list(CURRENT_EVENT_ID));
-    setSearch("");
+  const clearTableFilters = () => {
+    setCategoryId("");
     setFilter("All");
+    setSearch("");
     setSummaryFilter("all");
+  };
+
+  const saveExpense = async (expense: Expense) => {
+    if (expense.eventId !== eventId || !expense.categoryId) throw new Error("Reopen this expense in its own event and choose a category.");
+    if (editing && expense.id !== editing.id) throw new Error("Reopen the expense before saving.");
+    const input = {
+      categoryId: expense.categoryId, vendorId: expense.vendorId, description: expense.vendor,
+      committedAmount: expense.total.toFixed(2), dueDate: expense.dueDate ?? null,
+    };
+    const saved = editing ? await expenseService.update(eventId, editing.id, input) : await expenseService.create(eventId, input);
+    updateExpenses(current => editing ? current.map(row => row.id === saved.id ? saved : row) : [saved, ...current.filter(row => row.id !== saved.id)]);
+    clearTableFilters();
     setAdding(false);
-    setToast(editing ? "Expense updated" : "Expense added");
+    setNotice(editing ? "Expense updated." : "Expense added.");
     setEditing(null);
   };
 
-  const savePayment = (draft: PaymentDraft): PaymentErrors => {
-    const current = mockExpenseStore.list(CURRENT_EVENT_ID).find((expense) => expense.id === paying?.id);
-    if (!current) return { amount: "This expense is no longer available." };
-    const errors = validateExpensePayment(current, draft);
+  const savePayment = async (draft: PaymentDraft): Promise<PaymentErrors> => {
+    if (!paying || paying.eventId !== eventId) throw new Error("Reopen this expense in its own event.");
+    const errors = validateExpensePayment(paying, draft);
     if (Object.keys(errors).length) return errors;
-    const updated = recordExpensePayment(current, draft);
-    mockExpenseStore.save(CURRENT_EVENT_ID, updated);
-    setExpenses(mockExpenseStore.list(CURRENT_EVENT_ID));
-    setFilter("All");
-    setSummaryFilter("all");
-    setPaying(null);
-    setToast("Payment recorded");
+    const saved = await expenseService.recordPayment(eventId, paying.id, {
+      amount: Number(draft.amount.trim()).toFixed(2), paidAt: draft.paidAt, paymentType: draft.paymentType,
+    });
+    updateExpenses(current => current.map(row => row.id === saved.id ? saved : row));
+    setPaying(null); clearTableFilters(); setNotice("Payment recorded.");
     return {};
   };
 
-  const confirmDelete = (): string | undefined => {
-    if (!deleting) return "Choose an expense to delete.";
-    try {
-      mockExpenseStore.remove(CURRENT_EVENT_ID, deleting.id);
-    } catch (error) {
-      return error instanceof Error ? error.message : "Unable to delete this expense.";
-    }
-    setExpenses(mockExpenseStore.list(CURRENT_EVENT_ID));
+  const deleteExpense = async () => {
+    if (!deleting || deleting.eventId !== eventId) throw new Error("Reopen this expense in its own event.");
+    await expenseService.remove(eventId, deleting.id);
+    updateExpenses(current => current.filter(row => row.id !== deleting.id));
     setDeleting(null);
-    setToast("Expense deleted");
-    return undefined;
-  };
-
-  const clearTableFilters = () => {
-    setFilter("All");
-    setSearch("");
-    setSummaryFilter("all");
+    setNotice("Expense deleted.");
   };
 
   const selectSummaryFilter = (next: ExpenseSummaryFilter) => {
@@ -114,26 +115,31 @@ export function Expenses() {
     clearTableFilters();
     clearVendorFilter();
   };
-  const hasTableFilters = summaryFilter !== "all" || filter !== "All" || Boolean(search.trim());
+  const hasTableFilters = summaryFilter !== "all" || filter !== "All" || Boolean(search.trim()) || Boolean(categoryId);
   const hasFilters = hasTableFilters || Boolean(vendorId);
   const query = search.trim().toLowerCase();
   const rows = vendorExpenses.filter(
     (expense) =>
+      (!categoryId || expense.categoryId === categoryId) &&
       (filter === "All" || expense.status.includes(filter)) &&
       (expense.vendor.toLowerCase().includes(query) ||
         (vendorNames.get(expense.vendorId ?? "") ?? "").toLowerCase().includes(query)) &&
       matchesExpenseSummary(expense, summaryFilter),
   );
+  if (expensesLoading) return <LoadingState label="Loading expenses..." />;
+  if (expensesError) return <ErrorState message={expensesError instanceof Error ? expensesError.message : "Couldn\'t load expenses."} onRetry={reloadExpenses} />;
+
   return (
     <>
       <PageHeader
         page="expenses"
         action={
-          <Button onClick={onAdd} icon="plus" disabled={vendorsLoading || Boolean(vendorsError) || Boolean(vendorId && !selectedVendor)}>
+          <Button icon="plus" disabled={vendorsLoading || Boolean(vendorsError) || Boolean(vendorId && !selectedVendor)} onClick={() => { setNotice(""); setEditing(null); setAdding(true); }}>
             Add expense
           </Button>
         }
       />
+      {notice && <p role="status">{notice}</p>}
       {vendorsError ? (
         <ErrorState message="We couldn't load vendors. Retry to link expenses to a vendor." onRetry={reloadVendors} />
       ) : null}
@@ -203,15 +209,27 @@ export function Expenses() {
                 onChange={(event) => setSearch(event.target.value)}
               />
             </label>
-            <button className="filter-btn">
-              All categories <Icon name="down" size={14} />
-            </button>
+            <select className="filter-btn expense-category-filter"
+              aria-label="Filter expenses by category" value={categoryId}
+              aria-describedby={categoriesLoading || categoriesError || categories.length === 0 ? "expense-category-filter-status" : undefined}
+              disabled={categoriesLoading || Boolean(categoriesError) || categories.length === 0}
+              onChange={event => setCategoryId(event.target.value)}>
+              <option value="">{categoriesLoading ? "Loading categories..." : "All categories"}</option>
+              {categoryId && !categories.some(category => category.categoryId === categoryId) &&
+                <option value={categoryId} disabled>Category unavailable</option>}
+              {categories.map(category => <option key={category.categoryId} value={category.categoryId}>{category.name}</option>)}
+            </select>
             {hasFilters && (
               <button type="button" className="filter-btn expense-clear-filters" onClick={clearFilters}>
                 Clear filters
               </button>
             )}
           </div>
+        </div>
+        <div id="expense-category-filter-status" className="expense-category-filter-status">
+          {categoriesError ? <p role="alert">{categoriesError} <button type="button" className="btn btn-ghost" onClick={retryCategories}>Retry categories</button></p>
+            : categoriesLoading ? <small role="status">Loading this event's category filters...</small>
+            : categories.length === 0 ? <small role="status">No budget categories are available for this event.</small> : null}
         </div>
         <div className="table-wrap expense-table">
           <table>
@@ -233,14 +251,14 @@ export function Expenses() {
                   <td colSpan={8}>
                     <EmptyState
                       title={vendorId && !vendorsLoading && !selectedVendor ? "Vendor unavailable" :
-                        vendorId && vendorExpenses.length === 0 ? "No expenses linked to this vendor" : "No matching expenses"}
-                      message={vendorId && vendorExpenses.length === 0 ? "Add an expense for this vendor or clear the vendor filter." : "Try another search or clear your filters."}
-                      action={
+                        vendorId && vendorExpenses.length === 0 ? "No expenses linked to this vendor" : expenses.length === 0 ? "No expenses yet" : "No matching expenses"}
+                      message={expenses.length === 0 ? "This event has no saved expenses yet." : vendorId && vendorExpenses.length === 0 ? "Clear the vendor filter to see other expenses." : "Try another search or clear your filters."}
+                      action={hasFilters ?
                         <Button
                           onClick={clearFilters}
                         >
                           Clear filters
-                        </Button>
+                        </Button> : undefined
                       }
                     />
                   </td>
@@ -263,7 +281,7 @@ export function Expenses() {
                     <Badge tone={statusTone(x.status)}>{x.status}</Badge>
                   </td>
                   <td>
-                    <ExpenseActions vendorName={vendorNames.get(x.vendorId ?? "")} expense={x} onEdit={() => setEditing(x)} onRecordPayment={() => setPaying(x)} onDelete={() => setDeleting(x)} />
+                    <ExpenseActions vendorName={vendorNames.get(x.vendorId ?? "")} expense={x} onEdit={() => { setNotice(""); setEditing(x); }} onRecordPayment={() => { setNotice(""); setPaying(x); }} onDelete={() => { setNotice(""); setDeleting(x); }} />
                   </td>
                 </tr>
               ))}
@@ -281,32 +299,11 @@ export function Expenses() {
           </div>
         </div>
       </Card>
-      {(adding || editing) && (
-        <ExpenseForm
-          key={editing?.id ?? "new"}
-          expense={editing ?? undefined}
-          vendors={vendors}
-          defaultVendorId={selectedVendor?.id}
-          onSave={saveExpense}
-          onClose={() => {
-            setAdding(false);
-            setEditing(null);
-          }}
-        />
-      )}
-      {paying && (
-        <ExpensePaymentForm
-          key={paying.id} expense={paying}
-          onSave={savePayment} onClose={() => setPaying(null)}
-        />
-      )}
-      {deleting && (
-        <ExpenseDeleteDialog
-          key={deleting.id} expense={deleting}
-          onConfirm={confirmDelete} onClose={() => setDeleting(null)}
-        />
-      )}
-      {toast && <div className="toast" role="status">{toast}</div>}
+      {paying && <ExpensePaymentForm key={paying.id} expense={paying} onSave={savePayment} onClose={() => setPaying(null)} />}
+      {deleting && <ExpenseDeleteDialog key={deleting.id} expense={deleting} onConfirm={deleteExpense} onClose={() => setDeleting(null)} />}
+      {(adding || editing) && <ExpenseForm key={editing?.id ?? "new"} eventId={eventId} accountId={accountId} vendors={vendors}
+        expense={editing ?? undefined} defaultVendorId={selectedVendor?.id} onSave={saveExpense}
+        onClose={() => { setAdding(false); setEditing(null); }} />}
     </>
   );
 }

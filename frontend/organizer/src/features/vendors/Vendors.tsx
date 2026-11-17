@@ -26,6 +26,9 @@ import type {
   VendorCreateInput,
   VendorUpdateInput,
 } from "../../types";
+import { ExpenseForm } from "../expenses/ExpenseForm";
+import { ExpenseSaveError, expenseService } from "../../services/expenseService";
+import type { Expense } from "../../types";
 import { VendorActions } from "./VendorActions";
 import { VendorCard } from "./VendorCard";
 import { currency } from "./vendorFormat";
@@ -75,13 +78,18 @@ function sortVendors(list: Vendor[], sort: SortKey) {
   });
 }
 
-export function Vendors({
+export function Vendors({ onToast }: { onToast: (message: string, tone?: ToastTone) => void }) {
+  const { selectedEvent, userId } = useEvents();
+  return <EventVendors key={JSON.stringify([userId, selectedEvent?.event_id ?? null])} onToast={onToast} />;
+}
+
+function EventVendors({
   onToast,
 }: {
   onToast: (message: string, tone?: ToastTone) => void;
 }) {
   const navigate = useNavigate();
-  const { selectedEvent, status: eventsStatus } = useEvents();
+  const { selectedEvent, userId, status: eventsStatus } = useEvents();
   // The event chosen in the sidebar switcher. Changing it reloads that event's vendors.
   const eventId = selectedEvent?.event_id ?? null;
   const loadVendors = useCallback(
@@ -90,6 +98,13 @@ export function Vendors({
   );
   const { data, loading, error, reload, update } = useResource(loadVendors);
   const vendors = useMemo(() => data ?? [], [data]);
+  const loadExpenses = useCallback(
+    () => eventId ? expenseService.list(eventId) : Promise.resolve<Expense[]>([]), [eventId],
+  );
+  const { data: expenseData, loading: expensesLoading, error: expensesError, reload: reloadExpenses, update: updateExpenses } = useResource(loadExpenses);
+  const linkedSummaries = useMemo(() => new Map(vendors.map(vendor => [vendor.id,
+    expenseData === null ? null : contractExpenseSummary(vendor, expenseData),
+  ])), [vendors, expenseData]);
 
   const [query, setQuery] = useState("");
   const [bookingFilter, setBookingFilter] = useState<BookingFilter>("all");
@@ -105,6 +120,7 @@ export function Vendors({
   } | null>(null);
   const [researchTarget, setResearchTarget] = useState<Vendor | null>(null);
   const [saving, setSaving] = useState(false);
+  const [contractExpenseVendor, setContractExpenseVendor] = useState<Vendor | null>(null);
   const [contractOffer, setContractOffer] = useState<Vendor | null>(null);
   const [contractReview, setContractReview] = useState<{
     vendor: Vendor;
@@ -192,12 +208,9 @@ export function Vendors({
     return true;
   };
 
-  // TODO(expenses-api): canAddContractExpense, contractExpenseSummary and
-  // planContractExpense read mock expenses synchronously. Once they call the Expenses API,
-  // load each vendor's linked expenses with the vendor list (or per vendor) and pass that
-  // data in, instead of calling them during render and in these handlers.
+  // Creation uses Expenses; explicit synchronization uses the atomic Vendors operation.
   const offerContractExpense = (vendor: Vendor) => {
-    if (canAddContractExpense(vendor)) setContractOffer(vendor);
+    if (!expensesLoading && !expensesError && expenseData !== null && canAddContractExpense(vendor, expenseData)) setContractOffer(vendor);
   };
 
   const finishContractReview = (choice: ContractExpenseChoice | null) => {
@@ -205,18 +218,24 @@ export function Vendors({
     setContractReview(null);
   };
 
-  const createContractExpense = async () => {
-    if (!contractOffer || saving) return;
-    setSaving(true);
-    try {
-      replaceVendor(await vendorService.addContractExpense(contractOffer.eventId, contractOffer.id));
-      setContractOffer(null);
-      onToast("Contract added to expenses");
-    } catch (reason) {
-      onToast(errorMessage(reason, "We couldn't add the contract expense."), "error");
-    } finally {
-      setSaving(false);
+  const createContractExpense = async (expense: Expense) => {
+    const vendor = contractExpenseVendor;
+    if (!vendor || vendor.eventId !== eventId || expense.eventId !== eventId || expense.vendorId !== vendor.id || !expense.categoryId) {
+      throw new ExpenseSaveError("Reopen this contract in its own event and choose a category.");
     }
+    const latest = await expenseService.list(vendor.eventId);
+    if (!canAddContractExpense(vendor, latest)) {
+      updateExpenses(() => latest);
+      throw new ExpenseSaveError("This vendor already has a linked expense. Cancel and review its expenses before adding another contract.");
+    }
+    const saved = await expenseService.create(vendor.eventId, {
+      categoryId: expense.categoryId, vendorId: vendor.id, description: expense.vendor,
+      committedAmount: expense.total.toFixed(2), dueDate: expense.dueDate ?? null,
+    });
+    updateExpenses(() => [saved, ...latest]);
+    setContractExpenseVendor(null);
+    onToast("Contract added to expenses");
+    reload();
   };
 
   const saveVendor = async (body: VendorUpdateInput): Promise<VendorFormSubmitError | null> => {
@@ -225,9 +244,13 @@ export function Vendors({
       if (editing) {
         const nextTotal = body.contractTotal === undefined ? editing.contractTotal : body.contractTotal;
         let choice: ContractExpenseChoice | null = "keep";
+        let updatePlan: ContractExpensePlan | null = null;
         if (nextTotal !== null && (editing.contractTotal === null ||
             Math.round(Number(nextTotal) * 100) !== Math.round(Number(editing.contractTotal) * 100))) {
-          const plan = planContractExpense(editing, String(nextTotal));
+          const latest = await expenseService.list(editing.eventId);
+          updateExpenses(() => latest);
+          const plan = planContractExpense(editing, String(nextTotal), latest);
+          updatePlan = plan;
           if (plan.mode === "single" || plan.mode === "multiple") {
             choice = await new Promise<ContractExpenseChoice | null>((finish) => {
               setContractReview({ vendor: editing, plan, finish });
@@ -235,8 +258,15 @@ export function Vendors({
             if (choice === null) return null;
           }
         }
-        const updated = await vendorService.update(editing.eventId, editing.id, body, choice === "sync" ? "sync" : "keep");
+        const linked = updatePlan?.expenses[0];
+        if (choice === "sync" && (!linked || updatePlan?.mode !== "single")) throw new ContractExpenseError("Review the expense breakdown before updating it.");
+        const updated = choice === "sync" && linked
+          ? await vendorService.updateBoth(editing.eventId, editing.id, body, {
+              expenseId: linked.id, expectedContractTotal: editing.contractTotal, expectedExpenseTotal: linked.total.toFixed(2),
+            })
+          : await vendorService.update(editing.eventId, editing.id, body);
         replaceVendor(updated);
+        reloadExpenses();
         if (choice === "review") viewExpenses(updated);
         else offerContractExpense(updated);
         onToast("Vendor updated");
@@ -442,6 +472,8 @@ export function Vendors({
     <>
       <PageHeader page="vendors" action={addButton} />
 
+      {expensesLoading && <p role="status">Loading linked expenses...</p>}
+      {expensesError && <ErrorState message="Couldn't load linked expenses. Vendor payment figures are still shown from the vendor API." onRetry={reloadExpenses} />}
       <div className="summary-strip vendor-summary" aria-label="Vendor summary">
         <div>
           <b>{metrics.booked}</b>
@@ -489,7 +521,7 @@ export function Vendors({
             <select value={sort} onChange={(event) => setSort(event.target.value as SortKey)}>
               <option value="name">Sort: Name</option>
               <option value="due">Sort: Next due date</option>
-              <option value="balance">Sort: Balance</option>
+              <option value="balance">Sort: Contract balance</option>
             </select>
           </label>
         </div>
@@ -517,26 +549,25 @@ export function Vendors({
               vendor={vendor}
               onOpen={() => setSelectedId(vendor.id)}
               expenseAction={
-                canAddContractExpense(vendor) ? (
+                !expensesLoading && !expensesError && expenseData !== null && canAddContractExpense(vendor, expenseData) ? (
                   <Button variant="secondary" icon="receipt" onClick={() => setContractOffer(vendor)}>
                     Add contract to expenses
                   </Button>
-                ) : contractExpenseSummary(vendor).mismatch ? (
-                  <div className="vendor-expense-mismatch">
-                    <dl>
-                      <div>
-                        <dt>Contract</dt>
-                        <dd>{currency(vendor.contractTotal)}</dd>
+                ) : !expensesLoading && !expensesError && (linkedSummaries.get(vendor.id)?.expenses.length ?? 0) > 0 ? (
+                  <>
+                    {linkedSummaries.get(vendor.id)?.mismatch && (
+                      <div className="vendor-expense-mismatch">
+                        <p>Contract and expense totals differ.</p>
+                        <dl>
+                          <div><dt>Contract</dt><dd>{currency(vendor.contractTotal)}</dd></div>
+                          <div><dt>Linked expenses</dt><dd>{currency(linkedSummaries.get(vendor.id)!.total)}</dd></div>
+                        </dl>
                       </div>
-                      <div>
-                        <dt>Linked expenses</dt>
-                        <dd>{currency(contractExpenseSummary(vendor).total)}</dd>
-                      </div>
-                    </dl>
+                    )}
                     <Button variant="ghost" onClick={() => viewExpenses(vendor)}>
-                      Review expense breakdown
+                      View expenses ({linkedSummaries.get(vendor.id)!.expenses.length})
                     </Button>
-                  </div>
+                  </>
                 ) : undefined
               }
               actions={
@@ -591,10 +622,16 @@ export function Vendors({
           vendor={contractOffer}
           plan={planContractExpense(contractOffer, contractOffer.contractTotal)}
           busy={saving}
-          onChoose={() => void createContractExpense()}
+          onChoose={() => { setContractExpenseVendor(contractOffer); setContractOffer(null); }}
           onClose={() => { if (!saving) setContractOffer(null); }}
         />
       )}
+
+      {contractExpenseVendor && userId && <ExpenseForm key={contractExpenseVendor.id}
+        eventId={contractExpenseVendor.eventId} accountId={userId} vendors={vendors}
+        defaultVendorId={contractExpenseVendor.id} lockVendor
+        initialDraft={{ name: contractExpenseVendor.name + " contract", amount: contractExpenseVendor.contractTotal! }}
+        onSave={createContractExpense} onClose={() => setContractExpenseVendor(null)} />}
 
       {researchTarget && (
         <Modal
