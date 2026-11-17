@@ -6,7 +6,6 @@ import { vendorService } from "../../services/vendorService";
 import { mockExpenseStore } from "../../services/mockExpenseStore";
 import { Badge, Button, Card, Icon } from "../../components/ui";
 import { EmptyState, ErrorState, PageHeader, StatCard } from "../../components/page";
-import { CURRENT_EVENT_ID } from "../../data/mockData";
 import { useEvents } from "../events/EventsContext";
 import { useEventCategories } from "../categories/useEventCategories";
 import { ExpenseActions } from "./ExpenseActions";
@@ -37,8 +36,7 @@ export function Expenses() {
 function EventExpenses({ eventId, accountId }: { eventId: string; accountId: string }) {
   const [params, setParams] = useSearchParams();
   const vendorId = params.get("vendorId") || null;
-  // The vendor adapter still contains sample data for one event only.
-  const loadVendors = useCallback(() => eventId === CURRENT_EVENT_ID ? vendorService.list(eventId) : Promise.resolve([]), [eventId]);
+  const loadVendors = useCallback(() => vendorService.list(eventId), [eventId]);
   const { data: vendorData, loading: vendorsLoading, error: vendorsError, reload: reloadVendors } = useResource(loadVendors);
   const vendors = vendorData ?? [];
   const selectedVendor = vendors.find((vendor) => vendor.id === vendorId);

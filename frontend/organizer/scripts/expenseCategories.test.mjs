@@ -256,6 +256,8 @@ function findAll(node, predicate) {
   return [...(predicate(node) ? [node] : []), ...findAll(node.props?.children, predicate)];
 }
 function tableHost(vendorId = "") {
+  let vendorLoader;
+  const vendorRequests = [];
   const h = host();
   h.react.useCallback = callback => callback;
   let params = new URLSearchParams(vendorId ? "vendorId=" + vendorId + "&keep=yes" : "");
@@ -271,12 +273,12 @@ function tableHost(vendorId = "") {
     react: h.react, "react/jsx-runtime": jsx,
     "react-router-dom": { useSearchParams: () => [params, change => { params = typeof change === "function" ? change(params) : change; }] },
     "../../utils/dateFormat": { formatCalendarDate: () => "No due date" },
-    "../../hooks/useResource": { useResource: () => ({ data: [{ id: "v1", eventId: "10", name: "Vendor One" }, { id: "v2", eventId: "10", name: "Vendor Two" }], loading: false, error: null }) },
-    "../../services/vendorService": { vendorService: { list: async () => [] } },
+    "../../hooks/useResource": { useResource: loader => { vendorLoader = loader; return { data: [{ id: "v1", eventId: "10", name: "Vendor One" }, { id: "v2", eventId: "10", name: "Vendor Two" }], loading: false, error: null }; } },
+    "../../services/vendorService": { vendorService: { list: async eventId => { vendorRequests.push(eventId); return []; } } },
     "../../services/mockExpenseStore": { mockExpenseStore: { list: () => expenses } },
     "../../components/ui": { Badge: () => null, Button: () => null, Card: () => null, Icon: () => null },
     "../../components/page": { EmptyState: () => null, ErrorState: () => null, PageHeader: () => null, StatCard: () => null },
-    "../../data/mockData": { CURRENT_EVENT_ID: "10" },
+    "../../data/mockData": { CURRENT_EVENT_ID: "demo" },
     "../events/EventsContext": { useEvents: () => ({ selectedId: "10", userId: "owner" }) },
     "../categories/useEventCategories": { useEventCategories: (eventId, accountId) => {
       assert.equal(eventId, "10"); assert.equal(accountId, "owner"); return categoryState;
@@ -289,6 +291,8 @@ function tableHost(vendorId = "") {
   const render = () => h.render(() => page.type(page.props));
   return {
     render,
+    loadVendorOptions() { render(); return vendorLoader(); },
+    vendorRequests,
     filter: () => find(render(), node => node.props?.["aria-label"] === "Filter expenses by category"),
     select(id) { this.filter().props.onChange({ target: { value: id } }); },
     rows: () => findAll(render(), node => node.type === "tr" && node.props.className === "expense-row").map(node => node.key),
@@ -348,4 +352,10 @@ test("an unavailable selected category is explicit and Clear filters still resto
   assert.deepEqual(h.rows(), ["1", "3"]);
   h.clear();
   assert.deepEqual(h.rows(), ["1", "2", "3", "4"]);
+});
+
+test("expense vendor loader calls the real adapter for the selected non-sample event", async () => {
+  const h = tableHost();
+  await h.loadVendorOptions();
+  assert.deepEqual(h.vendorRequests, ["10"]);
 });
