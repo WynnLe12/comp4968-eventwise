@@ -208,7 +208,7 @@ function EventVendors({
     return true;
   };
 
-  // Creation uses the saved expense API; automatic contract synchronization remains disabled.
+  // Creation uses Expenses; explicit synchronization uses the atomic Vendors operation.
   const offerContractExpense = (vendor: Vendor) => {
     if (!expensesLoading && !expensesError && expenseData !== null && canAddContractExpense(vendor, expenseData)) setContractOffer(vendor);
   };
@@ -244,9 +244,13 @@ function EventVendors({
       if (editing) {
         const nextTotal = body.contractTotal === undefined ? editing.contractTotal : body.contractTotal;
         let choice: ContractExpenseChoice | null = "keep";
+        let updatePlan: ContractExpensePlan | null = null;
         if (nextTotal !== null && (editing.contractTotal === null ||
             Math.round(Number(nextTotal) * 100) !== Math.round(Number(editing.contractTotal) * 100))) {
-          const plan = planContractExpense(editing, String(nextTotal));
+          const latest = await expenseService.list(editing.eventId);
+          updateExpenses(() => latest);
+          const plan = planContractExpense(editing, String(nextTotal), latest);
+          updatePlan = plan;
           if (plan.mode === "single" || plan.mode === "multiple") {
             choice = await new Promise<ContractExpenseChoice | null>((finish) => {
               setContractReview({ vendor: editing, plan, finish });
@@ -254,8 +258,15 @@ function EventVendors({
             if (choice === null) return null;
           }
         }
-        const updated = await vendorService.update(editing.eventId, editing.id, body, choice === "sync" ? "sync" : "keep");
+        const linked = updatePlan?.expenses[0];
+        if (choice === "sync" && (!linked || updatePlan?.mode !== "single")) throw new ContractExpenseError("Review the expense breakdown before updating it.");
+        const updated = choice === "sync" && linked
+          ? await vendorService.updateBoth(editing.eventId, editing.id, body, {
+              expenseId: linked.id, expectedContractTotal: editing.contractTotal, expectedExpenseTotal: linked.total.toFixed(2),
+            })
+          : await vendorService.update(editing.eventId, editing.id, body);
         replaceVendor(updated);
+        reloadExpenses();
         if (choice === "review") viewExpenses(updated);
         else offerContractExpense(updated);
         onToast("Vendor updated");

@@ -4,17 +4,17 @@ import test from "node:test";
 import ts from "typescript";
 import * as jsx from "react/jsx-runtime";
 
-function load(path, imports = {}) {
+function load(path, imports = {}, fetchRequest = globalThis.fetch) {
   const source = readFileSync(new URL("../src/" + path, import.meta.url), "utf8");
   const compiled = ts.transpileModule(source, { compilerOptions: {
     module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX,
   } }).outputText;
   const module = { exports: {} };
-  new Function("require", "module", "exports", compiled)(name => {
+  new Function("require", "module", "exports", "fetch", compiled)(name => {
     if (name.endsWith(".css")) return {};
     assert.ok(name in imports, "Unexpected import: " + name);
     return imports[name];
-  }, module, module.exports);
+  }, module, module.exports, fetchRequest);
   return module.exports;
 }
 const contract = load("services/vendorExpenseContract.ts", {
@@ -53,7 +53,8 @@ test("matching totals, no linked expenses, and vendors without contracts do not 
 function screen() {
   let selection = { selectedEvent: { event_id: "10" }, userId: "owner", status: "ready" };
   let expenseState = { data: [expense()], loading: false, error: null };
-  const loads = [], routes = [], creates = [];
+  const loads = [], routes = [], creates = [], syncs = [], vendorUpdates = [];
+  let syncFailure = null;
   const states = []; let stateIndex = 0, vendorReloads = 0;
   let vendorData = [vendor];
   let retries = 0;
@@ -74,7 +75,9 @@ function screen() {
     "../events/EventsContext": { useEvents: () => selection },
     "../../routes/navigation": { pagePath: () => "/app/expenses" },
     "../../services/vendorRules": load("services/vendorRules.ts"),
-    "../../services/vendorService": { vendorService: { list: async () => vendorData },
+    "../../services/vendorService": { vendorService: { list: async () => vendorData,
+      update: async (eventId, vendorId, input) => { vendorUpdates.push({ eventId, vendorId, input }); return { ...vendor, ...input }; },
+      updateBoth: async (eventId, vendorId, input, link) => { syncs.push({ eventId, vendorId, input, link }); if (syncFailure) throw syncFailure; return { ...vendor, ...input }; } },
       VendorDeleteConflictError: class extends Error {}, VendorServiceError: class extends Error {}, VendorValidationError: class extends Error {} },
     "../../services/expenseService": { ExpenseSaveError: class extends Error {}, expenseService: { list: async () => expenseState.data,
       create: async (eventId, input) => { creates.push({ eventId, input }); return { id: "99", eventId, vendorId: input.vendorId, categoryId: input.categoryId, total: Number(input.committedAmount), paid: 0 }; } } },
@@ -87,7 +90,10 @@ function screen() {
   const { Vendors } = load("features/vendors/Vendors.tsx", imports);
   const wrapper = () => Vendors({ onToast() {} });
   const render = () => { stateIndex = 0; const child = wrapper(); return child.type(child.props); };
-  return { render, wrapper, loads, routes, creates, vendorReloads: () => vendorReloads,
+  return { render, wrapper, loads, routes, creates, syncs, vendorUpdates,
+    failSync: error => { syncFailure = error; },
+    openEdit() { this.card().props.actions.props.onEdit(); },
+    editForm: () => find(render(), node => node.props?.onSubmit && node.props?.vendor), vendorReloads: () => vendorReloads,
     form: () => find(render(), node => node.props?.initialDraft),
     prompt: () => find(render(), node => node.props?.onChoose && node.props?.vendor),
     expenseData: () => expenseState.data,
@@ -159,4 +165,59 @@ test("a newly discovered linked expense blocks a second full-contract creation a
   await assert.rejects(form.props.onSave({ eventId: "10", vendorId: "90", categoryId: "123", vendor: "Contract", total: 200 }), /already has a linked expense/);
   assert.equal(h.creates.length, 0); assert.ok(h.form());
   await assert.rejects(form.props.onSave({ eventId: "20", vendorId: "90", categoryId: "123", vendor: "Contract", total: 200 }), /own event/);
+});
+
+const tick = () => new Promise(resolve => setImmediate(resolve));
+test("Update both plans from saved expenses and uses one atomic call with expected totals", async () => {
+  const h = screen(); h.openEdit();
+  const pending = h.editForm().props.onSubmit({ contractTotal: "250.00" }); await tick();
+  assert.equal(h.prompt().props.plan.mode, "single");
+  h.prompt().props.onChoose("sync"); await pending;
+  assert.deepEqual(h.syncs, [{ eventId: "10", vendorId: "90", input: { contractTotal: "250.00" }, link: {
+    expenseId: "1", expectedContractTotal: "200.00", expectedExpenseTotal: "100.00"
+  } }]);
+  assert.equal(h.vendorUpdates.length, 0); assert.equal(h.editForm(), undefined);
+});
+test("Keep expense unchanged saves only the vendor; Cancel saves neither", async () => {
+  for (const choice of ["keep", null]) {
+    const h = screen(); h.openEdit();
+    const pending = h.editForm().props.onSubmit({ contractTotal: "250.00" }); await tick();
+    if (choice === null) h.prompt().props.onClose(); else h.prompt().props.onChoose(choice);
+    await pending;
+    assert.equal(h.syncs.length, 0); assert.equal(h.vendorUpdates.length, choice === null ? 0 : 1);
+    if (choice === null) assert.ok(h.editForm());
+  }
+});
+test("multiple linked expenses are reviewed; a failed atomic update retains the vendor draft", async () => {
+  const multiple = screen(); multiple.state({ data: [expense(), expense({ id: "2" })], loading: false, error: null });
+  multiple.openEdit();
+  const review = multiple.editForm().props.onSubmit({ contractTotal: "250.00" }); await tick();
+  assert.equal(multiple.prompt().props.plan.mode, "multiple");
+  multiple.prompt().props.onChoose("review"); await review;
+  assert.equal(multiple.syncs.length, 0); assert.equal(multiple.vendorUpdates.length, 1);
+  assert.deepEqual(multiple.routes, ["/app/expenses?vendorId=90"]);
+  const failed = screen(); failed.failSync(new Error("Contract changed. Reopen it.")); failed.openEdit();
+  const pending = failed.editForm().props.onSubmit({ contractTotal: "250.00" }); await tick();
+  failed.prompt().props.onChoose("sync");
+  assert.match((await pending).message, /Contract changed/);
+  assert.ok(failed.editForm()); assert.equal(failed.vendorUpdates.length, 0);
+});
+test("the real vendor adapter sends a single dedicated request and never falls back to sequential writes", async () => {
+  for (const fail of [false, true]) {
+    const calls = [];
+    const { vendorService } = load("services/vendorService.ts", {
+      "../features/auth/services/authService": { requireAuthSession: async () => ({ session: { tokens: { accessToken: { toString: () => "test-token" } } } }) },
+      "./apiConfig": { apiUrl: path => "/api" + path },
+    }, async (url, request) => {
+      calls.push({ url, ...request });
+      return fail ? { status: 404, ok: false, json: async () => ({}) } : { status: 200, ok: true, json: async () => vendor };
+    });
+    const link = { expenseId: "1", expectedContractTotal: "200.00", expectedExpenseTotal: "100.00" };
+    const pending = vendorService.updateBoth("10", "90", { contractTotal: "250.00" }, link);
+    if (fail) await assert.rejects(pending, /update both records/); else await pending;
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "/api/events/10/vendors/90/contract-expense");
+    assert.equal(calls[0].method, "PATCH");
+    assert.deepEqual(JSON.parse(calls[0].body), { ...link, vendorChanges: { contractTotal: "250.00" } });
+  }
 });

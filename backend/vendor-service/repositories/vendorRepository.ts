@@ -1,7 +1,7 @@
 // All the vendor SQL. Every query filters by event_id, so a vendor ID from another
 // event never matches. Values always go through ? placeholders, never string-built SQL.
 // The shared pool returns BIGINT IDs and DECIMAL money as strings, and dates as text.
-import type { ResultSetHeader, RowDataPacket } from "mysql2/promise";
+import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getDatabasePool } from "../../shared/db/pool";
 import type { BookingStatus, ContractStatus, Money, VendorFields } from "../types";
 
@@ -51,8 +51,8 @@ export async function listVendors(eventId: string): Promise<VendorRow[]> {
 }
 
 /** One vendor, or null if it doesn't exist in this event. */
-export async function findVendor(eventId: string, vendorId: string): Promise<VendorRow | null> {
-  const [rows] = await getDatabasePool().execute<VendorRow[]>(
+export async function findVendor(eventId: string, vendorId: string, executor: Pick<PoolConnection, "execute"> = getDatabasePool()): Promise<VendorRow | null> {
+  const [rows] = await executor.execute<VendorRow[]>(
     `${SELECT_WITH_TOTALS} AND v.vendor_id = ?`,
     [eventId, vendorId],
   );
@@ -77,8 +77,8 @@ export async function insertVendor(eventId: string, v: VendorFields): Promise<st
   return String(result.insertId);
 }
 
-export async function updateVendor(eventId: string, vendorId: string, v: VendorFields): Promise<void> {
-  await getDatabasePool().execute(
+export async function updateVendor(eventId: string, vendorId: string, v: VendorFields, executor: Pick<PoolConnection, "execute"> = getDatabasePool()): Promise<void> {
+  await executor.execute(
     `UPDATE vendors SET name = ?, category = ?, contact_name = ?, email = ?, phone = ?,
        quote_amount = ?, contract_total = ?, booking_status = ?, contract_status = ?, notes = ?
      WHERE vendor_id = ? AND event_id = ?`,

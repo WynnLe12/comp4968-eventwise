@@ -8,8 +8,7 @@
  * classes below, so the Vendors page handles 403/404/409/422 the same way it did
  * with mock data.
  *
- * The contract-expense helpers (addContractExpense and the "sync" choice on update)
- * still use the in-memory mock expense store until the Expenses API is deployed.
+ * Update both uses a dedicated transactional operation in the Vendors API.
  */
 import { requireAuthSession } from "../features/auth/services/authService";
 import type {
@@ -19,7 +18,6 @@ import type {
   VendorUpdateInput,
 } from "../types";
 import { apiUrl } from "./apiConfig";
-import { addContractExpense, syncContractExpense } from "./vendorExpenseContract";
 import type { VendorDeleteConflict } from "./vendorRules";
 
 export type { VendorDeleteConflict } from "./vendorRules";
@@ -142,29 +140,23 @@ export const vendorService = {
   create: (eventId: string, input: VendorCreateInput) =>
     request<Vendor>("POST", vendorsPath(eventId), input),
 
-  /** PATCH /events/{eventId}/vendors/{vendorId} with only the changed fields -> 200. */
-  update: async (
-    eventId: string,
-    vendorId: string,
-    input: VendorUpdateInput,
-    expenseChoice: "keep" | "sync" = "keep",
-  ) => {
-    const before = expenseChoice === "sync" ? await vendorService.get(eventId, vendorId) : null;
-    const updated = await request<Vendor>("PATCH", vendorsPath(eventId, vendorId), input);
-    if (before && updated.contractTotal !== null) {
-      // TODO(expenses-api): await the real expense PATCH here, then reread the vendor so
-      // paidTotal/balance/nextDueDate reflect it. If the expense update fails after the
-      // vendor PATCH succeeded, tell the user the vendor saved but the expense didn't.
-      syncContractExpense(before, updated.contractTotal);
-    }
-    return updated;
-  },
+  update: (eventId: string, vendorId: string, input: VendorUpdateInput) =>
+    request<Vendor>("PATCH", vendorsPath(eventId, vendorId), input),
 
-  /** Adds the vendor's contract as an expense (mock store for now), then rereads the vendor. */
-  addContractExpense: async (eventId: string, vendorId: string) => {
-    // TODO(expenses-api): await the real expense POST (addContractExpense becomes async).
-    addContractExpense(await vendorService.get(eventId, vendorId));
-    return vendorService.get(eventId, vendorId);
+  updateBoth: async (eventId: string, vendorId: string, vendorChanges: VendorUpdateInput, link: {
+    expenseId: string; expectedContractTotal: string | null; expectedExpenseTotal: string;
+  }) => {
+    try {
+      return await request<Vendor>("PATCH", vendorsPath(eventId, vendorId) + "/contract-expense", { ...link, vendorChanges });
+    } catch (failure) {
+      if (failure instanceof VendorServiceError && failure.status === 404) {
+        throw new VendorServiceError("Couldn't update both records. Keep your draft and try again, or keep the expense unchanged.", 409);
+      }
+      if (failure instanceof VendorServiceError && failure.code === "AMOUNT_BELOW_PAID") {
+        throw new VendorValidationError("The contract cannot be less than the latest amount already paid.", { contractTotal: "Refresh the payment totals before entering a lower contract amount." });
+      }
+      throw failure;
+    }
   },
 
   /** DELETE /events/{eventId}/vendors/{vendorId} -> 204. */
