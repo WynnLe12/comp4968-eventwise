@@ -1,5 +1,7 @@
 import { CognitoJwtVerifier } from "aws-jwt-verify";
 import { ApiError } from "../../expense-service/errors";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 export type Authenticate = (authorization: string | undefined) => Promise<string>;
 // Configuration is lazy so /health and isolated tests require no Cognito setup.
@@ -12,7 +14,25 @@ export function createCognitoAuthenticator(env: NodeJS.ProcessEnv = process.env)
     const clientId = env.COGNITO_CLIENT_ID;
     if (!userPoolId || !clientId) throw new ApiError(503, "SERVICE_UNAVAILABLE", "Authentication is not configured.");
     try {
-      verifier ??= CognitoJwtVerifier.create({ userPoolId, clientId, tokenUse: "access" });
+      if (!verifier) {
+        verifier = CognitoJwtVerifier.create({
+          userPoolId,
+          clientId,
+          tokenUse: "access",
+        });
+
+        const jwksFile = env.COGNITO_JWKS_FILE?.trim();
+
+        if (jwksFile) {
+          const jwksPath = resolve(jwksFile);
+
+          const jwks = JSON.parse(
+            readFileSync(jwksPath, "utf8")
+          );
+
+          verifier.cacheJwks(jwks, userPoolId);
+        }
+      }
     } catch {
       throw new ApiError(503, "SERVICE_UNAVAILABLE", "Authentication is not configured correctly.");
     }
