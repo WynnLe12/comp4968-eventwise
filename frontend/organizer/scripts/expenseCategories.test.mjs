@@ -236,6 +236,7 @@ test("expense page resets its form state by selected account/event rather than t
     "../../services/mockExpenseStore": {}, "../../components/ui": {}, "../../components/page": {},
     "../../data/mockData": { CURRENT_EVENT_ID: "demo" },
     "../events/EventsContext": { useEvents: () => selection },
+    "../categories/useEventCategories": {},
     "./ExpenseActions": {}, "./ExpenseForm": {}, "./ExpenseDeleteDialog": {}, "./ExpensePaymentForm": {},
     "./expensePayments": {}, "./expenseDraft": {},
   });
@@ -247,4 +248,104 @@ test("expense page resets its form state by selected account/event rather than t
   assert.notEqual(first.key, second.key);
   selection = { selectedId: "20", userId: "other" };
   assert.notEqual(Expenses().key, second.key);
+});
+
+function findAll(node, predicate) {
+  if (!node || typeof node !== "object") return [];
+  if (Array.isArray(node)) return node.flatMap(child => findAll(child, predicate));
+  return [...(predicate(node) ? [node] : []), ...findAll(node.props?.children, predicate)];
+}
+function tableHost(vendorId = "") {
+  const h = host();
+  h.react.useCallback = callback => callback;
+  let params = new URLSearchParams(vendorId ? "vendorId=" + vendorId + "&keep=yes" : "");
+  let retries = 0;
+  let categoryState = { categories: [category("10", "123", "Photography"), category("10", "124", "Photography")], loading: false, error: "", retry: () => retries++ };
+  const expenses = [
+    { id: "1", eventId: "10", vendorId: "v1", vendor: "Venue fee", categoryId: "123", category: "Photography", total: 100, paid: 0, status: "Unpaid" },
+    { id: "2", eventId: "10", vendorId: "v1", vendor: "Photo deposit", categoryId: "124", category: "Photography", total: 200, paid: 50, status: "Deposit paid" },
+    { id: "3", eventId: "10", vendorId: "v2", vendor: "Photo balance", categoryId: "123", category: "Photography", total: 300, paid: 300, status: "Paid" },
+    { id: "4", eventId: "10", vendorId: null, vendor: "Legacy expense", category: "Photography", total: 400, paid: 0, status: "Unpaid" },
+  ];
+  const component = load("features/expenses/Expenses.tsx", {
+    react: h.react, "react/jsx-runtime": jsx,
+    "react-router-dom": { useSearchParams: () => [params, change => { params = typeof change === "function" ? change(params) : change; }] },
+    "../../utils/dateFormat": { formatCalendarDate: () => "No due date" },
+    "../../hooks/useResource": { useResource: () => ({ data: [{ id: "v1", eventId: "10", name: "Vendor One" }, { id: "v2", eventId: "10", name: "Vendor Two" }], loading: false, error: null }) },
+    "../../services/vendorService": { vendorService: { list: async () => [] } },
+    "../../services/mockExpenseStore": { mockExpenseStore: { list: () => expenses } },
+    "../../components/ui": { Badge: () => null, Button: () => null, Card: () => null, Icon: () => null },
+    "../../components/page": { EmptyState: () => null, ErrorState: () => null, PageHeader: () => null, StatCard: () => null },
+    "../../data/mockData": { CURRENT_EVENT_ID: "10" },
+    "../events/EventsContext": { useEvents: () => ({ selectedId: "10", userId: "owner" }) },
+    "../categories/useEventCategories": { useEventCategories: (eventId, accountId) => {
+      assert.equal(eventId, "10"); assert.equal(accountId, "owner"); return categoryState;
+    } },
+    "./ExpenseActions": { ExpenseActions: () => null }, "./ExpenseForm": { ExpenseForm: () => null },
+    "./ExpenseDeleteDialog": { ExpenseDeleteDialog: () => null }, "./ExpensePaymentForm": { ExpensePaymentForm: () => null },
+    "./expensePayments": {}, "./expenseDraft": draftModule,
+  });
+  const page = component.Expenses();
+  const render = () => h.render(() => page.type(page.props));
+  return {
+    render,
+    filter: () => find(render(), node => node.props?.["aria-label"] === "Filter expenses by category"),
+    select(id) { this.filter().props.onChange({ target: { value: id } }); },
+    rows: () => findAll(render(), node => node.type === "tr" && node.props.className === "expense-row").map(node => node.key),
+    search(value) { find(render(), node => node.props?.["aria-label"] === "Search expenses").props.onChange({ target: { value } }); },
+    status(value) { find(render(), node => node.type === "button" && node.props.children === value).props.onClick(); },
+    clear() { find(render(), node => node.type === "button" && node.props.children === "Clear filters").props.onClick(); },
+    summary: () => find(render(), node => node.props?.label === "Total expenses").props.value,
+    categoryState: value => { categoryState = { ...categoryState, ...value }; },
+    retries: () => retries,
+    params: () => params,
+  };
+}
+test("table category filter uses IDs, not equal display names, and preserves summary totals", () => {
+  const h = tableHost();
+  assert.deepEqual(h.rows(), ["1", "2", "3", "4"]);
+  const total = h.summary();
+  h.select("123");
+  assert.deepEqual(h.rows(), ["1", "3"]);
+  assert.equal(h.summary(), total);
+  h.select("124");
+  assert.deepEqual(h.rows(), ["2"]);
+  h.select("");
+  assert.deepEqual(h.rows(), ["1", "2", "3", "4"]);
+});
+test("category, case-insensitive search, payment status and vendor filters work together and clear together", () => {
+  const h = tableHost("v1");
+  h.select("123");
+  h.status("Unpaid");
+  h.search("VENDOR ONE");
+  assert.deepEqual(h.rows(), ["1"]);
+  h.search("does not exist");
+  assert.deepEqual(h.rows(), []);
+  assert.ok(find(h.render(), node => node.props?.title === "No matching expenses"));
+  h.clear();
+  assert.equal(h.filter().props.value, "");
+  assert.deepEqual(h.rows(), ["1", "2", "3", "4"]);
+  assert.equal(h.params().get("vendorId"), null);
+  assert.equal(h.params().get("keep"), "yes");
+});
+test("table category loading/errors have feedback and retry without hiding existing expenses", () => {
+  const h = tableHost();
+  h.categoryState({ loading: true, categories: [] });
+  assert.equal(h.filter().props.disabled, true);
+  assert.deepEqual(h.rows(), ["1", "2", "3", "4"]);
+  h.categoryState({ loading: false, error: "Couldn't load categories." });
+  assert.equal(h.filter().props.disabled, true);
+  find(h.render(), node => node.type === "button" && node.props.children === "Retry categories").props.onClick();
+  assert.equal(h.retries(), 1);
+  h.categoryState({ error: "", categories: [] });
+  assert.ok(find(h.render(), node => node.props?.children === "No budget categories are available for this event."));
+});
+test("an unavailable selected category is explicit and Clear filters still restores all rows", () => {
+  const h = tableHost();
+  h.select("123");
+  h.categoryState({ categories: [category("10", "124", "Other")] });
+  assert.ok(find(h.filter(), node => node.type === "option" && node.props.children === "Category unavailable"));
+  assert.deepEqual(h.rows(), ["1", "3"]);
+  h.clear();
+  assert.deepEqual(h.rows(), ["1", "2", "3", "4"]);
 });

@@ -8,6 +8,7 @@ import { Badge, Button, Card, Icon } from "../../components/ui";
 import { EmptyState, ErrorState, PageHeader, StatCard } from "../../components/page";
 import { CURRENT_EVENT_ID } from "../../data/mockData";
 import { useEvents } from "../events/EventsContext";
+import { useEventCategories } from "../categories/useEventCategories";
 import { ExpenseActions } from "./ExpenseActions";
 import { ExpenseForm } from "./ExpenseForm";
 import { ExpenseDeleteDialog } from "./ExpenseDeleteDialog";
@@ -42,6 +43,8 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
   const vendors = vendorData ?? [];
   const selectedVendor = vendors.find((vendor) => vendor.id === vendorId);
   const vendorNames = new Map(vendors.map((vendor) => [vendor.id, vendor.name]));
+  const { categories, loading: categoriesLoading, error: categoriesError, retry: retryCategories } = useEventCategories(eventId, accountId);
+  const [categoryId, setCategoryId] = useState("");
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [summaryFilter, setSummaryFilter] = useState<ExpenseSummaryFilter>("all");
@@ -65,6 +68,7 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
     mockExpenseStore.save(eventId, expense);
     setExpenses(mockExpenseStore.list(eventId));
     setSearch("");
+    setCategoryId("");
     setFilter("All");
     setSummaryFilter("all");
     setAdding(false);
@@ -101,6 +105,7 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
   };
 
   const clearTableFilters = () => {
+    setCategoryId("");
     setFilter("All");
     setSearch("");
     setSummaryFilter("all");
@@ -122,11 +127,12 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
     clearTableFilters();
     clearVendorFilter();
   };
-  const hasTableFilters = summaryFilter !== "all" || filter !== "All" || Boolean(search.trim());
+  const hasTableFilters = summaryFilter !== "all" || filter !== "All" || Boolean(search.trim()) || Boolean(categoryId);
   const hasFilters = hasTableFilters || Boolean(vendorId);
   const query = search.trim().toLowerCase();
   const rows = vendorExpenses.filter(
     (expense) =>
+      (!categoryId || expense.categoryId === categoryId) &&
       (filter === "All" || expense.status.includes(filter)) &&
       (expense.vendor.toLowerCase().includes(query) ||
         (vendorNames.get(expense.vendorId ?? "") ?? "").toLowerCase().includes(query)) &&
@@ -211,15 +217,27 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
                 onChange={(event) => setSearch(event.target.value)}
               />
             </label>
-            <button className="filter-btn">
-              All categories <Icon name="down" size={14} />
-            </button>
+            <select className="filter-btn expense-category-filter"
+              aria-label="Filter expenses by category" value={categoryId}
+              aria-describedby={categoriesLoading || categoriesError || categories.length === 0 ? "expense-category-filter-status" : undefined}
+              disabled={categoriesLoading || Boolean(categoriesError) || categories.length === 0}
+              onChange={event => setCategoryId(event.target.value)}>
+              <option value="">{categoriesLoading ? "Loading categories..." : "All categories"}</option>
+              {categoryId && !categories.some(category => category.categoryId === categoryId) &&
+                <option value={categoryId} disabled>Category unavailable</option>}
+              {categories.map(category => <option key={category.categoryId} value={category.categoryId}>{category.name}</option>)}
+            </select>
             {hasFilters && (
               <button type="button" className="filter-btn expense-clear-filters" onClick={clearFilters}>
                 Clear filters
               </button>
             )}
           </div>
+        </div>
+        <div id="expense-category-filter-status" className="expense-category-filter-status">
+          {categoriesError ? <p role="alert">{categoriesError} <button type="button" className="btn btn-ghost" onClick={retryCategories}>Retry categories</button></p>
+            : categoriesLoading ? <small role="status">Loading this event's category filters...</small>
+            : categories.length === 0 ? <small role="status">No budget categories are available for this event.</small> : null}
         </div>
         <div className="table-wrap expense-table">
           <table>
