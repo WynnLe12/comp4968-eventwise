@@ -149,7 +149,7 @@ export function VendorDrawer({
               <dd>{currency(vendor.paidTotal)}</dd>
             </div>
             <div>
-              <dt>{isOverpaid(vendor) ? "Overpaid" : "Balance"}</dt>
+              <dt>{isOverpaid(vendor) ? "Overpaid" : "Contract balance"}</dt>
               <dd>
                 {isOverpaid(vendor)
                   ? currency(String(-Number(vendor.balance)))

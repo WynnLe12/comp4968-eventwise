@@ -34,9 +34,9 @@ export function contractExpenseSummary(vendor: Vendor, source?: readonly Expense
   };
 }
 
-export function canAddContractExpense(vendor: Vendor) {
-  return CONTRACT_EXPENSES_ENABLED && vendor.bookingStatus === "BOOKED" && vendor.contractStatus !== "CANCELLED" &&
-    vendor.contractTotal !== null && contractExpenseSummary(vendor).expenses.length === 0;
+export function canAddContractExpense(vendor: Vendor, source?: readonly Expense[]) {
+  return (source !== undefined || CONTRACT_EXPENSES_ENABLED) && vendor.bookingStatus === "BOOKED" && vendor.contractStatus !== "CANCELLED" &&
+    vendor.contractTotal !== null && contractExpenseSummary(vendor, source).expenses.length === 0;
 }
 
 export function planContractExpense(vendor: Vendor, total: string | null) {

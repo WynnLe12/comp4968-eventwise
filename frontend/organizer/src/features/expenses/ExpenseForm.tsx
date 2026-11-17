@@ -7,11 +7,13 @@ import { ExpenseSaveError } from "../../services/expenseService";
 import { CategorySelect } from "../categories/CategorySelect";
 import { useEventCategories } from "../categories/useEventCategories";
 
-export function ExpenseForm({ eventId, accountId, expense, vendors, defaultVendorId, onSave, onClose }: {
+export function ExpenseForm({ eventId, accountId, expense, vendors, defaultVendorId, initialDraft, lockVendor = false, onSave, onClose }: {
   eventId: string;
   accountId: string;
   vendors: Vendor[];
   defaultVendorId?: string;
+  initialDraft?: Pick<ExpenseDraft, "name" | "amount">;
+  lockVendor?: boolean;
   expense?: Expense;
   onSave: (expense: Expense) => void | Promise<void>;
   onClose: () => void;
@@ -21,9 +23,9 @@ export function ExpenseForm({ eventId, accountId, expense, vendors, defaultVendo
   const formRef = useRef<HTMLFormElement>(null);
   const [draft, setDraft] = useState<ExpenseDraft>({
     categoryId: expense?.categoryId ?? "",
-    name: expense?.vendor ?? "",
+    name: expense?.vendor ?? initialDraft?.name ?? "",
     vendorId: expense ? expense.vendorId ?? "" : defaultVendorId ?? "",
-    amount: expense ? expense.total.toFixed(2) : "",
+    amount: expense ? expense.total.toFixed(2) : initialDraft?.amount ?? "",
     dueDate: expense?.dueDate ?? "",
   });
   const [dueDateChanged, setDueDateChanged] = useState(false);
@@ -146,6 +148,7 @@ export function ExpenseForm({ eventId, accountId, expense, vendors, defaultVendo
               <select
                 className="expense-vendor-select"
                 name="vendorId"
+                disabled={lockVendor}
                 value={draft.vendorId ?? ""}
                 onChange={(event) => update("vendorId", event.target.value)}
                 aria-invalid={Boolean(errors.vendorId)}

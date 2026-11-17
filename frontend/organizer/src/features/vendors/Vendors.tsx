@@ -26,7 +26,8 @@ import type {
   VendorCreateInput,
   VendorUpdateInput,
 } from "../../types";
-import { expenseService } from "../../services/expenseService";
+import { ExpenseForm } from "../expenses/ExpenseForm";
+import { ExpenseSaveError, expenseService } from "../../services/expenseService";
 import type { Expense } from "../../types";
 import { VendorActions } from "./VendorActions";
 import { VendorCard } from "./VendorCard";
@@ -88,7 +89,7 @@ function EventVendors({
   onToast: (message: string, tone?: ToastTone) => void;
 }) {
   const navigate = useNavigate();
-  const { selectedEvent, status: eventsStatus } = useEvents();
+  const { selectedEvent, userId, status: eventsStatus } = useEvents();
   // The event chosen in the sidebar switcher. Changing it reloads that event's vendors.
   const eventId = selectedEvent?.event_id ?? null;
   const loadVendors = useCallback(
@@ -100,7 +101,7 @@ function EventVendors({
   const loadExpenses = useCallback(
     () => eventId ? expenseService.list(eventId) : Promise.resolve<Expense[]>([]), [eventId],
   );
-  const { data: expenseData, loading: expensesLoading, error: expensesError, reload: reloadExpenses } = useResource(loadExpenses);
+  const { data: expenseData, loading: expensesLoading, error: expensesError, reload: reloadExpenses, update: updateExpenses } = useResource(loadExpenses);
   const linkedSummaries = useMemo(() => new Map(vendors.map(vendor => [vendor.id,
     expenseData === null ? null : contractExpenseSummary(vendor, expenseData),
   ])), [vendors, expenseData]);
@@ -119,6 +120,7 @@ function EventVendors({
   } | null>(null);
   const [researchTarget, setResearchTarget] = useState<Vendor | null>(null);
   const [saving, setSaving] = useState(false);
+  const [contractExpenseVendor, setContractExpenseVendor] = useState<Vendor | null>(null);
   const [contractOffer, setContractOffer] = useState<Vendor | null>(null);
   const [contractReview, setContractReview] = useState<{
     vendor: Vendor;
@@ -206,10 +208,9 @@ function EventVendors({
     return true;
   };
 
-  // Contract creation/synchronization stays disabled until it uses the real expense API.
-  // Card comparisons use the separate read-only API snapshot above.
+  // Creation uses the saved expense API; automatic contract synchronization remains disabled.
   const offerContractExpense = (vendor: Vendor) => {
-    if (canAddContractExpense(vendor)) setContractOffer(vendor);
+    if (!expensesLoading && !expensesError && expenseData !== null && canAddContractExpense(vendor, expenseData)) setContractOffer(vendor);
   };
 
   const finishContractReview = (choice: ContractExpenseChoice | null) => {
@@ -217,18 +218,24 @@ function EventVendors({
     setContractReview(null);
   };
 
-  const createContractExpense = async () => {
-    if (!contractOffer || saving) return;
-    setSaving(true);
-    try {
-      replaceVendor(await vendorService.addContractExpense(contractOffer.eventId, contractOffer.id));
-      setContractOffer(null);
-      onToast("Contract added to expenses");
-    } catch (reason) {
-      onToast(errorMessage(reason, "We couldn't add the contract expense."), "error");
-    } finally {
-      setSaving(false);
+  const createContractExpense = async (expense: Expense) => {
+    const vendor = contractExpenseVendor;
+    if (!vendor || vendor.eventId !== eventId || expense.eventId !== eventId || expense.vendorId !== vendor.id || !expense.categoryId) {
+      throw new ExpenseSaveError("Reopen this contract in its own event and choose a category.");
     }
+    const latest = await expenseService.list(vendor.eventId);
+    if (!canAddContractExpense(vendor, latest)) {
+      updateExpenses(() => latest);
+      throw new ExpenseSaveError("This vendor already has a linked expense. Cancel and review its expenses before adding another contract.");
+    }
+    const saved = await expenseService.create(vendor.eventId, {
+      categoryId: expense.categoryId, vendorId: vendor.id, description: expense.vendor,
+      committedAmount: expense.total.toFixed(2), dueDate: expense.dueDate ?? null,
+    });
+    updateExpenses(() => [saved, ...latest]);
+    setContractExpenseVendor(null);
+    onToast("Contract added to expenses");
+    reload();
   };
 
   const saveVendor = async (body: VendorUpdateInput): Promise<VendorFormSubmitError | null> => {
@@ -503,7 +510,7 @@ function EventVendors({
             <select value={sort} onChange={(event) => setSort(event.target.value as SortKey)}>
               <option value="name">Sort: Name</option>
               <option value="due">Sort: Next due date</option>
-              <option value="balance">Sort: Balance</option>
+              <option value="balance">Sort: Contract balance</option>
             </select>
           </label>
         </div>
@@ -531,30 +538,25 @@ function EventVendors({
               vendor={vendor}
               onOpen={() => setSelectedId(vendor.id)}
               expenseAction={
-                canAddContractExpense(vendor) ? (
+                !expensesLoading && !expensesError && expenseData !== null && canAddContractExpense(vendor, expenseData) ? (
                   <Button variant="secondary" icon="receipt" onClick={() => setContractOffer(vendor)}>
                     Add contract to expenses
                   </Button>
-                ) : !expensesLoading && !expensesError && linkedSummaries.get(vendor.id)?.mismatch ? (
-                  <div className="vendor-expense-mismatch">
-                    <dl>
-                      <div>
-                        <dt>Contract</dt>
-                        <dd>{currency(vendor.contractTotal)}</dd>
-                      </div>
-                      <div>
-                        <dt>Linked expenses</dt>
-                        <dd>{currency(linkedSummaries.get(vendor.id)!.total)}</dd>
-                      </div>
-                    </dl>
-                    <Button variant="ghost" onClick={() => viewExpenses(vendor)}>
-                      Review expense breakdown
-                    </Button>
-                  </div>
                 ) : !expensesLoading && !expensesError && (linkedSummaries.get(vendor.id)?.expenses.length ?? 0) > 0 ? (
-                  <Button variant="ghost" onClick={() => viewExpenses(vendor)}>
-                    View linked expenses ({linkedSummaries.get(vendor.id)!.expenses.length})
-                  </Button>
+                  <>
+                    {linkedSummaries.get(vendor.id)?.mismatch && (
+                      <div className="vendor-expense-mismatch">
+                        <p>Contract and expense totals differ.</p>
+                        <dl>
+                          <div><dt>Contract</dt><dd>{currency(vendor.contractTotal)}</dd></div>
+                          <div><dt>Linked expenses</dt><dd>{currency(linkedSummaries.get(vendor.id)!.total)}</dd></div>
+                        </dl>
+                      </div>
+                    )}
+                    <Button variant="ghost" onClick={() => viewExpenses(vendor)}>
+                      View expenses ({linkedSummaries.get(vendor.id)!.expenses.length})
+                    </Button>
+                  </>
                 ) : undefined
               }
               actions={
@@ -609,10 +611,16 @@ function EventVendors({
           vendor={contractOffer}
           plan={planContractExpense(contractOffer, contractOffer.contractTotal)}
           busy={saving}
-          onChoose={() => void createContractExpense()}
+          onChoose={() => { setContractExpenseVendor(contractOffer); setContractOffer(null); }}
           onClose={() => { if (!saving) setContractOffer(null); }}
         />
       )}
+
+      {contractExpenseVendor && userId && <ExpenseForm key={contractExpenseVendor.id}
+        eventId={contractExpenseVendor.eventId} accountId={userId} vendors={vendors}
+        defaultVendorId={contractExpenseVendor.id} lockVendor
+        initialDraft={{ name: contractExpenseVendor.name + " contract", amount: contractExpenseVendor.contractTotal! }}
+        onSave={createContractExpense} onClose={() => setContractExpenseVendor(null)} />}
 
       {researchTarget && (
         <Modal

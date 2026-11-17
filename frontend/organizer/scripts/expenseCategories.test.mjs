@@ -153,7 +153,7 @@ function find(node, predicate) {
 const { ExpenseSaveError, ExpenseDeleteError } = load("services/expenseService.ts", {
   "../features/auth/services/authService": {}, "./apiConfig": {},
 });
-function formHost(expense, onSave) {
+function formHost(expense, onSave, overrides = {}) {
   const h = host(), saves = [];
   let closes = 0;
   let categoryState = { categories: [category()], loading: false, error: "", retry() {} };
@@ -168,7 +168,7 @@ function formHost(expense, onSave) {
       assert.equal(eventId, "10"); assert.equal(accountId, "owner"); return categoryState;
     } },
   });
-  const props = { eventId: "10", accountId: "owner", vendors: [], expense, onSave: value => { saves.push(value); return onSave?.(value); }, onClose() { closes++; } };
+  const props = { eventId: "10", accountId: "owner", vendors: [], expense, onSave: value => { saves.push(value); return onSave?.(value); }, onClose() { closes++; }, ...overrides };
   const render = () => h.render(() => ExpenseForm(props));
   return { saves, render, category: () => find(render(), n => n.type === Category),
     change(name, value) { find(render(), n => n.props?.name === name).props.onChange({ target: { value } }); },
@@ -601,4 +601,16 @@ test("payment history loads only when details are open and unmounts when the dra
   assert.equal(find(render(), node => node.type === History).props.expenseId, "900");
   find(render(), node => node.type === "dialog").props.onClose();
   assert.equal(find(render(), node => node.type === History), null);
+});
+
+
+test("contract creation prefills name/amount, locks the vendor, and still requires an actual event category", async () => {
+  const h = formHost(undefined, undefined, { initialDraft: { name: "Cake contract", amount: "200.00" },
+    defaultVendorId: "90", lockVendor: true, vendors: [{ id: "90", eventId: "10", name: "Cake vendor" }] });
+  assert.equal(find(h.render(), node => node.props?.name === "name").props.value, "Cake contract");
+  assert.equal(find(h.render(), node => node.props?.name === "amount").props.value, "200.00");
+  assert.equal(find(h.render(), node => node.props?.name === "vendorId").props.disabled, true);
+  await h.submit(); assert.equal(h.saves.length, 0);
+  h.select("123"); await h.submit();
+  assert.equal(h.saves.length, 1); assert.equal(h.saves[0].vendorId, "90"); assert.equal(h.saves[0].categoryId, "123");
 });

@@ -53,12 +53,14 @@ test("matching totals, no linked expenses, and vendors without contracts do not 
 function screen() {
   let selection = { selectedEvent: { event_id: "10" }, userId: "owner", status: "ready" };
   let expenseState = { data: [expense()], loading: false, error: null };
-  const loads = [], routes = [];
+  const loads = [], routes = [], creates = [];
+  const states = []; let stateIndex = 0, vendorReloads = 0;
+  let vendorData = [vendor];
   let retries = 0;
   const Card = () => null;
   const imports = {
     react: { useCallback: callback => callback, useMemo: callback => callback(),
-      useState: initial => [typeof initial === "function" ? initial() : initial, () => {}] },
+      useState: initial => { const i = stateIndex++; if (!(i in states)) states[i] = typeof initial === "function" ? initial() : initial; return [states[i], value => { states[i] = typeof value === "function" ? value(states[i]) : value; }]; } },
     "react/jsx-runtime": jsx,
     "react-router-dom": { useNavigate: () => path => routes.push(path) },
     "../../components/page": { EmptyState: () => null, ErrorState: () => null, LoadingState: () => null, PageHeader: () => null },
@@ -66,15 +68,17 @@ function screen() {
     "../../hooks/useResource": { useResource: loader => {
       loads.push(loader);
       return String(loader).includes("expenseService")
-        ? { ...expenseState, reload() { retries++; } }
-        : { data: [vendor], loading: false, error: null, reload() {}, update() {} };
+        ? { ...expenseState, reload() { retries++; }, update(change) { expenseState = { ...expenseState, data: change(expenseState.data) }; } }
+        : { data: vendorData, loading: false, error: null, reload() { vendorReloads++; }, update(change) { vendorData = change(vendorData); } };
     } },
     "../events/EventsContext": { useEvents: () => selection },
     "../../routes/navigation": { pagePath: () => "/app/expenses" },
     "../../services/vendorRules": load("services/vendorRules.ts"),
-    "../../services/vendorService": { vendorService: { list: async eventId => eventId },
+    "../../services/vendorService": { vendorService: { list: async () => vendorData },
       VendorDeleteConflictError: class extends Error {}, VendorServiceError: class extends Error {}, VendorValidationError: class extends Error {} },
-    "../../services/expenseService": { expenseService: { list: async eventId => eventId } },
+    "../../services/expenseService": { ExpenseSaveError: class extends Error {}, expenseService: { list: async () => expenseState.data,
+      create: async (eventId, input) => { creates.push({ eventId, input }); return { id: "99", eventId, vendorId: input.vendorId, categoryId: input.categoryId, total: Number(input.committedAmount), paid: 0 }; } } },
+    "../expenses/ExpenseForm": { ExpenseForm: () => null },
     "./VendorActions": { VendorActions: () => null }, "./VendorCard": { VendorCard: Card },
     "./vendorFormat": { currency: value => value }, "./ContractExpensePrompt": { ContractExpensePrompt: () => null },
     "../../services/vendorExpenseContract": contract, "./VendorDrawer": { VendorDrawer: () => null },
@@ -82,8 +86,12 @@ function screen() {
   };
   const { Vendors } = load("features/vendors/Vendors.tsx", imports);
   const wrapper = () => Vendors({ onToast() {} });
-  const render = () => { const child = wrapper(); return child.type(child.props); };
-  return { render, wrapper, loads, routes, retries: () => retries,
+  const render = () => { stateIndex = 0; const child = wrapper(); return child.type(child.props); };
+  return { render, wrapper, loads, routes, creates, vendorReloads: () => vendorReloads,
+    form: () => find(render(), node => node.props?.initialDraft),
+    prompt: () => find(render(), node => node.props?.onChoose && node.props?.vendor),
+    expenseData: () => expenseState.data,
+    retries: () => retries,
     select: value => { selection = value; }, state: value => { expenseState = value; },
     card: () => find(render(), node => node.type === Card),
   };
@@ -94,9 +102,9 @@ test("vendor cards compare saved totals while preserving API payment figures and
   assert.equal(card.props.vendor.paidTotal, "25.00");
   assert.equal(card.props.vendor.balance, "175.00");
   assert.ok(find(card.props.expenseAction, node => node.type === "dd" && node.props.children === "100.00"));
-  find(card.props.expenseAction, node => node.props?.children === "Review expense breakdown").props.onClick();
+  find(card.props.expenseAction, node => Array.isArray(node.props?.children) && node.props.children.includes("View expenses (")).props.onClick();
   assert.deepEqual(h.routes, ["/app/expenses?vendorId=90"]);
-  assert.deepEqual(await Promise.all(h.loads.map(loader => loader())), ["10", "10"]);
+  assert.deepEqual(await Promise.all(h.loads.map(loader => loader())), [[vendor], [expense()]]);
 });
 test("expense loading/failure hides comparison values and retries without hiding vendor cards", () => {
   const h = screen();
@@ -107,7 +115,7 @@ test("expense loading/failure hides comparison values and retries without hiding
   const failure = find(h.render(), node => node.props?.onRetry);
   failure.props.onRetry(); assert.equal(h.retries(), 1);
   h.state({ data: [expense({ total: 200 })], loading: false, error: null });
-  assert.ok(find(h.card().props.expenseAction, node => Array.isArray(node.props?.children) && node.props.children.includes("View linked expenses (")));
+  assert.ok(find(h.card().props.expenseAction, node => Array.isArray(node.props?.children) && node.props.children.includes("View expenses (")));
 });
 test("changing event or account mounts a separate vendor page so old snapshots and dialogs cannot leak", () => {
   const h = screen(), first = h.wrapper();
@@ -115,4 +123,40 @@ test("changing event or account mounts a separate vendor page so old snapshots a
   const second = h.wrapper(); assert.notEqual(second.key, first.key);
   h.select({ selectedEvent: { event_id: "20" }, userId: "other", status: "ready" });
   assert.notEqual(h.wrapper().key, second.key);
+});
+
+
+test("the contract expense offer requires a booked contract with no saved linked expenses", () => {
+  assert.equal(contract.canAddContractExpense(vendor, []), true);
+  assert.equal(contract.canAddContractExpense(vendor, [expense()]), false);
+  assert.equal(contract.canAddContractExpense({ ...vendor, bookingStatus: "QUOTED" }, []), false);
+  assert.equal(contract.canAddContractExpense({ ...vendor, contractStatus: "CANCELLED" }, []), false);
+  assert.equal(contract.canAddContractExpense({ ...vendor, contractTotal: null }, []), false);
+  assert.equal(contract.canAddContractExpense(vendor), false);
+});
+test("Not now preserves the vendor without creating an expense; proceeding prefills a category-required form", async () => {
+  const h = screen(); h.state({ data: [], loading: false, error: null });
+  h.card().props.expenseAction.props.onClick();
+  h.prompt().props.onClose();
+  assert.equal(h.creates.length, 0); assert.equal(h.prompt(), undefined);
+  h.card().props.expenseAction.props.onClick(); h.prompt().props.onChoose("create");
+  const form = h.form();
+  assert.equal(form.props.eventId, "10"); assert.equal(form.props.accountId, "owner");
+  assert.equal(form.props.defaultVendorId, "90"); assert.equal(form.props.lockVendor, true);
+  assert.deepEqual(form.props.initialDraft, { name: "Photographer contract", amount: "200.00" });
+  await form.props.onSave({ eventId: "10", vendorId: "90", categoryId: "123", vendor: "Photographer contract", total: 200, dueDate: "2026-12-01" });
+  assert.deepEqual(h.creates, [{ eventId: "10", input: { categoryId: "123", vendorId: "90", description: "Photographer contract", committedAmount: "200.00", dueDate: "2026-12-01" } }]);
+  assert.equal(h.expenseData()[0].id, "99"); assert.equal(h.form(), undefined);
+  assert.equal(h.vendorReloads(), 1);
+  assert.ok(h.card().props.expenseAction);
+  assert.notEqual(h.card().props.expenseAction.props.children, "Add contract to expenses");
+});
+test("a newly discovered linked expense blocks a second full-contract creation and keeps the draft open", async () => {
+  const h = screen(); h.state({ data: [], loading: false, error: null });
+  h.card().props.expenseAction.props.onClick(); h.prompt().props.onChoose("create");
+  const form = h.form();
+  h.state({ data: [expense()], loading: false, error: null });
+  await assert.rejects(form.props.onSave({ eventId: "10", vendorId: "90", categoryId: "123", vendor: "Contract", total: 200 }), /already has a linked expense/);
+  assert.equal(h.creates.length, 0); assert.ok(h.form());
+  await assert.rejects(form.props.onSave({ eventId: "20", vendorId: "90", categoryId: "123", vendor: "Contract", total: 200 }), /own event/);
 });

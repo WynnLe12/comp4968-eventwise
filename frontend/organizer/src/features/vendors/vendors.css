@@ -601,26 +601,11 @@
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
-.vendor-expense-mismatch .btn {
-  height: auto;
-  min-height: 36px;
-  margin-top: 8px;
-  padding: 8px 0 0;
-  justify-content: flex-start;
-  border-top: 1px solid var(--line);
-  border-radius: 0;
-  color: var(--purple-dark);
+.vendor-expense-mismatch p {
+  margin: 0 0 8px;
   font-size: 12px;
-  line-height: 1.4;
-  text-align: left;
-  white-space: normal;
+  color: var(--muted);
 }
-.vendor-expense-mismatch .btn:hover {
-  background: transparent;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-.vendor-expense-mismatch .btn:focus-visible {
-  outline: 2px solid var(--purple);
-  outline-offset: 2px;
+.vendor-expense-mismatch + .btn {
+  margin-top: 8px;
 }
