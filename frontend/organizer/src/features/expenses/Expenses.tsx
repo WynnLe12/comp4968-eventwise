@@ -46,6 +46,7 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
   const loadExpenses = useCallback(() => expenseService.list(eventId), [eventId]);
   const { data: expenseData, loading: expensesLoading, error: expensesError, reload: reloadExpenses, update: updateExpenses } = useResource(loadExpenses);
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<Expense | null>(null);
   const [notice, setNotice] = useState("");
   const expenses = expenseData ?? [];
   const vendorExpenses = vendorId ? expenses.filter((expense) => expense.vendorId === vendorId) : expenses;
@@ -60,14 +61,17 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
 
   const saveExpense = async (expense: Expense) => {
     if (expense.eventId !== eventId || !expense.categoryId) throw new Error("Reopen this expense in its own event and choose a category.");
-    const saved = await expenseService.create(eventId, {
+    if (editing && expense.id !== editing.id) throw new Error("Reopen the expense before saving.");
+    const input = {
       categoryId: expense.categoryId, vendorId: expense.vendorId, description: expense.vendor,
       committedAmount: expense.total.toFixed(2), dueDate: expense.dueDate ?? null,
-    });
-    updateExpenses(current => [saved, ...current.filter(row => row.id !== saved.id)]);
+    };
+    const saved = editing ? await expenseService.update(eventId, editing.id, input) : await expenseService.create(eventId, input);
+    updateExpenses(current => editing ? current.map(row => row.id === saved.id ? saved : row) : [saved, ...current.filter(row => row.id !== saved.id)]);
     clearTableFilters();
     setAdding(false);
-    setNotice("Expense added.");
+    setNotice(editing ? "Expense updated." : "Expense added.");
+    setEditing(null);
   };
 
   const selectSummaryFilter = (next: ExpenseSummaryFilter) => {
@@ -105,12 +109,12 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
       <PageHeader
         page="expenses"
         action={
-          <Button icon="plus" disabled={vendorsLoading || Boolean(vendorsError) || Boolean(vendorId && !selectedVendor)} onClick={() => { setNotice(""); setAdding(true); }}>
+          <Button icon="plus" disabled={vendorsLoading || Boolean(vendorsError) || Boolean(vendorId && !selectedVendor)} onClick={() => { setNotice(""); setEditing(null); setAdding(true); }}>
             Add expense
           </Button>
         }
       />
-      <p className="feature-preview-notice" role="status">You can add and view saved expenses. Editing, deleting, and recording payments will be available next.</p>
+      <p className="feature-preview-notice" role="status">You can add, edit, and view saved expenses. Deleting and recording payments will be available next.</p>
       {notice && <p role="status">{notice}</p>}
       {vendorsError ? (
         <ErrorState message="We couldn't load vendors. Retry to link expenses to a vendor." onRetry={reloadVendors} />
@@ -253,7 +257,7 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
                     <Badge tone={statusTone(x.status)}>{x.status}</Badge>
                   </td>
                   <td>
-                    <ExpenseActions vendorName={vendorNames.get(x.vendorId ?? "")} expense={x} readOnly onEdit={() => {}} onRecordPayment={() => {}} onDelete={() => {}} />
+                    <ExpenseActions vendorName={vendorNames.get(x.vendorId ?? "")} expense={x} readOnly allowEdit onEdit={() => { setNotice(""); setEditing(x); }} onRecordPayment={() => {}} onDelete={() => {}} />
                   </td>
                 </tr>
               ))}
@@ -271,8 +275,9 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
           </div>
         </div>
       </Card>
-      {adding && <ExpenseForm eventId={eventId} accountId={accountId} vendors={vendors}
-        defaultVendorId={selectedVendor?.id} onSave={saveExpense} onClose={() => setAdding(false)} />}
+      {(adding || editing) && <ExpenseForm key={editing?.id ?? "new"} eventId={eventId} accountId={accountId} vendors={vendors}
+        expense={editing ?? undefined} defaultVendorId={selectedVendor?.id} onSave={saveExpense}
+        onClose={() => { setAdding(false); setEditing(null); }} />}
     </>
   );
 }

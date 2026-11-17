@@ -113,3 +113,22 @@ test("expense creation maps validation fields and hides internal API errors", as
   assert.equal(expired.calls.length, 0);
   await assert.rejects(client([new Error("internal")]).service.create("10", createInput), /couldn\x27t reach/);
 });
+
+
+test("expense update PATCHes the selected event/expense with writable fields and preserves server payment totals", async () => {
+  const h = client([created({ expenseId: "900", paidTotal: "50.00", paymentStatus: "PARTIALLY_PAID" })]);
+  const saved = await h.service.update("10", "900", { ...createInput, paidTotal: "0.00", payments: [] });
+  assert.equal(h.calls[0].url, "/api/events/10/expenses/900");
+  assert.equal(h.calls[0].method, "PATCH");
+  assert.deepEqual(JSON.parse(h.calls[0].body), createInput);
+  assert.equal(saved.paid, 50);
+  assert.equal(saved.status, "Partially paid");
+  await assert.rejects(client([created({ expenseId: "901" })]).service.update("10", "900", createInput), /couldn\x27t read/);
+});
+test("a concurrent payment rejection explains the minimum-total constraint without changing the saved expense", async () => {
+  const h = client([{ ok: false, status: 409, json: async () => ({ error: { code: "AMOUNT_BELOW_PAID", message: "internal" } }) }]);
+  await assert.rejects(h.service.update("10", "900", createInput), error => {
+    assert.match(error.message, /Payments have changed/);
+    assert.equal(error.fields.amount, "Total cannot be less than the amount already paid."); return true;
+  });
+});

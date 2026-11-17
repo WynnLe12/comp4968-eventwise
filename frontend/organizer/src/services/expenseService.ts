@@ -50,21 +50,25 @@ export class ExpenseSaveError extends Error {
   }
 }
 
-export const expenseService = {
-  async create(eventId: string, input: CreateExpenseInput): Promise<Expense> {
+async function saveExpenseRequest(eventId: string, input: CreateExpenseInput, expenseId?: string): Promise<Expense> {
     let token: string | undefined;
     try { token = (await requireAuthSession()).session.tokens?.accessToken?.toString(); } catch { /* Show the sign-in message below. */ }
     if (!token) throw new ExpenseSaveError("Your session has expired. Please sign in again.");
     let response: Response;
     try {
-      response = await fetch(apiUrl("/events/" + encodeURIComponent(eventId) + "/expenses"), {
-        method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      response = await fetch(apiUrl("/events/" + encodeURIComponent(eventId) + "/expenses" + (expenseId === undefined ? "" : "/" + encodeURIComponent(expenseId))), {
+        method: expenseId === undefined ? "POST" : "PATCH", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
         body: JSON.stringify({ categoryId: input.categoryId, vendorId: input.vendorId,
           description: input.description, committedAmount: input.committedAmount, dueDate: input.dueDate }),
       });
     } catch { throw new ExpenseSaveError("We couldn\'t reach the server. Check your connection and try again."); }
     const body = await response.json().catch(() => null);
     if (!response.ok) {
+      if (response.status === 409 && body?.error?.code === "AMOUNT_BELOW_PAID") {
+        throw new ExpenseSaveError("Payments have changed. Refresh the expenses before trying a lower total.", {
+          amount: "Total cannot be less than the amount already paid.",
+        });
+      }
       if (response.status === 422) {
         const fields: Record<string, string> = {};
         const messages: Record<string, string> = {
@@ -80,13 +84,19 @@ export const expenseService = {
       }
       const messages: Record<number, string> = {
         401: "Your session has expired. Please sign in again.", 403: "You don\'t have access to this event.",
-        404: "This event is no longer available. Refresh your events and try again.",
+        404: "This event or expense is no longer available. Refresh your events and try again.",
         409: "This expense could not be saved. Check its category and vendor, then try again.",
       };
       throw new ExpenseSaveError(messages[response.status] ?? "We couldn\'t save the expense. Please try again.");
     }
-    return mapExpense(body?.data, eventId);
-  },
+    const saved = mapExpense(body?.data, eventId);
+    if (expenseId !== undefined && saved.id !== expenseId) throw invalidResponse();
+    return saved;
+}
+
+export const expenseService = {
+  create: (eventId: string, input: CreateExpenseInput) => saveExpenseRequest(eventId, input),
+  update: (eventId: string, expenseId: string, input: CreateExpenseInput) => saveExpenseRequest(eventId, input, expenseId),
   async list(eventId: string): Promise<Expense[]> {
     let token: string | undefined;
     try { token = (await requireAuthSession()).session.tokens?.accessToken?.toString(); } catch { /* Show a sign-in message below. */ }

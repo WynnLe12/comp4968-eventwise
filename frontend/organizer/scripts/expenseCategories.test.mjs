@@ -265,7 +265,7 @@ function findAll(node, predicate) {
 function tableHost(vendorId = "") {
   let vendorLoader, expenseLoader;
   let expenseState;
-  const vendorRequests = [], createRequests = [];
+  const vendorRequests = [], createRequests = [], updateRequests = [];
   const h = host();
   h.react.useCallback = callback => callback;
   let params = new URLSearchParams(vendorId ? "vendorId=" + vendorId + "&keep=yes" : "");
@@ -286,6 +286,11 @@ function tableHost(vendorId = "") {
     "../../services/expenseService": { expenseService: { list: async eventId => expenses.filter(expense => expense.eventId === eventId), create: async (eventId, input) => {
       createRequests.push({ eventId, input }); return { id: "900", eventId, vendorId: input.vendorId, categoryId: input.categoryId,
         vendor: input.description, category: "Photography", total: Number(input.committedAmount), paid: 0, status: "Unpaid", dueDate: input.dueDate };
+    }, update: async (eventId, expenseId, input) => {
+      updateRequests.push({ eventId, expenseId, input });
+      const original = expenses.find(expense => expense.id === expenseId);
+      return { ...original, vendor: input.description, categoryId: input.categoryId, category: "Photography",
+        vendorId: input.vendorId, total: Number(input.committedAmount), dueDate: input.dueDate };
     } } },
     "../../components/ui": { Badge: () => null, Button: () => null, Card: () => null, Icon: () => null },
     "../../components/page": { EmptyState: () => null, ErrorState: () => null, PageHeader: () => null, StatCard: () => null },
@@ -303,7 +308,9 @@ function tableHost(vendorId = "") {
   return {
     render,
     loadVendorOptions() { render(); return vendorLoader(); },
-    vendorRequests, createRequests,
+    vendorRequests, createRequests, updateRequests,
+    openEdit(id) { find(render(), node => node.props?.expense?.id === id && node.props?.onEdit).props.onEdit(); },
+    expense: id => find(render(), node => node.props?.expense?.id === id && node.props?.onEdit)?.props.expense,
     openAdd() { find(render(), node => node.props?.page === "expenses").props.action.props.onClick(); },
     form: () => find(render(), node => node.props?.onSave && node.props?.accountId),
     loadExpenseRows() { render(); return expenseLoader(); },
@@ -417,4 +424,31 @@ test("successful expense creation sends the selected event and category, uses th
   assert.equal(h.form(), null);
   assert.equal(h.rows()[0], "900");
   assert.equal(h.filter().props.value, "");
+});
+
+
+test("expense editing PATCHes the existing ID, preserves paid totals, and replaces the row without duplication", async () => {
+  const h = tableHost();
+  h.openEdit("2");
+  assert.equal(h.form().props.expense.paid, 50);
+  await h.form().props.onSave({ ...h.form().props.expense, vendor: "Updated deposit", total: 250, categoryId: "123", dueDate: "2026-12-01" });
+  assert.equal(h.createRequests.length, 0);
+  assert.deepEqual(h.updateRequests, [{ eventId: "10", expenseId: "2", input: {
+    categoryId: "123", vendorId: "v1", description: "Updated deposit", committedAmount: "250.00", dueDate: "2026-12-01"
+  } }]);
+  assert.equal(h.expense("2").total, 250);
+  assert.equal(h.expense("2").paid, 50);
+  assert.equal(h.form(), null);
+  assert.deepEqual(h.rows(), ["1", "2", "3", "4"]);
+});
+test("editing blocks reductions below already paid and Cancel discards changes without saving", async () => {
+  const saved = { id: "5", eventId: "10", vendorId: null, vendor: "Cake", categoryId: "123", total: 200, paid: 50, dueDate: null };
+  const h = formHost(saved);
+  h.change("amount", "49");
+  await h.submit();
+  assert.equal(h.saves.length, 0);
+  assert.ok(find(h.render(), node => node.props?.id === "expense-amount-error"));
+  h.close();
+  assert.equal(h.closes(), 1);
+  assert.equal(h.saves.length, 0);
 });
