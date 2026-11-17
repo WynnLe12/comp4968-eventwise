@@ -18,6 +18,7 @@ export type Page =
 export type PublicPage = "landing" | "signup" | "login" | "reset";
 
 export interface Expense {
+  categoryId?: string | null;
   eventId: string;
   vendorId: string | null;
   id: string;

@@ -7,6 +7,7 @@ import { mockExpenseStore } from "../../services/mockExpenseStore";
 import { Badge, Button, Card, Icon } from "../../components/ui";
 import { EmptyState, ErrorState, PageHeader, StatCard } from "../../components/page";
 import { CURRENT_EVENT_ID } from "../../data/mockData";
+import { useEvents } from "../events/EventsContext";
 import { ExpenseActions } from "./ExpenseActions";
 import { ExpenseForm } from "./ExpenseForm";
 import { ExpenseDeleteDialog } from "./ExpenseDeleteDialog";
@@ -27,9 +28,16 @@ function statusTone(status: string) {
 }
 
 export function Expenses() {
+  const { selectedId, userId } = useEvents();
+  if (!selectedId || !userId) return <EmptyState title="Select an event" message="Choose an event to manage its expenses." />;
+  return <EventExpenses key={JSON.stringify([userId, selectedId])} eventId={selectedId} accountId={userId} />;
+}
+
+function EventExpenses({ eventId, accountId }: { eventId: string; accountId: string }) {
   const [params, setParams] = useSearchParams();
   const vendorId = params.get("vendorId") || null;
-  const loadVendors = useCallback(() => vendorService.list(CURRENT_EVENT_ID), []);
+  // The vendor adapter still contains sample data for one event only.
+  const loadVendors = useCallback(() => eventId === CURRENT_EVENT_ID ? vendorService.list(eventId) : Promise.resolve([]), [eventId]);
   const { data: vendorData, loading: vendorsLoading, error: vendorsError, reload: reloadVendors } = useResource(loadVendors);
   const vendors = vendorData ?? [];
   const selectedVendor = vendors.find((vendor) => vendor.id === vendorId);
@@ -37,7 +45,7 @@ export function Expenses() {
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [summaryFilter, setSummaryFilter] = useState<ExpenseSummaryFilter>("all");
-  const [expenses, setExpenses] = useState<Expense[]>(() => mockExpenseStore.list(CURRENT_EVENT_ID));
+  const [expenses, setExpenses] = useState<Expense[]>(() => mockExpenseStore.list(eventId));
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Expense | null>(null);
   const [paying, setPaying] = useState<Expense | null>(null);
@@ -54,8 +62,8 @@ export function Expenses() {
   }, [toast]);
 
   const saveExpense = (expense: Expense) => {
-    mockExpenseStore.save(CURRENT_EVENT_ID, expense);
-    setExpenses(mockExpenseStore.list(CURRENT_EVENT_ID));
+    mockExpenseStore.save(eventId, expense);
+    setExpenses(mockExpenseStore.list(eventId));
     setSearch("");
     setFilter("All");
     setSummaryFilter("all");
@@ -65,13 +73,13 @@ export function Expenses() {
   };
 
   const savePayment = (draft: PaymentDraft): PaymentErrors => {
-    const current = mockExpenseStore.list(CURRENT_EVENT_ID).find((expense) => expense.id === paying?.id);
+    const current = mockExpenseStore.list(eventId).find((expense) => expense.id === paying?.id);
     if (!current) return { amount: "This expense is no longer available." };
     const errors = validateExpensePayment(current, draft);
     if (Object.keys(errors).length) return errors;
     const updated = recordExpensePayment(current, draft);
-    mockExpenseStore.save(CURRENT_EVENT_ID, updated);
-    setExpenses(mockExpenseStore.list(CURRENT_EVENT_ID));
+    mockExpenseStore.save(eventId, updated);
+    setExpenses(mockExpenseStore.list(eventId));
     setFilter("All");
     setSummaryFilter("all");
     setPaying(null);
@@ -82,11 +90,11 @@ export function Expenses() {
   const confirmDelete = (): string | undefined => {
     if (!deleting) return "Choose an expense to delete.";
     try {
-      mockExpenseStore.remove(CURRENT_EVENT_ID, deleting.id);
+      mockExpenseStore.remove(eventId, deleting.id);
     } catch (error) {
       return error instanceof Error ? error.message : "Unable to delete this expense.";
     }
-    setExpenses(mockExpenseStore.list(CURRENT_EVENT_ID));
+    setExpenses(mockExpenseStore.list(eventId));
     setDeleting(null);
     setToast("Expense deleted");
     return undefined;
@@ -283,6 +291,7 @@ export function Expenses() {
       </Card>
       {(adding || editing) && (
         <ExpenseForm
+          eventId={eventId} accountId={accountId}
           key={editing?.id ?? "new"}
           expense={editing ?? undefined}
           vendors={vendors}
