@@ -1,9 +1,26 @@
-// Guest list from the staging API Gateway: GET <url>?eventId=<id> returns { count, guests }.
+import { requireAuthSession } from "../../auth/services/authService";
+
+// Guest list from the production API Gateway: GET <url>?eventId=<id> returns { count, guests }.
 // The URL is public configuration; set VITE_GUESTS_API_URL to point at another stage.
 const GUESTS_API_URL = (
   import.meta.env.VITE_GUESTS_API_URL ??
-  "https://cw5hmsb1e6.execute-api.us-west-2.amazonaws.com/staging/guest"
+  "https://hd63bpgxm8.execute-api.us-west-2.amazonaws.com/prod/guest"
 ).replace(/\/$/, "");
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  try {
+    const session = await requireAuthSession();
+    const token = session.session.tokens?.accessToken?.toString();
+    if (!token) throw new GuestApiError("Your session has expired. Please sign in again.");
+    return {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    };
+  } catch (err) {
+    if (err instanceof GuestApiError) throw err;
+    throw new GuestApiError("Your session has expired. Please sign in again.");
+  }
+}
 
 /** The only RSVP statuses the guest API returns. */
 export const RSVP_STATUSES = ["UNINVITED", "PENDING", "ACCEPTED", "REJECTED"] as const;
@@ -99,12 +116,14 @@ export async function createGuest(eventId: string, input: NewGuestInput): Promis
 
   let response: Response;
   try {
-    // No Content-Type header on purpose: the gateway's CORS settings allow PUT but no request
-    // headers, so a browser preflight for "application/json" would fail. A plain string body is
-    // sent as text/plain, which needs no permission; the backend parses the JSON body either way.
-    // Once the gateway allows the Content-Type header, add it here.
-    response = await fetch(GUESTS_API_URL, { method: "PUT", body: JSON.stringify({ guest }) });
-  } catch {
+    const headers = await getAuthHeaders();
+    response = await fetch(GUESTS_API_URL, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ guest }),
+    });
+  } catch (err) {
+    if (err instanceof GuestApiError) throw err;
     throw new GuestApiError("We couldn't reach the guest service. Check your connection and try again.");
   }
   if (!response.ok) throw new GuestApiError("Unable to add this guest. Please try again.");
@@ -123,7 +142,6 @@ export interface GuestChanges {
 
 /**
  * Updates one guest: PATCH <GUESTS_API_URL> with body { guest: { eventId, guestId, ...changes } }.
- * Sent without a Content-Type header for the same CORS reason as createGuest.
  */
 export async function updateGuest(
   eventId: string,
@@ -132,11 +150,14 @@ export async function updateGuest(
 ): Promise<void> {
   let response: Response;
   try {
+    const headers = await getAuthHeaders();
     response = await fetch(GUESTS_API_URL, {
       method: "PATCH",
+      headers,
       body: JSON.stringify({ guest: { eventId, guestId, ...changes } }),
     });
-  } catch {
+  } catch (err) {
+    if (err instanceof GuestApiError) throw err;
     throw new GuestApiError("We couldn't reach the guest service. Check your connection and try again.");
   }
   if (!response.ok) throw new GuestApiError("Unable to save this guest. Please try again.");
@@ -144,16 +165,18 @@ export async function updateGuest(
 
 /**
  * Deletes one guest: DELETE <GUESTS_API_URL> with body { guest: { eventId, guestId } }.
- * Sent without a Content-Type header for the same CORS reason as createGuest.
  */
 export async function deleteGuest(eventId: string, guestId: string): Promise<void> {
   let response: Response;
   try {
+    const headers = await getAuthHeaders();
     response = await fetch(GUESTS_API_URL, {
       method: "DELETE",
+      headers,
       body: JSON.stringify({ guest: { eventId, guestId } }),
     });
-  } catch {
+  } catch (err) {
+    if (err instanceof GuestApiError) throw err;
     throw new GuestApiError("We couldn't reach the guest service. Check your connection and try again.");
   }
   if (!response.ok) throw new GuestApiError("Unable to delete this guest. Please try again.");
@@ -163,8 +186,13 @@ export async function deleteGuest(eventId: string, guestId: string): Promise<voi
 export async function listGuests(eventId: string): Promise<GuestRecord[]> {
   let response: Response;
   try {
-    response = await fetch(`${GUESTS_API_URL}?eventId=${encodeURIComponent(eventId)}`);
-  } catch {
+    const headers = await getAuthHeaders();
+    response = await fetch(`${GUESTS_API_URL}?eventId=${encodeURIComponent(eventId)}`, {
+      method: "GET",
+      headers,
+    });
+  } catch (err) {
+    if (err instanceof GuestApiError) throw err;
     throw new GuestApiError("We couldn't reach the guest service. Check your connection and try again.");
   }
   if (!response.ok) throw new GuestApiError("Unable to load your guest list. Please try again.");

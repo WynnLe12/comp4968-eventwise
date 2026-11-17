@@ -10,6 +10,7 @@ export const DEFAULT_HEADERS = {
   "Content-Type": "application/json",
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET,PUT,PATCH,DELETE,OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token",
 };
 
 const REQUEST_HANDLERS = {
@@ -73,12 +74,12 @@ export const handler = async (event, context) => {
     };
   }
 
-  // 1. Extract eventId from query string (?eventId=...) or JSON body (for PUT/PATCH)
+  // 1. Extract eventId from query string (?eventId=...) or JSON body (for PUT/PATCH/DELETE)
   let eventId = event.queryStringParameters?.eventId;
   if (!eventId && event.body) {
     try {
       const parsed = typeof event.body === "string" ? JSON.parse(event.body) : event.body;
-      eventId = parsed?.eventId;
+      eventId = parsed?.eventId ?? parsed?.guest?.eventId;
     } catch {}
   }
 
