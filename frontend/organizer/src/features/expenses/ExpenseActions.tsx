@@ -8,10 +8,11 @@ function money(amount: number) {
   return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
-export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, onDelete, readOnly = false, allowEdit = false }: {
+export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, onDelete, readOnly = false, allowEdit = false, allowDelete = false }: {
   expense: Expense;
   readOnly?: boolean;
   allowEdit?: boolean;
+  allowDelete?: boolean;
   vendorName?: string;
   onEdit: () => void;
   onRecordPayment: () => void;
@@ -97,7 +98,7 @@ export function ExpenseActions({ expense, vendorName, onEdit, onRecordPayment, o
         </button>
         <button
           type="button"
-          disabled={readOnly}
+          disabled={readOnly && !allowDelete}
           className="expense-delete-action"
           onClick={() => {
             menuRef.current?.hidePopover();

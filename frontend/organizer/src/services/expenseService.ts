@@ -94,7 +94,32 @@ async function saveExpenseRequest(eventId: string, input: CreateExpenseInput, ex
     return saved;
 }
 
+export class ExpenseDeleteError extends Error {
+  constructor(message: string, public readonly code?: string) { super(message); this.name = "ExpenseDeleteError"; }
+}
+
 export const expenseService = {
+  async remove(eventId: string, expenseId: string): Promise<void> {
+    let token: string | undefined;
+    try { token = (await requireAuthSession()).session.tokens?.accessToken?.toString(); } catch { /* Show the sign-in message below. */ }
+    if (!token) throw new ExpenseDeleteError("Your session has expired. Please sign in again.");
+    let response: Response;
+    try {
+      response = await fetch(apiUrl("/events/" + encodeURIComponent(eventId) + "/expenses/" + encodeURIComponent(expenseId)), {
+        method: "DELETE", headers: { Authorization: "Bearer " + token },
+      });
+    } catch { throw new ExpenseDeleteError("We couldn\'t reach the server. Check your connection and try again."); }
+    if (response.status === 204) return;
+    const body = await response.json().catch(() => null);
+    if (response.status === 409 && body?.error?.code === "HAS_PAYMENTS") {
+      throw new ExpenseDeleteError("This expense has payment history and cannot be deleted, even when fully paid or refunded.", "HAS_PAYMENTS");
+    }
+    const messages: Record<number, string> = {
+      401: "Your session has expired. Please sign in again.", 403: "You don\'t have access to this event.",
+      404: "This expense is no longer available. Refresh the page to update the list.",
+    };
+    throw new ExpenseDeleteError(messages[response.status] ?? "We couldn\'t delete the expense. Please try again.");
+  },
   create: (eventId: string, input: CreateExpenseInput) => saveExpenseRequest(eventId, input),
   update: (eventId: string, expenseId: string, input: CreateExpenseInput) => saveExpenseRequest(eventId, input, expenseId),
   async list(eventId: string): Promise<Expense[]> {

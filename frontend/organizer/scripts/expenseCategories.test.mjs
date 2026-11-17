@@ -150,7 +150,7 @@ function find(node, predicate) {
   if (Array.isArray(node)) { for (const child of node) { const hit = find(child, predicate); if (hit) return hit; } return null; }
   return predicate(node) ? node : find(node.props?.children, predicate);
 }
-const { ExpenseSaveError } = load("services/expenseService.ts", {
+const { ExpenseSaveError, ExpenseDeleteError } = load("services/expenseService.ts", {
   "../features/auth/services/authService": {}, "./apiConfig": {},
 });
 function formHost(expense, onSave) {
@@ -265,7 +265,7 @@ function findAll(node, predicate) {
 function tableHost(vendorId = "") {
   let vendorLoader, expenseLoader;
   let expenseState;
-  const vendorRequests = [], createRequests = [], updateRequests = [];
+  const vendorRequests = [], createRequests = [], updateRequests = [], deleteRequests = [];
   const h = host();
   h.react.useCallback = callback => callback;
   let params = new URLSearchParams(vendorId ? "vendorId=" + vendorId + "&keep=yes" : "");
@@ -291,7 +291,7 @@ function tableHost(vendorId = "") {
       const original = expenses.find(expense => expense.id === expenseId);
       return { ...original, vendor: input.description, categoryId: input.categoryId, category: "Photography",
         vendorId: input.vendorId, total: Number(input.committedAmount), dueDate: input.dueDate };
-    } } },
+    }, remove: async (eventId, expenseId) => { deleteRequests.push({ eventId, expenseId }); } } },
     "../../components/ui": { Badge: () => null, Button: () => null, Card: () => null, Icon: () => null },
     "../../components/page": { EmptyState: () => null, ErrorState: () => null, PageHeader: () => null, StatCard: () => null },
     "../../data/mockData": { CURRENT_EVENT_ID: "demo" },
@@ -308,7 +308,9 @@ function tableHost(vendorId = "") {
   return {
     render,
     loadVendorOptions() { render(); return vendorLoader(); },
-    vendorRequests, createRequests, updateRequests,
+    vendorRequests, createRequests, updateRequests, deleteRequests,
+    openDelete(id) { find(render(), node => node.props?.expense?.id === id && node.props?.onDelete).props.onDelete(); },
+    deleteDialog: () => find(render(), node => node.props?.onConfirm),
     openEdit(id) { find(render(), node => node.props?.expense?.id === id && node.props?.onEdit).props.onEdit(); },
     expense: id => find(render(), node => node.props?.expense?.id === id && node.props?.onEdit)?.props.expense,
     openAdd() { find(render(), node => node.props?.page === "expenses").props.action.props.onClick(); },
@@ -451,4 +453,62 @@ test("editing blocks reductions below already paid and Cancel discards changes w
   h.close();
   assert.equal(h.closes(), 1);
   assert.equal(h.saves.length, 0);
+});
+
+
+test("expense deletion waits for confirmation, removes only the selected row, and updates summary totals", async () => {
+  const h = tableHost();
+  const before = h.summary();
+  h.openDelete("1");
+  h.deleteDialog().props.onClose();
+  assert.equal(h.deleteRequests.length, 0);
+  assert.equal(h.rows().length, 4);
+  h.openDelete("1");
+  await h.deleteDialog().props.onConfirm();
+  assert.deepEqual(h.deleteRequests, [{ eventId: "10", expenseId: "1" }]);
+  assert.deepEqual(h.rows(), ["2", "3", "4"]);
+  assert.notEqual(h.summary(), before);
+  assert.equal(h.deleteDialog(), null);
+});
+
+function deleteDialogHost(expense, onConfirm) {
+  const h = host(); let closes = 0;
+  const Button = () => null;
+  const { ExpenseDeleteDialog } = load("features/expenses/ExpenseDeleteDialog.tsx", {
+    react: h.react, "react/jsx-runtime": jsx,
+    "../../components/ui": { Button, Icon: () => null },
+    "../../services/expenseService": { ExpenseDeleteError },
+    "./expenseDeletion": load("features/expenses/expenseDeletion.ts"),
+  });
+  const render = () => h.render(() => ExpenseDeleteDialog({ expense, onConfirm, onClose() { closes++; } }));
+  return { render, closes: () => closes,
+    confirm() { find(render(), node => node.type === Button && node.props.variant === "danger")?.props.onClick(); },
+    close() { find(render(), node => node.type === "dialog").props.onCancel({ preventDefault() {} }); },
+    button: () => find(render(), node => node.type === Button && node.props.variant === "danger"),
+  };
+}
+test("delete dialog blocks payment history, even when fully paid or refunded", () => {
+  for (const expense of [{ paid: 50, total: 50 }, { paid: 0, total: 50, payments: [{ id: "old", amount: 50 }] }]) {
+    let calls = 0;
+    const h = deleteDialogHost({ vendor: "Cake", ...expense }, () => { calls++; });
+    assert.equal(h.button(), null); h.confirm();
+    assert.equal(calls, 0);
+    assert.ok(find(h.render(), node => node.props?.id === "expense-delete-title" && node.props.children === "Expense can\x27t be deleted"));
+  }
+});
+test("delete dialog blocks duplicate requests and closing while pending, then preserves failed deletions for retry", async () => {
+  let reject, calls = 0;
+  const h = deleteDialogHost({ vendor: "Cake", paid: 0, total: 50 }, () => { calls++; return new Promise((resolve, fail) => { reject = fail; }); });
+  h.confirm(); h.confirm(); h.close();
+  assert.equal(calls, 1); assert.equal(h.closes(), 0); assert.equal(h.button().props.disabled, true);
+  reject(new Error("Could not delete. Try again.")); await tick();
+  assert.ok(find(h.render(), node => node.props?.role === "alert" && node.props.children === "Could not delete. Try again."));
+  assert.equal(h.button().props.disabled, false);
+  h.close(); assert.equal(h.closes(), 1);
+});
+test("backend payment-history conflicts turn the delete confirmation into a blocked dialog", async () => {
+  const h = deleteDialogHost({ vendor: "Refunded", paid: 0, total: 50 }, async () => { throw new ExpenseDeleteError("Keep payment history.", "HAS_PAYMENTS"); });
+  h.confirm(); await tick();
+  assert.equal(h.button(), null);
+  assert.ok(find(h.render(), node => node.props?.role === "alert" && node.props.children === "Keep payment history."));
 });

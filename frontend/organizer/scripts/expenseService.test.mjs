@@ -132,3 +132,25 @@ test("a concurrent payment rejection explains the minimum-total constraint witho
     assert.equal(error.fields.amount, "Total cannot be less than the amount already paid."); return true;
   });
 });
+
+
+test("expense delete sends authenticated DELETE and handles the empty 204 response", async () => {
+  const h = client([{ status: 204, json() { throw new Error("204 must not parse JSON"); } }]);
+  await h.service.remove("10", "900");
+  assert.equal(h.calls[0].url, "/api/events/10/expenses/900");
+  assert.equal(h.calls[0].method, "DELETE");
+  assert.equal(h.calls[0].headers.Authorization, "Bearer test-token");
+  assert.equal(h.calls[0].body, undefined);
+});
+test("expense deletion preserves payment history and provides safe retry/sign-in messages", async () => {
+  await assert.rejects(client([{ status: 409, json: async () => ({ error: { code: "HAS_PAYMENTS", message: "private" } }) }]).service.remove("10", "900"), error => {
+    assert.equal(error.code, "HAS_PAYMENTS"); assert.match(error.message, /fully paid or refunded/); return true;
+  });
+  for (const [status, message] of [[401, /sign in/], [403, /access/], [404, /no longer/], [500, /couldn\x27t delete/], [200, /couldn\x27t delete/]]) {
+    await assert.rejects(client([{ status, json: async () => ({ error: { message: "private" } }) }]).service.remove("10", "900"), message);
+  }
+  const expired = client([], true);
+  await assert.rejects(expired.service.remove("10", "900"), /sign in/);
+  assert.equal(expired.calls.length, 0);
+  await assert.rejects(client([new Error("private")]).service.remove("10", "900"), /couldn\x27t reach/);
+});

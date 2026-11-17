@@ -9,6 +9,7 @@ import { EmptyState, ErrorState, LoadingState, PageHeader, StatCard } from "../.
 import { useEvents } from "../events/EventsContext";
 import { useEventCategories } from "../categories/useEventCategories";
 import type { Expense } from "../../types";
+import { ExpenseDeleteDialog } from "./ExpenseDeleteDialog";
 import { ExpenseForm } from "./ExpenseForm";
 import { ExpenseActions } from "./ExpenseActions";
 import { expenseSummary, matchesExpenseSummary, type ExpenseSummaryFilter } from "./expenseDraft";
@@ -47,6 +48,7 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
   const { data: expenseData, loading: expensesLoading, error: expensesError, reload: reloadExpenses, update: updateExpenses } = useResource(loadExpenses);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Expense | null>(null);
+  const [deleting, setDeleting] = useState<Expense | null>(null);
   const [notice, setNotice] = useState("");
   const expenses = expenseData ?? [];
   const vendorExpenses = vendorId ? expenses.filter((expense) => expense.vendorId === vendorId) : expenses;
@@ -72,6 +74,14 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
     setAdding(false);
     setNotice(editing ? "Expense updated." : "Expense added.");
     setEditing(null);
+  };
+
+  const deleteExpense = async () => {
+    if (!deleting || deleting.eventId !== eventId) throw new Error("Reopen this expense in its own event.");
+    await expenseService.remove(eventId, deleting.id);
+    updateExpenses(current => current.filter(row => row.id !== deleting.id));
+    setDeleting(null);
+    setNotice("Expense deleted.");
   };
 
   const selectSummaryFilter = (next: ExpenseSummaryFilter) => {
@@ -114,7 +124,7 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
           </Button>
         }
       />
-      <p className="feature-preview-notice" role="status">You can add, edit, and view saved expenses. Deleting and recording payments will be available next.</p>
+      <p className="feature-preview-notice" role="status">You can add, edit, delete, and view saved expenses. Recording payments will be available next.</p>
       {notice && <p role="status">{notice}</p>}
       {vendorsError ? (
         <ErrorState message="We couldn't load vendors. Retry to link expenses to a vendor." onRetry={reloadVendors} />
@@ -257,7 +267,7 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
                     <Badge tone={statusTone(x.status)}>{x.status}</Badge>
                   </td>
                   <td>
-                    <ExpenseActions vendorName={vendorNames.get(x.vendorId ?? "")} expense={x} readOnly allowEdit onEdit={() => { setNotice(""); setEditing(x); }} onRecordPayment={() => {}} onDelete={() => {}} />
+                    <ExpenseActions vendorName={vendorNames.get(x.vendorId ?? "")} expense={x} readOnly allowEdit allowDelete onEdit={() => { setNotice(""); setEditing(x); }} onRecordPayment={() => {}} onDelete={() => { setNotice(""); setDeleting(x); }} />
                   </td>
                 </tr>
               ))}
@@ -275,6 +285,7 @@ function EventExpenses({ eventId, accountId }: { eventId: string; accountId: str
           </div>
         </div>
       </Card>
+      {deleting && <ExpenseDeleteDialog key={deleting.id} expense={deleting} onConfirm={deleteExpense} onClose={() => setDeleting(null)} />}
       {(adding || editing) && <ExpenseForm key={editing?.id ?? "new"} eventId={eventId} accountId={accountId} vendors={vendors}
         expense={editing ?? undefined} defaultVendorId={selectedVendor?.id} onSave={saveExpense}
         onClose={() => { setAdding(false); setEditing(null); }} />}
