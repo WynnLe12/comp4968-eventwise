@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useEvents } from "../events/EventsContext";
-import { Badge, Button, Card, Icon } from "../../components/ui";
-import { PageHeader } from "../../components/page";
+import { Badge, Button, Card, Icon, Modal } from "../../components/ui";
+import { LoadingState, PageHeader } from "../../components/page";
 import { budgetDefaults } from "../../data/mockData";
 import {
   fetchBudgetCategories,
@@ -61,10 +61,17 @@ export function Budget({ openReset }: BudgetProps) {
 
   const [draftCategories, setDraftCategories] = useState<BudgetCategory[]>([]);
 
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [budgetLoadResult, setBudgetLoadResult] = useState<{
+    eventId: string;
+    error: string | null;
+  } | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [categoryToDelete, setCategoryToDelete] = useState<{
+    eventId: string;
+    categoryId: string;
+    name: string;
+  } | null>(null);
 
   // Add Category form state.
   const [newCategoryName, setNewCategoryName] = useState("");
@@ -76,55 +83,48 @@ export function Budget({ openReset }: BudgetProps) {
 
   // Load actual budget data when an event is selected.
   useEffect(() => {
-
+    setCategoryToDelete(null);
+    setBudgetLoadResult(null);
     if (!eventId) {
       setBudgetData(null);
       setDraftCategories([]);
-      setLoading(false);
-      setError(null);
       return;
     }
 
     let cancelled = false;
 
-    async function loadBudget() {
-      setLoading(true);
+    async function loadBudget(requestEventId: string) {
       setEditingTotal(false);
       setNewTotalBudget("");
       setRecalculationMode("recalculate");
       setShowAddCategory(false);
       setNewCategoryName("");
       setSaveMessage(null);
-      setError(null);
       setBudgetData(null);
       setDraftCategories([]);
       setSaveMessage(null);
 
       try {
-        const data = await fetchBudgetCategories(eventId!);
+        const data = await fetchBudgetCategories(requestEventId);
 
         if (!cancelled) {
           setBudgetData(data);
           setDraftCategories(
             data.categories.map((category) => ({ ...category }))
           );
+          setBudgetLoadResult({ eventId: requestEventId, error: null });
         }
       } catch (err: unknown) {
         if (!cancelled) {
-          setError(
-            err instanceof Error
-              ? err.message
-              : "Failed to load budget categories"
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
+          setBudgetLoadResult({
+            eventId: requestEventId,
+            error: err instanceof Error ? err.message : "Failed to load budget categories",
+          });
         }
       }
     }
 
-    void loadBudget();
+    void loadBudget(eventId);
 
     return () => {
       cancelled = true;
@@ -213,7 +213,7 @@ export function Budget({ openReset }: BudgetProps) {
     setSaveMessage(null);
   }
 
-  async function handleDeleteCategory(categoryId: string) {
+  function handleDeleteCategory(categoryId: string) {
     const category = draftCategories.find(
       (item) => item.categoryId === categoryId
     );
@@ -272,22 +272,37 @@ export function Budget({ openReset }: BudgetProps) {
       return;
     }
 
-    const confirmed = window.confirm(
-      `Are you sure you want to delete "${category.name}"?`
-    );
+    setCategoryToDelete({ eventId, categoryId, name: category.name });
+  }
 
-    if (!confirmed) {
+  function closeDeleteDialog() {
+    if (!saving) {
+      setCategoryToDelete(null);
+    }
+  }
+
+  async function confirmDeleteCategory() {
+    if (
+      !categoryToDelete ||
+      categoryToDelete.eventId !== eventId ||
+      saving ||
+      savingTotal
+    ) {
       return;
     }
 
+    const { eventId: requestEventId, categoryId } = categoryToDelete;
     setSaving(true);
     setSaveMessage(null);
 
     try {
-      await removeBudgetCategory(eventId, categoryId);
+      await removeBudgetCategory(requestEventId, categoryId);
 
       // Reload categories from MySQL.
-      const updatedBudget = await fetchBudgetCategories(eventId);
+      const updatedBudget = await fetchBudgetCategories(requestEventId);
+      if (!isActiveEvent(requestEventId)) {
+        return;
+      }
 
       setBudgetData(updatedBudget);
       setDraftCategories(
@@ -298,12 +313,15 @@ export function Budget({ openReset }: BudgetProps) {
 
       setSaveMessage("Budget category deleted successfully.");
     } catch (err: unknown) {
-      setSaveMessage(
-        err instanceof Error
-          ? `Delete failed: ${err.message}`
-          : "Failed to delete budget category."
-      );
+      if (isActiveEvent(requestEventId)) {
+        setSaveMessage(
+          err instanceof Error
+            ? `Delete failed: ${err.message}`
+            : "Failed to delete budget category."
+        );
+      }
     } finally {
+      setCategoryToDelete(null);
       setSaving(false);
     }
   }
@@ -698,14 +716,15 @@ export function Budget({ openReset }: BudgetProps) {
 
   // Real event budget page.
   if (eventId) {
+    const loading = budgetLoadResult?.eventId !== eventId;
+    const error = budgetLoadResult?.error;
+
     return (
       <>
         <PageHeader page="budget" />
 
         {loading ? (
-          <Card>
-            <p>Loading budget categories...</p>
-          </Card>
+          <LoadingState label="Loading budgets..." />
         ) : error ? (
           <Card>
             <p role="alert">Error: {error}</p>
@@ -969,9 +988,7 @@ export function Budget({ openReset }: BudgetProps) {
                           <td>
                             <Button
                               variant="danger"
-                              onClick={() => {
-                                void handleDeleteCategory(category.categoryId);
-                              }}
+                              onClick={() => handleDeleteCategory(category.categoryId)}
                             >
                               Delete
                             </Button>
@@ -1015,6 +1032,38 @@ export function Budget({ openReset }: BudgetProps) {
                 </div>
               )}
             </Card>
+
+            {categoryToDelete?.eventId === eventId && (
+              <Modal
+                title="Delete Budget?"
+                onClose={closeDeleteDialog}
+                footer={
+                  <>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={saving}
+                      onClick={closeDeleteDialog}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="danger"
+                      disabled={saving || savingTotal}
+                      onClick={() => { void confirmDeleteCategory(); }}
+                    >
+                      {saving ? "Deleting..." : "Delete Budget"}
+                    </Button>
+                  </>
+                }
+              >
+                <p><strong>{categoryToDelete.name}</strong></p>
+                <p>
+                  Are you sure you want to delete this budget category? This action cannot be undone.
+                </p>
+              </Modal>
+            )}
           </>
         ) : (
           <Card>
