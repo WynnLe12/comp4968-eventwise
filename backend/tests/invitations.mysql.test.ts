@@ -3,13 +3,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { after, test } from "node:test";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { EventRepository } from "../event-service/repositories/eventRepository";
-import { InvitationRepository } from "../event-service/repositories/invitationRepository";
+import { InvitationInactiveError, InvitationRepository } from "../event-service/repositories/invitationRepository";
 import { EventAccessDeniedError, EventConflictError, EventNotFoundError } from "../event-service/services/eventService";
 import { InvitationService } from "../event-service/services/invitationService";
 import { db } from "../shared/db/db";
 
 const integration = { skip: process.env.EVENTWISE_MYSQL_TEST !== "1" };
 const env = { EVENTS_ORGANIZER_ORIGIN: "https://organizer.example" };
+const verifiedPlanner = async () => " Planner@Example.com ";
 after(async () => { await db.end(); });
 
 async function withEvents(run: (fixture: { eventId: string; otherEventId: string; owner: string; coPlanner: string }) => Promise<void>) {
@@ -26,6 +27,12 @@ async function withEvents(run: (fixture: { eventId: string; otherEventId: string
   } finally {
     for (const id of ids) await db.execute("DELETE FROM events WHERE event_id = ?", [id]);
   }
+}
+
+async function invitePlanner(service: InvitationService, eventId: string, owner: string) {
+  const invitation = await service.create(eventId, { email: "planner@example.com" }, owner);
+  const token = new URLSearchParams(new URL(invitation.acceptance_url).hash.slice(1)).get("token")!;
+  return { token, invitationId: invitation.invitation_id };
 }
 
 test("MySQL: owner-only create/list/revoke preserve history and never affect other event memberships", integration, async () => {
@@ -124,5 +131,122 @@ test("MySQL: failure after insert rolls back the new row and the previous invita
     );
     assert.deepEqual(rows.map(row => ({ ...row })), [{ invitation_id: invite.invitation_id, status: "PENDING" }]);
     assert.notEqual((await service.create(eventId, { email }, owner)).invitation_id, invite.invitation_id);
+  });
+});
+
+test("MySQL: acceptance creates only the invited event membership and records UTC acceptance", integration, async () => {
+  await withEvents(async ({ eventId, otherEventId, owner }) => {
+    const service = new InvitationService(undefined, env);
+    const { token, invitationId } = await invitePlanner(service, eventId, owner);
+    const sub = `invitee-${randomUUID()}`;
+    await assert.rejects(service.accept({ token }, sub, "mock", async () => "another@example.com"), EventAccessDeniedError);
+    await assert.rejects(service.accept({ token: Buffer.alloc(32).toString("base64url") }, sub, "mock", verifiedPlanner), EventNotFoundError);
+    const result = await service.accept({ token }, sub, "mock", verifiedPlanner);
+    const [members] = await db.execute<RowDataPacket[]>(
+      "SELECT CAST(member_id AS CHAR) AS member_id, CAST(event_id AS CHAR) AS event_id, role FROM event_members WHERE cognito_sub = ?",
+      [sub],
+    );
+    assert.deepEqual(members.map(row => ({ ...row })), [result]);
+    assert.equal(result.event_id, eventId);
+    assert.equal(result.role, "CO_PLANNER");
+    const [rows] = await db.execute<RowDataPacket[]>(
+      `SELECT status, ABS(TIMESTAMPDIFF(SECOND, accepted_at, UTC_TIMESTAMP())) AS seconds_ago, pending_email
+       FROM event_invitations WHERE invitation_id = ?`, [invitationId],
+    );
+    assert.equal(rows[0].status, "ACCEPTED");
+    assert.ok(rows[0].seconds_ago !== null && Number(rows[0].seconds_ago) <= 10);
+    assert.equal(rows[0].pending_email, null);
+    assert.deepEqual((await new EventRepository().list(sub)).map(event => event.event_id), [eventId]);
+    assert.ok(!(await new EventRepository().listMembers(otherEventId, owner)).some(member => member.cognito_sub === sub));
+    await assert.rejects(service.accept({ token }, sub, "mock", verifiedPlanner), EventConflictError);
+    await assert.rejects(service.accept({ token }, sub, "mock", async () => "another@example.com"), EventAccessDeniedError);
+    assert.deepEqual(await service.list(eventId, owner), []);
+  });
+});
+
+test("MySQL: expired, revoked and already-member invitations do not add or change a membership", integration, async () => {
+  await withEvents(async ({ eventId, otherEventId, owner, coPlanner }) => {
+    const service = new InvitationService(undefined, env);
+    const expired = await invitePlanner(service, eventId, owner);
+    await db.execute("UPDATE event_invitations SET expires_at = UTC_TIMESTAMP() WHERE invitation_id = ?", [expired.invitationId]);
+    await assert.rejects(service.accept({ token: expired.token }, "another", "mock", verifiedPlanner), InvitationInactiveError);
+    const revoked = await invitePlanner(service, eventId, owner);
+    await service.revoke(eventId, revoked.invitationId, owner);
+    await assert.rejects(service.accept({ token: revoked.token }, "another", "mock", verifiedPlanner), InvitationInactiveError);
+    const active = await invitePlanner(service, eventId, owner);
+    for (const existing of [owner, coPlanner]) {
+      await assert.rejects(service.accept({ token: active.token }, existing, "mock", verifiedPlanner), /already belong/);
+    }
+    assert.deepEqual((await new EventRepository().listMembers(eventId, owner)).map(member => member.role), ["OWNER", "CO_PLANNER"]);
+    assert.equal((await service.list(eventId, owner))[0].invitation_id, active.invitationId);
+    const other = await invitePlanner(service, otherEventId, owner);
+    assert.equal((await service.accept({ token: other.token }, coPlanner, "mock", verifiedPlanner)).event_id, otherEventId);
+  });
+});
+
+test("MySQL: only one concurrent acceptance wins and concurrent revocation has one consistent outcome", integration, async () => {
+  await withEvents(async ({ eventId, otherEventId, owner }) => {
+    const service = new InvitationService(undefined, env);
+    const sub = `invitee-race-${randomUUID()}`;
+    const { token } = await invitePlanner(service, eventId, owner);
+    const attempts = await Promise.allSettled([
+      service.accept({ token }, sub, "mock", verifiedPlanner),
+      service.accept({ token }, sub, "mock", verifiedPlanner),
+    ]);
+    assert.equal(attempts.filter(attempt => attempt.status === "fulfilled").length, 1);
+    assert.ok(attempts.find(attempt => attempt.status === "rejected")?.reason instanceof EventConflictError);
+    assert.equal((await new EventRepository().listMembers(eventId, owner)).filter(member => member.cognito_sub === sub).length, 1);
+
+    const other = await invitePlanner(service, otherEventId, owner);
+    const [accepted, revoked] = await Promise.allSettled([
+      service.accept({ token: other.token }, sub, "mock", verifiedPlanner),
+      service.revoke(otherEventId, other.invitationId, owner),
+    ]);
+    const [rows] = await db.execute<RowDataPacket[]>("SELECT status FROM event_invitations WHERE invitation_id = ?", [other.invitationId]);
+    const otherMembers = await new EventRepository().listMembers(otherEventId, owner);
+    if (accepted.status === "fulfilled") {
+      assert.ok(revoked.status === "rejected" && revoked.reason instanceof EventConflictError);
+      assert.equal(rows[0].status, "ACCEPTED");
+      assert.equal(otherMembers.filter(member => member.cognito_sub === sub).length, 1);
+    } else {
+      assert.ok(accepted.reason instanceof InvitationInactiveError);
+      assert.equal(revoked.status, "fulfilled");
+      assert.equal(rows[0].status, "REVOKED");
+      assert.equal(otherMembers.length, 1);
+    }
+  });
+});
+
+test("MySQL: acceptance rollback restores both writes and a membership uniqueness violation is a conflict", integration, async () => {
+  await withEvents(async ({ eventId, owner }) => {
+    const service = new InvitationService(undefined, env);
+    const invite = await invitePlanner(service, eventId, owner);
+    const sub = `invitee-rollback-${randomUUID()}`;
+    const eventRepository = new EventRepository();
+    const originalMembers = await eventRepository.listMembers(eventId, owner);
+    const intercepted = (mode: "rollback" | "uniqueness") => new InvitationService(new InvitationRepository({
+      getConnection: async () => {
+        const connection = await db.getConnection();
+        return new Proxy(connection, {
+          get(target, property) {
+            if (property === "execute") return (sql: string, params?: string[]) => {
+              if (mode === "rollback" && sql.includes("LAST_INSERT_ID()")) throw new Error("Injected after both writes");
+              if (mode === "uniqueness" && sql.startsWith("SELECT 1 FROM event_members")) return Promise.resolve([[], []]);
+              return target.execute(sql, params);
+            };
+            const value: unknown = Reflect.get(target, property);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        }) as PoolConnection;
+      },
+    }), env);
+    await assert.rejects(intercepted("rollback").accept({ token: invite.token }, sub, "mock", verifiedPlanner), /Injected after both writes/);
+    await assert.rejects(intercepted("uniqueness").accept({ token: invite.token }, owner, "mock", verifiedPlanner), /already belong/);
+    const [rows] = await db.execute<RowDataPacket[]>(
+      "SELECT status, accepted_at FROM event_invitations WHERE invitation_id = ?", [invite.invitationId],
+    );
+    assert.deepEqual({ ...rows[0] }, { status: "PENDING", accepted_at: null });
+    assert.deepEqual(await eventRepository.listMembers(eventId, owner), originalMembers);
+    assert.equal((await service.accept({ token: invite.token }, sub, "mock", verifiedPlanner)).role, "CO_PLANNER");
   });
 });

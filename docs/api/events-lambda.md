@@ -2,7 +2,7 @@
 
 Target function: **`eventwise-events`**. Handler: **`event-service/lambda/events.handler`**.
 
-This document describes a later deployment to the existing EventWise REST API, RDS instance `eventwise-db` (database `eventwise`), Secrets Manager secret and EventWise VPC. Feature 2.2 has not been deployed to AWS. Its database tests use disposable local MySQL.
+This document describes a later deployment to the existing EventWise REST API, RDS instance `eventwise-db` (database `eventwise`), Secrets Manager secret and EventWise VPC. Invitation management and acceptance have not been deployed to AWS. Their database tests use disposable local MySQL.
 
 ## Routes and implementation
 
@@ -17,6 +17,7 @@ This document describes a later deployment to the existing EventWise REST API, R
 | `/events/{eventId}/invitations` | POST | eventInvitationHandler | 201 pending invitation with acceptance URL |
 | `/events/{eventId}/invitations` | GET | eventInvitationHandler | 200 direct array of active pending invitations |
 | `/events/{eventId}/invitations/{invitationId}` | DELETE | eventInvitationHandler | 204 empty body |
+| `/event-invitations/accept` | POST | acceptInvitationHandler | 200 event and co-planner membership identifiers |
 
 Use **REST API Lambda proxy integration (`AWS_PROXY`, payload v1)** for these exact methods. The integration's invocation method is POST regardless of the public HTTP method. No mapping template or HTTP API v2 adapter is needed. `event.path` is the application path without the external stage prefix; optional resource/path-parameter metadata must agree. Literal `/events/`, unsupported methods, nested budget/guest routes and unknown paths retain 404. No catch-all `ANY /{proxy+}` integration is introduced. [AWS REST proxy contract](https://docs.aws.amazon.com/apigateway/latest/developerguide/set-up-lambda-proxy-integrations.html).
 
@@ -152,6 +153,45 @@ Run `npm --prefix backend run typecheck` and `npm --prefix backend test` for the
 
 For later deployment, configure the three explicit Gateway methods above on the Events REST proxy v1 integration and the existing scoped Cognito authorizer. Add unauthenticated `OPTIONS` to both invitation resources using the existing CORS pattern. Keep Gateway caching and request/response body tracing disabled for these routes, especially POST, which returns the private link. Verify the new routes through the approved stage before connecting the frontend.
 
+## Accept a co-planner invitation
+
+```http
+POST /event-invitations/accept
+Authorization: Bearer <access-token>
+Content-Type: application/json
+
+{"token":"<43-character base64url token from the invitation link>"}
+```
+
+`200 OK` with `Cache-Control: no-store`.
+
+```json
+{"event_id":"42","member_id":"8","role":"CO_PLANNER"}
+```
+
+The bearer must be a Cognito access token for the configured pool and app client, with the `aws.cognito.signin.user.admin` scope that GetUser requires. The Lambda trusts the Gateway-verified subject and uses the same bearer for server-side GetUser through `@aws-sdk/client-cognito-identity-provider`. It requires one returned `sub` equal to the Gateway subject, one email, and `email_verified` equal to the string `"true"`. The request body accepts only the invitation token. The comparison uses the existing invitation email validator and trim-and-lowercase rule. [Cognito GetUser API](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_GetUser.html)
+
+Cognito verification runs before opening a database transaction. The service hashes the canonical 32-byte token and uses the digest to locate the event. The transaction locks the event first, then re-reads and locks the invitation. It checks the verified email, status, and UTC expiration, checks existing membership, inserts one `CO_PLANNER` row, and updates the invitation to `ACCEPTED` with UTC `accepted_at`. The conditional update also checks expiry at the time of consumption. Both writes commit together or roll back together. The unique membership key handles duplicates without changing the existing role. The same event lock serializes acceptance with revoke. Acceptance uses the existing schema and migration 002 without further schema changes.
+
+| Status | Meaning |
+| --- | --- |
+| 400 | Invalid JSON or a malformed or noncanonical invitation token. |
+| 401 | Missing or invalid authentication, missing bearer, or a bearer rejected by Cognito. |
+| 403 | The verified email is missing, unverified, belongs to a different subject, or does not match the invitation. |
+| 404 | Invitation or route not found. |
+| 409 | The invitation was already accepted or the caller is already a member. |
+| 410 | The invitation has expired or been revoked. |
+| 503 | Verification is unconfigured or Cognito is temporarily unavailable. |
+
+Errors use `{"error":"…"}`. Email verification failures share a generic response. A verified but mismatching account receives `403` before seeing the invitation's lifecycle status. The response and application logs contain no raw invitation token, hash, access token, or Cognito attributes.
+
+### Acceptance deployment prerequisites
+
+- Confirm the live pool's `UsernameConfiguration.CaseSensitive` is `false` and its email sign-in or alias and verification settings prevent different accounts from holding the same verified address under the F2.2 comparison. The repository contains pool and app-client wiring but cannot confirm these settings, readable attributes, or any federated verification mappings. Enable `EVENTS_INVITATION_EMAIL_CASE_INSENSITIVE=true` only after that review. Leave the route disabled for a case-sensitive or unverified pool. Confirm GetUser exposes `sub`, `email`, and `email_verified` for the organizer app client. [Cognito case sensitivity](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-case-sensitivity.html)
+- Verify HTTPS reachability from the Events Lambda subnets to the Cognito Identity Provider regional API for the configured pool. The repository does not establish the live network path. Use a confirmed NAT path or, for a compatible pool without a user-pool domain, the `com.amazonaws.<region>.cognito-idp` interface endpoint with private DNS and an endpoint policy that allows token-authorized GetUser. A pool with an assigned domain requires the public endpoint path under AWS's documented PrivateLink restrictions. GetUser uses the caller's access token and needs no Cognito IAM grant. [Cognito PrivateLink](https://docs.aws.amazon.com/cognito/latest/developerguide/vpc-interface-endpoints.html) · [GetUser authorization](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_GetUser.html)
+- Add the explicit POST method and unauthenticated OPTIONS on `/event-invitations/accept` to the existing Events REST proxy v1 integration. Use the existing Cognito authorizer with the GetUser scope, restrict Lambda invocation to the intended stage and method, and disable Gateway caching and request/response body tracing. Verify owner CRUD and membership reads still work.
+- Run `npm --prefix backend run typecheck` and `npm --prefix backend test`. The adapter suite injects mocked GetUser responses and requires no AWS connectivity. With `EVENTWISE_MYSQL_TEST=1` and the disposable local database settings above, the MySQL suite covers lifecycle transitions, membership isolation, concurrent acceptance and revocation, uniqueness conflicts and rollback. Use real Cognito test accounts only during a later authorized AWS staging check.
+
 ## Cognito access-token authorizer configuration
 
 The organizer currently sends `Authorization: Bearer <access token>`. Keep that client behavior.
@@ -163,7 +203,7 @@ The organizer currently sends `Authorization: Bearer <access token>`. Keep that 
 5. No public Lambda function URL. Grant Gateway invocation only for the intended API/account/stage/Events method ARNs (and OPTIONS if integrated with Lambda). Restrict direct `lambda:InvokeFunction` privileges to trusted deployment/operators: a caller with direct invocation permission can manufacture an authorizer context. Client headers cannot populate the Gateway-generated context through proxy integration.
 6. Test actual method requests through the deployed API in a later authorized deployment. The console's Cognito authorizer test supports ID-token testing, not access-token method validation. Missing/expired/wrong-scope tokens should fail at Gateway; its rejection response may differ from Lambda's existing `{error:string}` responses. [AWS access-token claims and scopes](https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-the-access-token.html).
 
-No Cognito API calls or JWKS downloads occur in the Events Lambda authorizer path, so it does not require Cognito IAM permissions or a Cognito endpoint for request authentication. Local HTTP authentication continues to use the existing verifier.
+The Gateway identity check requires no Cognito API or JWKS network call in Lambda. Invitation acceptance separately calls GetUser after that check. Local HTTP authentication continues to use the existing verifier.
 
 ## Environment variables
 
@@ -178,6 +218,7 @@ No Cognito API calls or JWKS downloads occur in the Events Lambda authorizer pat
 | `GUESTS_TABLE_NAME` | Exact existing guest table, normally `EventWise_Guests`; set explicitly to avoid environment mixups |
 | `EVENTS_CORS_ORIGIN` | Exact organizer origin, e.g. `https://<branch>.<app>.amplifyapp.com`; omit for same-origin access |
 | `EVENTS_ORGANIZER_ORIGIN` | Explicit organizer HTTPS origin used for invitation links. Required for invitation creation. |
+| `EVENTS_INVITATION_EMAIL_CASE_INSENSITIVE` | Enables acceptance email resolution only when set to `true` after confirming live pool policy. |
 | `DB_CONNECTION_LIMIT` | Start conservatively, e.g. `2`; size against reserved concurrency and database connection budget (existing default 5) |
 | `DB_CONNECT_TIMEOUT_MS` | Optional; existing default 10000 |
 | `DB_SSL_CA_FILE` | Optional override; packaged default resolves to `/var/task/certs/rds-ca.pem` |
@@ -252,7 +293,7 @@ No local .env, SQL schema/seeds, server.ts/server.js listener, test directory, d
 
 1. Record/export the current API configuration and integration IDs; confirm the existing RDS endpoint, secret ARN, VPC/subnets/SGs and table ARN. Coordinate with the resource owner. Preserve current guest/template resources, authorizers and integrations; do not import a replacement whole-API specification.
 2. Create/update only the approved `eventwise-events` deployment with the ZIP, handler path above, supported Node.js runtime compatible with Node >=22.12 (e.g. Node.js 22), role, VPC attachment and environment. Start with conservative concurrency, measured memory/timeout, log retention and a version/alias rollback target. Do not run migrations or seeds.
-3. Use REST proxy integration and the access-token authorizer/scopes described above for the Events methods in the routes table. Add the members method and, once the separately approved schema migration is verified, the three invitation methods. Leave existing methods and other integrations in place.
+3. Use REST proxy integration and the access-token authorizer/scopes described above for the Events methods in the routes table. Add the members method and, once the separately approved schema migration is verified, the invitation methods. Enable acceptance after confirming the pool's verified-email policy and GetUser connectivity. Leave existing methods and other integrations in place.
 4. Configure unauthenticated OPTIONS on newly added Events resources (Lambda proxy to this handler or equivalent mock integration). Set EVENTS_CORS_ORIGIN for cross-origin requests. The adapter adds headers to success/error responses and returns 204 for OPTIONS without auth/DB calls. Verify existing Gateway-generated 401/403/5xx CORS behavior with the cloud owner before relying on cross-origin requests.
 5. Deploy the existing REST API to the approved stage after review. Confirm frontend event API base URL includes the stage and that Authorization/Content-Type preflight succeeds. Do not change guest API URL or its methods.
 6. Later staging smoke tests: list scoped to caller, create/template category initialization, detail, owner PATCH, co-planner/unrelated denial, malformed requests, expired/wrong-client tokens, and OWNER DELETE using disposable event/guest fixtures. Verify actual RDS persistence and DynamoDB record removal. Test cleanup failure only in an isolated environment; preserve current 204 semantics.

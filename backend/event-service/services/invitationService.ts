@@ -1,4 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
+import { VerifiedEmailRequiredError, type ResolveVerifiedEmail } from "../../shared/auth/verifiedEmail";
+import { normalizeInvitationEmail } from "../invitationEmail";
 import { InvitationRepository } from "../repositories/invitationRepository";
 import { EventValidationError, validateEventId } from "./eventService";
 
@@ -7,14 +9,18 @@ function invitationEmail(body: unknown): string {
       !("email" in body) || typeof body.email !== "string") {
     throw new EventValidationError("Provide an email address");
   }
-  const email = body.email.trim();
-  const [local, domain, extra] = email.split("@");
-  const dotAtom = /^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*$/i;
-  const dnsName = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
-  if (email.length > 254 || local.length > 64 || !dotAtom.test(local) || !domain || extra !== undefined || !dnsName.test(domain)) {
-    throw new EventValidationError("Enter a valid email address");
+  const email = normalizeInvitationEmail(body.email);
+  if (!email) throw new EventValidationError("Enter a valid email address");
+  return email;
+}
+
+function invitationToken(body: unknown): string {
+  if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 1 ||
+      !("token" in body) || typeof body.token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(body.token) ||
+      Buffer.from(body.token, "base64url").toString("base64url") !== body.token) {
+    throw new EventValidationError("Enter a valid invitation token");
   }
-  return email.toLowerCase();
+  return body.token;
 }
 
 function organizerOrigin(value: string | undefined): string {
@@ -40,7 +46,8 @@ function validateInvitationId(value: string): string {
 
 export class InvitationService {
   constructor(
-    private readonly repository: Pick<InvitationRepository, "create" | "list" | "revoke"> = new InvitationRepository(),
+    private readonly repository: Pick<InvitationRepository, "create" | "list" | "revoke"> &
+      Partial<Pick<InvitationRepository, "accept">> = new InvitationRepository(),
     private readonly env: NodeJS.ProcessEnv = process.env,
   ) {}
 
@@ -61,5 +68,14 @@ export class InvitationService {
 
   async revoke(eventId: string, invitationId: string, sub: string) {
     await this.repository.revoke(validateEventId(eventId), validateInvitationId(invitationId), sub);
+  }
+
+  async accept(body: unknown, sub: string, accessToken: string, resolveVerifiedEmail: ResolveVerifiedEmail) {
+    const token = invitationToken(body);
+    const hash = createHash("sha256").update(token).digest("hex");
+    const email = normalizeInvitationEmail(await resolveVerifiedEmail(accessToken, sub));
+    if (!email) throw new VerifiedEmailRequiredError("A matching verified email is required");
+    if (!this.repository.accept) throw new Error("Invitation acceptance repository is not configured");
+    return this.repository.accept(hash, sub, email);
   }
 }

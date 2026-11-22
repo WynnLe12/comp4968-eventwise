@@ -1,6 +1,9 @@
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { db } from "../../shared/db/db";
+import { normalizeInvitationEmail } from "../invitationEmail";
 import { EventAccessDeniedError, EventConflictError, EventNotFoundError } from "../services/eventService";
+
+export class InvitationInactiveError extends Error {}
 
 export interface PendingInvitation {
   invitation_id: string;
@@ -36,29 +39,43 @@ function pendingInvitation(row: InvitationRow): PendingInvitation {
 export class InvitationRepository {
   constructor(private readonly pool: Pick<Pool, "getConnection"> = db) {}
 
+  private async withEventTransaction<T>(
+    connection: PoolConnection,
+    eventId: string,
+    missingEvent: Error,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    await connection.beginTransaction();
+    try {
+      // Take the same event lock for every write before touching invitation rows.
+      const [events] = await connection.execute<RowDataPacket[]>(
+        "SELECT event_id FROM events WHERE event_id = ? FOR UPDATE", [eventId],
+      );
+      if (!events.length) throw missingEvent;
+      const result = await operation();
+      await connection.commit();
+      return result;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    }
+  }
+
   private async withOwnerTransaction<T>(
     eventId: string,
     sub: string,
     operation: (connection: PoolConnection) => Promise<T>,
   ): Promise<T> {
     const connection = await this.pool.getConnection();
+    const forbidden = new EventAccessDeniedError("Only the event owner can manage invitations");
     try {
-      await connection.beginTransaction();
-      // Take the same event lock for every write before touching invitation rows.
-      const [events] = await connection.execute<RowDataPacket[]>(
-        "SELECT event_id FROM events WHERE event_id = ? FOR UPDATE", [eventId],
-      );
-      if (!events.length) throw new EventAccessDeniedError("Only the event owner can manage invitations");
-      const [owners] = await connection.execute<RowDataPacket[]>(
-        `SELECT 1 FROM event_members m WHERE ${ownerPredicate} FOR SHARE`, [eventId, sub, sub],
-      );
-      if (!owners.length) throw new EventAccessDeniedError("Only the event owner can manage invitations");
-      const result = await operation(connection);
-      await connection.commit();
-      return result;
-    } catch (error) {
-      await connection.rollback();
-      throw error;
+      return await this.withEventTransaction(connection, eventId, forbidden, async () => {
+        const [owners] = await connection.execute<RowDataPacket[]>(
+          `SELECT 1 FROM event_members m WHERE ${ownerPredicate} FOR SHARE`, [eventId, sub, sub],
+        );
+        if (!owners.length) throw forbidden;
+        return operation(connection);
+      });
     } finally {
       connection.release();
     }
@@ -129,5 +146,68 @@ export class InvitationRepository {
       if (!rows[0]) throw new EventNotFoundError("Invitation not found");
       if (rows[0].status !== "REVOKED") throw new EventConflictError("Only active pending invitations can be revoked");
     });
+  }
+
+  async accept(tokenHash: string, sub: string, email: string): Promise<{
+    event_id: string;
+    member_id: string;
+    role: "CO_PLANNER";
+  }> {
+    const connection = await this.pool.getConnection();
+    const notFound = new EventNotFoundError("Invitation not found");
+    const inactive = new InvitationInactiveError("This invitation has expired or been revoked");
+    const alreadyMember = new EventConflictError("You already belong to this event");
+    try {
+      // Discover the event without locking an invitation before the event row.
+      const [candidates] = await connection.execute<(RowDataPacket & { event_id: string })[]>(
+        "SELECT CAST(event_id AS CHAR) AS event_id FROM event_invitations WHERE token_hash = ?", [tokenHash],
+      );
+      if (!candidates[0]) throw notFound;
+      const eventId = candidates[0].event_id;
+
+      return await this.withEventTransaction(connection, eventId, notFound, async () => {
+        const [rows] = await connection.execute<(RowDataPacket & {
+          invitation_id: string; email: string; status: string; elapsed: number | string;
+        })[]>(
+          `SELECT CAST(invitation_id AS CHAR) AS invitation_id, email, status,
+             expires_at <= UTC_TIMESTAMP() AS elapsed
+           FROM event_invitations WHERE event_id = ? AND token_hash = ? FOR UPDATE`,
+          [eventId, tokenHash],
+        );
+        const invitation = rows[0];
+        if (!invitation) throw notFound;
+        if (normalizeInvitationEmail(invitation.email) !== email) {
+          throw new EventAccessDeniedError("A matching verified email is required");
+        }
+        if (invitation.status === "ACCEPTED") throw new EventConflictError("This invitation has already been accepted");
+        if (invitation.status !== "PENDING" || Number(invitation.elapsed) === 1) throw inactive;
+
+        const [members] = await connection.execute<RowDataPacket[]>(
+          "SELECT 1 FROM event_members WHERE event_id = ? AND cognito_sub = ?", [eventId, sub],
+        );
+        if (members.length) throw alreadyMember;
+        try {
+          await connection.execute(
+            "INSERT INTO event_members (event_id, cognito_sub, role) VALUES (?, ?, 'CO_PLANNER')", [eventId, sub],
+          );
+        } catch (error) {
+          if ((error as { code?: string } | null)?.code === "ER_DUP_ENTRY") throw alreadyMember;
+          throw error;
+        }
+        const [updated] = await connection.execute<ResultSetHeader>(
+          `UPDATE event_invitations SET status = 'ACCEPTED', accepted_at = UTC_TIMESTAMP()
+           WHERE event_id = ? AND invitation_id = ? AND status = 'PENDING' AND expires_at > UTC_TIMESTAMP()`,
+          [eventId, invitation.invitation_id],
+        );
+        if (updated.affectedRows !== 1) throw inactive;
+        const [inserted] = await connection.execute<(RowDataPacket & { member_id: string })[]>(
+          "SELECT CAST(LAST_INSERT_ID() AS CHAR) AS member_id",
+        );
+        if (!inserted[0]) throw new Error("Accepted membership could not be read");
+        return { event_id: eventId, member_id: inserted[0].member_id, role: "CO_PLANNER" };
+      });
+    } finally {
+      connection.release();
+    }
   }
 }
