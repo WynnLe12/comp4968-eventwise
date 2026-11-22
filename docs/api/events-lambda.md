@@ -6,26 +6,65 @@ This document describes a later deployment to the existing EventWise REST API, R
 
 ## Routes and implementation
 
-| REST resource | Method | Existing handler reused | Success |
+| REST resource | Method | Handler | Success |
 | --- | --- | --- | --- |
 | `/events` | GET | listEventsHandler | 200 direct array with requesting role |
 | `/events` | POST | createEventHandler | 201 direct event object, no role field |
 | `/events/{eventId}` | GET | getEventHandler | 200 direct event object with role |
 | `/events/{eventId}` | PATCH | updateEventHandler | 200 direct updated event with role |
 | `/events/{eventId}` | DELETE | deleteEventHandler | 204 empty body |
+| `/events/{eventId}/members` | GET | listEventMembersHandler | 200 direct member roster |
 
 Use **REST API Lambda proxy integration (`AWS_PROXY`, payload v1)** for these exact methods. The integration's invocation method is POST regardless of the public HTTP method. No mapping template or HTTP API v2 adapter is needed. `event.path` is the application path without the external stage prefix; optional resource/path-parameter metadata must agree. Literal `/events/`, unsupported methods, nested budget/guest routes and unknown paths retain 404. No catch-all `ANY /{proxy+}` integration is introduced. [AWS REST proxy contract](https://docs.aws.amazon.com/apigateway/latest/developerguide/set-up-lambda-proxy-integrations.html).
 
 The adapter converts the proxy-v1 body (including base64) to a readable Node request, normalizes case-insensitive headers, gives multiValueHeaders precedence, and captures the existing handlers' writeHead/end output. Body parsers still enforce JSON media type and a decoded 65,536-byte limit. BIGINT identifiers/DECIMAL values remain strings; dates/nullability and snake_case event fields remain unchanged. Handler error messages and 400/401/403/404/409/413/415/500 responses are retained. Identity is resolved before service/body processing. The shared `authenticateEvent` helper preserves local bearer verification when no trusted adapter callback is supplied.
 
-Services/repositories/schema are unchanged. Event create still creates OWNER membership and template categories transactionally. Reads check membership; PATCH and DELETE require OWNER. Identity is never taken from body/query/header fields. Local server.ts still runs separately and uses its existing JWT verification.
+Event create still creates OWNER membership and template categories transactionally. Reads check membership; PATCH and DELETE require OWNER. Identity is never taken from body/query/header fields. Local server.ts still runs separately and uses its existing JWT verification.
+
+## List event members
+
+`GET /events/{eventId}/members` uses the existing Events Lambda and Cognito bearer access token. The request has no body. The Lambda takes the caller's subject from the verified authorizer context. A single query on `event_members` checks the caller's membership and reads that event's roster. Both `OWNER` and `CO_PLANNER` can read it.
+
+```http
+GET /events/42/members
+Authorization: Bearer <access-token>
+```
+
+```json
+[
+  {
+    "member_id": "1",
+    "role": "OWNER",
+    "joined_at": "2026-11-21T10:00:00.000Z",
+    "is_self": true
+  },
+  {
+    "member_id": "2",
+    "role": "CO_PLANNER",
+    "joined_at": "2026-11-21T11:00:00.000Z",
+    "is_self": false
+  }
+]
+```
+
+The owner sorts first, then co-planners sort by join time and numeric member ID. IDs are strings, timestamps are ISO 8601 UTC, and `is_self` identifies the caller. The roster exposes no Cognito subjects.
+
+| Status | Condition |
+| --- | --- |
+| 400 | The path contains an invalid event ID. |
+| 401 | Authentication is missing or invalid. |
+| 403 | The caller has no membership in the requested event, including when the event is missing. |
+| 404 | The Lambda receives an unsupported method, malformed route, or mismatched Gateway resource or event ID metadata. |
+| 500 | The roster could not be loaded. |
+
+Lambda errors use `{"error":"…"}`. The application database account needs `SELECT` on the existing `event_members` table. No schema migration is required. AWS deployment of Feature 2.1 has not been performed. In a later approved deployment, add the explicit GET method on `/events/{eventId}/members` to the existing Events Lambda proxy integration, with the Cognito authorizer and an unauthenticated OPTIONS method for browser preflight.
 
 ## Cognito access-token authorizer configuration
 
 The organizer currently sends `Authorization: Bearer <access token>`. Keep that client behavior.
 
-1. On the **five Events methods only**, select a `COGNITO_USER_POOLS` authorizer for the existing intended pool, with token source `Authorization`. Reuse an existing compatible authorizer or configure an Events-specific one later; do not change the guest methods or their authorizer.
-2. **Set nonempty method Authorization Scopes** to a scope actually present in current frontend access tokens. For the existing Amplify username/password (Cognito API) sign-in flow, the compatibility scope is normally `aws.cognito.signin.user.admin`. Confirm that the actual sign-in token contains it, then use that scope on all five Events methods. It is an access-token compatibility gate; SQL membership and OWNER checks remain the application permissions. Do not require newly invented custom scopes that current sign-in cannot issue.
+1. On the **six authenticated Events methods**, select a `COGNITO_USER_POOLS` authorizer for the existing intended pool, with token source `Authorization`. Reuse an existing compatible authorizer or configure an Events-specific one later; do not change the guest methods or their authorizer.
+2. **Set nonempty method Authorization Scopes** to a scope actually present in current frontend access tokens. For the existing Amplify username/password (Cognito API) sign-in flow, the compatibility scope is normally `aws.cognito.signin.user.admin`. Confirm that the actual sign-in token contains it, then use that scope on the authenticated Events methods. It is an access-token compatibility gate; SQL membership and OWNER checks remain the application permissions. Do not require newly invented custom scopes that current sign-in cannot issue.
 3. Do not configure the authorizer's optional Token validation/audience regular expression for ID-token `aud`; access tokens use `client_id` and may lack that audience. Empty method scopes select ID-token behavior, which is incompatible with this adapter. If the team already issues custom API scopes, retain the applicable existing scope instead of changing the frontend flow. [AWS method scope and validation configuration](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-enable-cognito-user-pool.html).
 4. Gateway performs signature, expiry, issuer and method-scope authorization. Lambda accepts identity **only** from `requestContext.authorizer.claims.sub`, checks a nonblank string of at most 128 characters, and additionally requires `token_use=access`, `client_id=COGNITO_CLIENT_ID`, and the issuer matching `COGNITO_USER_POOL_ID`. ID tokens, missing context, wrong client/pool, flat principalId and client-provided IDs are rejected. Claims are not independently signature-verified in this Lambda: the authenticated Gateway integration is the trust boundary.
 5. No public Lambda function URL. Grant Gateway invocation only for the intended API/account/stage/Events method ARNs (and OPTIONS if integrated with Lambda). Restrict direct `lambda:InvokeFunction` privileges to trusted deployment/operators: a caller with direct invocation permission can manufacture an authorizer context. Client headers cannot populate the Gateway-generated context through proxy integration.
@@ -119,16 +158,16 @@ No local .env, SQL schema/seeds, server.ts/server.js listener, test directory, d
 
 1. Record/export the current API configuration and integration IDs; confirm the existing RDS endpoint, secret ARN, VPC/subnets/SGs and table ARN. Coordinate with the resource owner. Preserve current guest/template resources, authorizers and integrations; do not import a replacement whole-API specification.
 2. Create/update only the approved `eventwise-events` deployment with the ZIP, handler path above, supported Node.js runtime compatible with Node >=22.12 (e.g. Node.js 22), role, VPC attachment and environment. Start with conservative concurrency, measured memory/timeout, log retention and a version/alias rollback target. Do not run migrations or seeds.
-3. Add/adjust only GET/POST `/events` and GET/PATCH/DELETE `/events/{eventId}` using REST proxy integration and the access-token authorizer/scopes described above. Leave every guest resource/method/integration unchanged. Do not attach an ANY catch-all that would intercept other features.
-4. Configure unauthenticated OPTIONS on these two Events resources (Lambda proxy to this handler or equivalent mock integration). Set EVENTS_CORS_ORIGIN for cross-origin requests; the adapter adds headers to success/error responses and returns 204 for OPTIONS without auth/DB calls. Verify existing Gateway-generated 401/403/5xx CORS behavior with the cloud owner; global GatewayResponse changes affect other routes and must not be changed as a side effect of this Events deployment.
+3. Use REST proxy integration and the access-token authorizer/scopes described above for the Events methods in the routes table. For Feature 2.1, add GET `/events/{eventId}/members` to the existing Events Lambda integration. Leave existing methods and other integrations in place.
+4. Configure unauthenticated OPTIONS on the Events resources (Lambda proxy to this handler or equivalent mock integration), including the new members resource. Set EVENTS_CORS_ORIGIN for cross-origin requests; the adapter adds headers to success/error responses and returns 204 for OPTIONS without auth/DB calls. Verify existing Gateway-generated 401/403/5xx CORS behavior with the cloud owner; global GatewayResponse changes affect other routes and must not be changed as a side effect of this Events deployment.
 5. Deploy the existing REST API to the approved stage after review. Confirm frontend event API base URL includes the stage and that Authorization/Content-Type preflight succeeds. Do not change guest API URL or its methods.
 6. Later staging smoke tests: list scoped to caller, create/template category initialization, detail, owner PATCH, co-planner/unrelated denial, malformed requests, expired/wrong-client tokens, and OWNER DELETE using disposable event/guest fixtures. Verify actual RDS persistence and DynamoDB record removal. Test cleanup failure only in an isolated environment; preserve current 204 semantics.
 7. Compare guest route integrations before/after and run the guest owner's agreed regression checks. Roll back Events integration/alias independently if necessary. Rollback does not undo committed event deletions or recreate guests.
 
 ## Automated verification
 
-`backend/tests/events.lambda.test.ts` exercises all five existing handlers with the real EventService and injected repositories, access-token authorizer context validation, spoof rejection, membership/ownership/404, JSON/media-type/base64/decoded-byte limits, exact IDs/response envelopes, conflicts/internal errors, SQL-before-guest cleanup including failure/204, resource/path matching, CORS/OPTIONS and concurrent identity isolation.
+`backend/tests/events.lambda.test.ts` exercises all six handlers with the real EventService and injected repositories, including exact roster fields, role and event isolation, access-token context, resource/path matching and CORS. The opt-in `backend/tests/listEvents.mysql.test.ts` suite verifies the roster query against MySQL, including exact subject matching and sort order.
 
 The full backend suite also reruns original local HTTP handler, SQL transaction fake, DynamoDB batching/retry, template Lambda, Secrets Manager and verified TLS tests. Opt-in MySQL tests remain skipped unless deliberately enabled against an approved disposable database. These automated tests do not validate a deployed Gateway authorizer, real VPC routing, RDS credentials or real DynamoDB deletion. Those require the later authorized staging checks above.
 
-Implementation verification: backend typecheck passed; `npm test` passed with **212 passed, 13 opt-in MySQL tests skipped, 0 failed** (225 total), including 12 new adapter tests with multiple route/auth/error cases. `npm run package:events` produced the ZIP successfully. An extracted-ZIP smoke check blocked dependency resolution outside the archive, loaded the handler, parsed the RDS CA, and confirmed a missing-authorizer request returns 401. No deployment or live AWS/database verification was performed.
+Original CRUD adapter verification: backend typecheck passed; `npm test` passed with **212 passed, 13 opt-in MySQL tests skipped, 0 failed** (225 total). `npm run package:events` produced the ZIP successfully. An extracted-ZIP smoke check blocked dependency resolution outside the archive, loaded the handler, parsed the RDS CA, and confirmed a missing-authorizer request returns 401. No deployment or live AWS/database verification was performed.

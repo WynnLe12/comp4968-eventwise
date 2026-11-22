@@ -24,6 +24,13 @@ export interface EventWithMembership extends EventRecord {
   role: ListedEvent["role"] | null;
 }
 
+export interface EventMemberRow {
+  member_id: string;
+  cognito_sub: string;
+  role: ListedEvent["role"];
+  joined_at_epoch: number | string;
+}
+
 export class InvalidTemplateError extends Error { }
 export class EventDeletionBlockedError extends Error {
   constructor(readonly reason: "payments" | "references") { super(reason); }
@@ -243,6 +250,30 @@ export class EventRepository {
         [cognitoSub],
       );
       return events;
+    } finally {
+      connection.release();
+    }
+  }
+
+  async listMembers(eventId: string, cognitoSub: string): Promise<EventMemberRow[]> {
+    const connection = await this.pool.getConnection();
+    try {
+      // Authorize and read the roster in the same statement. Keep the indexed
+      // subject lookup and require an exact match under case-insensitive collations.
+      const [members] = await connection.execute<(RowDataPacket & EventMemberRow)[]>(
+        `SELECT CAST(m.member_id AS CHAR) AS member_id, m.cognito_sub, m.role,
+          UNIX_TIMESTAMP(m.joined_at) AS joined_at_epoch
+         FROM event_members m
+         INNER JOIN event_members requester ON requester.event_id = m.event_id
+         WHERE m.event_id = ?
+           AND requester.cognito_sub = ?
+           AND CAST(requester.cognito_sub AS BINARY) = CAST(? AS BINARY)
+           AND requester.role IN ('OWNER', 'CO_PLANNER')
+         ORDER BY CASE WHEN m.role = 'OWNER' THEN 0 ELSE 1 END,
+           m.joined_at ASC, m.member_id ASC`,
+        [eventId, cognitoSub, cognitoSub],
+      );
+      return members;
     } finally {
       connection.release();
     }

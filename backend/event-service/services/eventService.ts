@@ -7,6 +7,13 @@ export class EventNotFoundError extends Error {}
 export class EventAccessDeniedError extends Error {}
 export class EventConflictError extends Error {}
 
+export interface EventMember {
+  member_id: string;
+  role: ListedEvent["role"];
+  joined_at: string;
+  is_self: boolean;
+}
+
 export function validateEventId(eventId: unknown): string {
   if (typeof eventId !== "string" || !/^[0-9]+$/.test(eventId)) {
     throw new EventValidationError("eventId must be a positive unsigned BIGINT");
@@ -73,7 +80,7 @@ export function validateEventPatch(body: unknown, today = localToday()): Partial
 }
 
 export class EventService {
-  constructor(private readonly repository: Pick<EventRepository, "create"> & Partial<Pick<EventRepository, "list" | "getById" | "update" | "delete">> = new EventRepository(), private readonly today = localToday,
+  constructor(private readonly repository: Pick<EventRepository, "create"> & Partial<Pick<EventRepository, "list" | "getById" | "update" | "delete" | "listMembers">> = new EventRepository(), private readonly today = localToday,
     private readonly guests: Pick<GuestRepository, "deleteAllForEvent"> = new GuestRepository()) {}
 
   async delete(eventId: string, cognitoSub: string): Promise<void> {
@@ -135,6 +142,21 @@ export class EventService {
     if (!cognitoSub || cognitoSub.length > 128) throw new Error("Verified Cognito identity is required");
     if (!this.repository.list) throw new Error("Event listing repository is not configured");
     return this.repository.list(cognitoSub);
+  }
+
+  async listMembers(eventId: string, cognitoSub: string): Promise<EventMember[]> {
+    if (!cognitoSub || cognitoSub.length > 128) throw new Error("Verified Cognito identity is required");
+    const id = validateEventId(eventId);
+    if (!this.repository.listMembers) throw new Error("Event member repository is not configured");
+    const members = await this.repository.listMembers(id, cognitoSub);
+    // An authorized roster contains at least the caller's own membership.
+    if (!members.length) throw new EventAccessDeniedError("You do not have access to this event");
+    return members.map(member => ({
+      member_id: member.member_id,
+      role: member.role,
+      joined_at: new Date(Number(member.joined_at_epoch) * 1000).toISOString(),
+      is_self: member.cognito_sub === cognitoSub,
+    }));
   }
 
   async create(body: unknown, cognitoSub: string): Promise<EventRecord> {

@@ -2,6 +2,7 @@ import { IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { createEventHandler } from "../handlers/createEventHandler";
 import { listEventsHandler } from "../handlers/listEventsHandler";
+import { listEventMembersHandler } from "../handlers/listEventMembersHandler";
 import { getEventHandler } from "../handlers/getEventHandler";
 import { updateEventHandler } from "../handlers/updateEventHandler";
 import { deleteEventHandler } from "../handlers/deleteEventHandler";
@@ -27,7 +28,7 @@ export interface EventsProxyResponse {
   isBase64Encoded: false;
 }
 
-export type EventsService = Pick<EventService, "list" | "getById" | "create" | "update" | "delete">;
+export type EventsService = Pick<EventService, "list" | "getById" | "create" | "update" | "delete" | "listMembers">;
 export interface EventsLambdaDependencies {
   service?: EventsService;
   env?: NodeJS.ProcessEnv;
@@ -84,16 +85,19 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
       result.body = JSON.stringify({ error });
       return result;
     };
-    const match = /^\/events\/([^/]+)$/.exec(event.path);
+    const membersMatch = /^\/events\/([^/]+)\/members$/.exec(event.path);
+    const match = membersMatch ?? /^\/events\/([^/]+)$/.exec(event.path);
     const collection = event.path === "/events";
-    const expectedResource = collection ? "/events" : "/events/{eventId}";
+    const expectedResource = collection ? "/events" : membersMatch ? "/events/{eventId}/members" : "/events/{eventId}";
+    const parameterId = event.pathParameters?.eventId;
     if ((!collection && !match) ||
         (event.resource !== undefined && event.resource !== expectedResource) ||
-        (match && event.pathParameters?.eventId !== undefined && event.pathParameters.eventId !== match[1])) {
+        (match && parameterId !== undefined && parameterId !== match[1]) ||
+        (membersMatch && event.pathParameters != null && parameterId === undefined)) {
       return json(404, "Not found");
     }
     if (event.httpMethod === "OPTIONS") { result.statusCode = 204; return result; }
-    const supported = collection ? ["GET", "POST"] : ["GET", "PATCH", "DELETE"];
+    const supported = collection ? ["GET", "POST"] : membersMatch ? ["GET"] : ["GET", "PATCH", "DELETE"];
     if (!supported.includes(event.httpMethod)) return json(404, "Not found");
 
     // Capture exactly the writeHead/end operations used by the existing handlers.
@@ -126,6 +130,7 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
       const output = response as unknown as ServerResponse;
       if (collection && event.httpMethod === "GET") await listEventsHandler(options)(request, output);
       else if (collection) await createEventHandler(options)(request, output);
+      else if (membersMatch) await listEventMembersHandler(options)(request, output, membersMatch[1]);
       else if (event.httpMethod === "GET") await getEventHandler(options)(request, output, match![1]);
       else if (event.httpMethod === "PATCH") await updateEventHandler(options)(request, output, match![1]);
       else await deleteEventHandler(options)(request, output, match![1]);

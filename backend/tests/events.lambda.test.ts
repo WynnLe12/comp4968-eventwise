@@ -9,6 +9,11 @@ const env = {
   EVENTS_CORS_ORIGIN: "https://organizer.example",
 };
 const id = "18446744073709551615";
+const membersPath = `/events/${id}/members`;
+const memberRows = [
+  { member_id: id, cognito_sub: "owner", role: "OWNER" as const, joined_at_epoch: "1795255200" },
+  { member_id: "2", cognito_sub: "co", role: "CO_PLANNER" as const, joined_at_epoch: 1795258800 },
+];
 const record: EventRecord = {
   event_id: id, name: "Wedding", template_id: "2", event_date: null, venue: null,
   total_budget: "9999999999.99", created_at: new Date("2026-11-01T12:00:00Z"), updated_at: new Date("2026-11-01T12:00:00Z"),
@@ -16,7 +21,8 @@ const record: EventRecord = {
 const wire = (value: unknown) => JSON.parse(JSON.stringify(value));
 function proxy(method = "GET", path = "/events", sub = "owner"): EventsProxyEvent {
   return {
-    httpMethod: method, path, resource: path === "/events" ? "/events" : "/events/{eventId}",
+    httpMethod: method, path, resource: path === "/events" ? "/events" :
+      path.endsWith("/members") ? "/events/{eventId}/members" : "/events/{eventId}",
     pathParameters: path === "/events" ? null : { eventId: path.split("/")[2] },
     headers: { "Content-Type": "application/json", Authorization: "Bearer deliberately-not-decoded" },
     requestContext: { authorizer: { claims: {
@@ -34,8 +40,12 @@ function fixture(options: { missing?: boolean; payments?: boolean; guestFailure?
   const current = (sub: string) => options.missing ? undefined : {
     ...record, role: sub === "owner" ? "OWNER" as const : sub === "co" ? "CO_PLANNER" as const : null,
   };
-  const repository: Pick<EventRepository, "create" | "list" | "getById" | "update" | "delete"> = {
+  const repository: Pick<EventRepository, "create" | "list" | "getById" | "update" | "delete" | "listMembers"> = {
     async list(sub) { call("list", sub); return [{ ...record, role: "OWNER" }]; },
+    async listMembers(eventId, sub) {
+      call("list-members", eventId, sub);
+      return eventId === id && memberRows.some(member => member.cognito_sub === sub) ? memberRows : [];
+    },
     async create(input, sub) { call("create", input, sub); return { ...record, ...input }; },
     async getById(eventId, sub) { call("get", eventId, sub); return current(sub); },
     async update(eventId, patch, sub, authorize) {
@@ -91,9 +101,9 @@ test("REST v1 list/detail/create/PATCH/DELETE reuse existing formats and exact I
 });
 
 const routes = [["GET", "/events"], ["POST", "/events"], ["GET", `/events/${id}`],
-  ["PATCH", `/events/${id}`], ["DELETE", `/events/${id}`]] as const;
+  ["PATCH", `/events/${id}`], ["DELETE", `/events/${id}`], ["GET", membersPath]] as const;
 
-test("all five routes reject absent/untrusted identity without invoking services", async () => {
+test("all six routes reject absent/untrusted identity without invoking services", async () => {
   for (const [method, path] of routes) {
     for (const context of [undefined, {}, { authorizer: { claims: {} } }, { authorizer: { sub: "owner", principalId: "owner" } }]) {
       const f = fixture();
@@ -107,6 +117,31 @@ test("all five routes reject absent/untrusted identity without invoking services
       assert.equal(result.headers["Access-Control-Allow-Origin"], env.EVENTS_CORS_ORIGIN);
       assert.deepEqual(f.calls, []);
     }
+  }
+});
+
+test("members route returns a private roster with the verified caller marked for either role", async () => {
+  const f = fixture();
+  for (const sub of ["owner", "co"]) {
+    const event = proxy("GET", membersPath, sub);
+    event.body = '{"cognito_sub":"unrelated","eventId":"1"}';
+    const result = await f.handler(event);
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.headers["Access-Control-Allow-Origin"], env.EVENTS_CORS_ORIGIN);
+    assert.deepEqual(JSON.parse(result.body), [
+      { member_id: id, role: "OWNER", joined_at: "2026-11-21T10:00:00.000Z", is_self: sub === "owner" },
+      { member_id: "2", role: "CO_PLANNER", joined_at: "2026-11-21T11:00:00.000Z", is_self: sub === "co" },
+    ]);
+  }
+  assert.deepEqual(f.calls.map(call => call.values), [[id, "owner"], [id, "co"]]);
+});
+
+test("members route denies unrelated callers and access to another or missing event", async () => {
+  const f = fixture();
+  for (const [path, sub] of [[membersPath, "unrelated"], ["/events/1/members", "co"], ["/events/2/members", "owner"]]) {
+    const result = await f.handler(proxy("GET", path, sub));
+    assert.equal(result.statusCode, 403);
+    assert.deepEqual(JSON.parse(result.body), { error: "You do not have access to this event" });
   }
 });
 
@@ -181,6 +216,9 @@ test("body validation preserves media type, JSON, decoded byte limits and unknow
 
 test("invalid event IDs and empty PATCH retain existing validation", async () => {
   for (const value of ["abc", "0", "18446744073709551616"]) {
+    const members = fixture();
+    assert.equal((await members.handler(proxy("GET", `/events/${value}/members`))).statusCode, 400);
+    assert.deepEqual(members.calls, []);
     for (const method of ["GET", "PATCH", "DELETE"]) {
       const f = fixture(); const event = proxy(method, `/events/${value}`); event.body = '{"name":"X"}';
       assert.equal((await f.handler(event)).statusCode, 400);
@@ -208,10 +246,10 @@ test("deletion conflicts and SQL failure prevent guest cleanup; guest failure re
   assert.deepEqual(f.calls.map(c => c.operation), ["authorize-delete", "sql-commit", "guests"]);
 });
 
-test("all five handler-specific internal errors remain generic JSON with CORS", async t => {
+test("all six handler-specific internal errors remain generic JSON with CORS", async t => {
   t.mock.method(console, "error", () => {});
-  const methods = ["list", "create", "getById", "update", "delete"] as const;
-  const messages = ["list events", "create event", "retrieve event", "update event", "delete event"];
+  const methods = ["list", "create", "getById", "update", "delete", "listMembers"] as const;
+  const messages = ["list events", "create event", "retrieve event", "update event", "delete event", "list event members"];
   for (const [index, [method, path]] of routes.entries()) {
     const f = fixture(); const event = proxy(method, path); event.body = '{"name":"X"}';
     const service: EventsService = f.service;
@@ -226,18 +264,26 @@ test("all five handler-specific internal errors remain generic JSON with CORS", 
 test("exact route dispatch leaves guests, nested APIs, trailing slashes and unknown methods unhandled", async () => {
   const f = fixture();
   for (const [method, path] of [["GET", "/guest"], ["GET", "/events/"], ["GET", "/stage/events"],
-    ["GET", "/events/1/guests"], ["GET", "/events/1/budget"], ["PUT", "/events"], ["POST", "/events/1"]]) {
+    ["GET", "/events/1/guests"], ["GET", "/events/1/budget"], ["PUT", "/events"], ["POST", "/events/1"],
+    ["GET", "/events//members"], ["GET", "/events/1/members/"], ["GET", "/events/1/members/2"],
+    ["POST", membersPath], ["PATCH", membersPath], ["DELETE", membersPath]]) {
     assert.equal((await f.handler(proxy(method, path))).statusCode, 404);
   }
   const mismatched = proxy("GET", "/events/1"); mismatched.pathParameters = { eventId: "2" };
   assert.equal((await f.handler(mismatched)).statusCode, 404);
   const wrongResource = proxy(); wrongResource.resource = "/{proxy+}";
   assert.equal((await f.handler(wrongResource)).statusCode, 404);
+  const memberWrongResource = proxy("GET", membersPath); memberWrongResource.resource = "/events/{eventId}";
+  assert.equal((await f.handler(memberWrongResource)).statusCode, 404);
+  for (const parameters of [{ eventId: "1" }, { id }]) {
+    const memberWrongParameters = proxy("GET", membersPath); memberWrongParameters.pathParameters = parameters;
+    assert.equal((await f.handler(memberWrongParameters)).statusCode, 404);
+  }
   assert.deepEqual(f.calls, []);
 });
 
 test("OPTIONS is unauthenticated, empty and independent of DB/auth configuration", async () => {
-  for (const path of ["/events", "/events/1"]) {
+  for (const path of ["/events", "/events/1", membersPath]) {
     const event = proxy("OPTIONS", path); event.requestContext = undefined;
     const result = await createEventsHandler({ env: { EVENTS_CORS_ORIGIN: env.EVENTS_CORS_ORIGIN } })(event);
     assert.equal(result.statusCode, 204); assert.equal(result.body, "");
