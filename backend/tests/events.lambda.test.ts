@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createEventsHandler, type EventsProxyEvent, type EventsService } from "../event-service/lambda/events";
 import { EventService } from "../event-service/services/eventService";
-import { EventDeletionBlockedError, type EventRecord, type EventRepository } from "../event-service/repositories/eventRepository";
+import { EventDeletionBlockedError, MemberRemovalBlockedError, type EventRecord, type EventRepository } from "../event-service/repositories/eventRepository";
 
 const env = {
   COGNITO_USER_POOL_ID: "us-west-2_testpool", COGNITO_CLIENT_ID: "testclient",
@@ -10,6 +10,7 @@ const env = {
 };
 const id = "18446744073709551615";
 const membersPath = `/events/${id}/members`;
+const memberItemPath = `${membersPath}/2`;
 const memberRows = [
   { member_id: id, cognito_sub: "owner", role: "OWNER" as const, joined_at_epoch: "1795255200" },
   { member_id: "2", cognito_sub: "co", role: "CO_PLANNER" as const, joined_at_epoch: 1795258800 },
@@ -20,10 +21,11 @@ const record: EventRecord = {
 };
 const wire = (value: unknown) => JSON.parse(JSON.stringify(value));
 function proxy(method = "GET", path = "/events", sub = "owner"): EventsProxyEvent {
+  const memberId = /^\/events\/[^/]+\/members\/([^/]+)$/.exec(path)?.[1];
   return {
     httpMethod: method, path, resource: path === "/events" ? "/events" :
-      path.endsWith("/members") ? "/events/{eventId}/members" : "/events/{eventId}",
-    pathParameters: path === "/events" ? null : { eventId: path.split("/")[2] },
+      memberId ? "/events/{eventId}/members/{memberId}" : path.endsWith("/members") ? "/events/{eventId}/members" : "/events/{eventId}",
+    pathParameters: path === "/events" ? null : { eventId: path.split("/")[2], ...(memberId ? { memberId } : {}) },
     headers: { "Content-Type": "application/json", Authorization: "Bearer deliberately-not-decoded" },
     requestContext: { authorizer: { claims: {
       sub, token_use: "access", client_id: env.COGNITO_CLIENT_ID,
@@ -34,17 +36,26 @@ function proxy(method = "GET", path = "/events", sub = "owner"): EventsProxyEven
   };
 }
 
-function fixture(options: { missing?: boolean; payments?: boolean; guestFailure?: boolean; sqlFailure?: boolean } = {}) {
+function fixture(options: { missing?: boolean; payments?: boolean; guestFailure?: boolean; sqlFailure?: boolean; crossEventTask?: boolean } = {}) {
   const calls: { operation: string; values: unknown[] }[] = [];
   const call = (operation: string, ...values: unknown[]) => { calls.push({ operation, values }); };
   const current = (sub: string) => options.missing ? undefined : {
     ...record, role: sub === "owner" ? "OWNER" as const : sub === "co" ? "CO_PLANNER" as const : null,
   };
-  const repository: Pick<EventRepository, "create" | "list" | "getById" | "update" | "delete" | "listMembers"> = {
+  const repository: Pick<EventRepository, "create" | "list" | "getById" | "update" | "delete" | "listMembers" | "removeMember"> = {
     async list(sub) { call("list", sub); return [{ ...record, role: "OWNER" }]; },
     async listMembers(eventId, sub) {
       call("list-members", eventId, sub);
       return eventId === id && memberRows.some(member => member.cognito_sub === sub) ? memberRows : [];
+    },
+    async removeMember(eventId, memberId, sub) {
+      call("remove-member", eventId, memberId, sub);
+      if (eventId !== id || current(sub)?.role !== "OWNER") throw new MemberRemovalBlockedError("forbidden");
+      const member = memberRows.find(row => row.member_id === memberId);
+      if (!member) throw new MemberRemovalBlockedError("missing");
+      if (member.role === "OWNER") throw new MemberRemovalBlockedError("owner");
+      if (options.crossEventTask) throw new MemberRemovalBlockedError("cross-event-task");
+      if (options.sqlFailure) throw new Error("private SQL detail");
     },
     async create(input, sub) { call("create", input, sub); return { ...record, ...input }; },
     async getById(eventId, sub) { call("get", eventId, sub); return current(sub); },
@@ -143,6 +154,68 @@ test("members route denies unrelated callers and access to another or missing ev
     assert.equal(result.statusCode, 403);
     assert.deepEqual(JSON.parse(result.body), { error: "You do not have access to this event" });
   }
+});
+
+test("member DELETE uses the verified owner, preserves exact string IDs, and returns empty 204", async () => {
+  const f = fixture();
+  const result = await f.handler(proxy("DELETE", `${membersPath}/0002`));
+  assert.equal(result.statusCode, 204);
+  assert.equal(result.body, "");
+  assert.equal(result.headers["Access-Control-Allow-Origin"], env.EVENTS_CORS_ORIGIN);
+  assert.deepEqual(f.calls, [{ operation: "remove-member", values: [id, "2", "owner"] }]);
+});
+
+test("member DELETE rejects unauthorized callers, the owner target, cross-event IDs and task references", async () => {
+  const f = fixture();
+  for (const sub of ["co", "unrelated"]) {
+    for (const memberId of ["2", id]) {
+      const event = proxy("DELETE", `${membersPath}/${memberId}`, sub);
+      event.body = '{"role":"OWNER","cognito_sub":"owner"}';
+      assert.equal((await f.handler(event)).statusCode, 403);
+    }
+  }
+  assert.equal((await fixture({ missing: true }).handler(proxy("DELETE", memberItemPath))).statusCode, 403);
+  const owner = await f.handler(proxy("DELETE", `${membersPath}/${id}`));
+  assert.equal(owner.statusCode, 409);
+  assert.deepEqual(JSON.parse(owner.body), { error: "The event owner cannot be removed" });
+  assert.equal((await f.handler(proxy("DELETE", `${membersPath}/3`))).statusCode, 404);
+  const tasks = await fixture({ crossEventTask: true }).handler(proxy("DELETE", memberItemPath));
+  assert.equal(tasks.statusCode, 409);
+  assert.match(JSON.parse(tasks.body).error, /task in another event/);
+});
+
+test("member DELETE validates authentication, IDs and Gateway route metadata before SQL", async () => {
+  const f = fixture();
+  const request = proxy("DELETE", memberItemPath);
+  const invalid = proxy("DELETE", memberItemPath);
+  invalid.requestContext!.authorizer!.claims!.token_use = "id";
+  for (const event of [{ ...request, requestContext: undefined }, invalid]) {
+    assert.equal((await f.handler(event)).statusCode, 401);
+  }
+  for (const path of [`${membersPath}/abc`, `${membersPath}/18446744073709551616`, "/events/0/members/2"]) {
+    assert.equal((await f.handler(proxy("DELETE", path))).statusCode, 400);
+  }
+  for (const event of [
+    { ...request, httpMethod: "GET" },
+    { ...request, path: memberItemPath + "/" },
+    { ...request, resource: "/events/{eventId}/members" },
+    { ...request, pathParameters: { eventId: id, memberId: "3" } },
+    { ...request, pathParameters: { eventId: "1", memberId: "2" } },
+    { ...request, pathParameters: { eventId: id } },
+    { ...request, pathParameters: { eventId: id, memberId: "2", invitationId: "2" } },
+  ]) {
+    assert.equal((await f.handler(event)).statusCode, 404);
+  }
+  const preflight = await f.handler({ ...request, httpMethod: "OPTIONS", requestContext: undefined });
+  assert.equal(preflight.statusCode, 204);
+  assert.deepEqual(f.calls, []);
+});
+
+test("member DELETE returns a generic database error", async t => {
+  t.mock.method(console, "error", () => {});
+  const response = await fixture({ sqlFailure: true }).handler(proxy("DELETE", memberItemPath));
+  assert.equal(response.statusCode, 500);
+  assert.deepEqual(JSON.parse(response.body), { error: "Unable to remove event member" });
 });
 
 test("authorizer must supply access-token claims for the configured pool and client", async () => {

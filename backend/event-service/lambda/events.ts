@@ -3,6 +3,7 @@ import { Socket } from "node:net";
 import { createEventHandler } from "../handlers/createEventHandler";
 import { listEventsHandler } from "../handlers/listEventsHandler";
 import { listEventMembersHandler } from "../handlers/listEventMembersHandler";
+import { removeEventMemberHandler } from "../handlers/removeEventMemberHandler";
 import { getEventHandler } from "../handlers/getEventHandler";
 import { updateEventHandler } from "../handlers/updateEventHandler";
 import { deleteEventHandler } from "../handlers/deleteEventHandler";
@@ -31,7 +32,7 @@ export interface EventsProxyResponse {
   isBase64Encoded: false;
 }
 
-export type EventsService = Pick<EventService, "list" | "getById" | "create" | "update" | "delete" | "listMembers">;
+export type EventsService = Pick<EventService, "list" | "getById" | "create" | "update" | "delete" | "listMembers" | "removeMember">;
 export interface EventsLambdaDependencies {
   service?: EventsService;
   invitations?: InvitationOperations;
@@ -95,7 +96,8 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
       result.body = JSON.stringify({ error });
       return result;
     };
-    const membersMatch = /^\/events\/([^/]+)\/members$/.exec(event.path);
+    const membersMatch = /^\/events\/([^/]+)\/members(?:\/([^/]+))?$/.exec(event.path);
+    const memberId = membersMatch?.[2];
     const invitationsMatch = /^\/events\/([^/]+)\/invitations(?:\/([^/]+))?$/.exec(event.path);
     const invitationId = invitationsMatch?.[2];
     const match = membersMatch ?? invitationsMatch ?? /^\/events\/([^/]+)$/.exec(event.path);
@@ -108,8 +110,8 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
       supported = ["POST"];
       headers["Cache-Control"] = "no-store";
     } else if (membersMatch) {
-      expectedResource += "/members";
-      supported = ["GET"];
+      expectedResource += memberId === undefined ? "/members" : "/members/{memberId}";
+      supported = memberId === undefined ? ["GET"] : ["DELETE"];
     } else if (invitationsMatch) {
       expectedResource += invitationId === undefined ? "/invitations" : "/invitations/{invitationId}";
       supported = invitationId === undefined ? ["GET", "POST"] : ["DELETE"];
@@ -120,6 +122,8 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
         (accepting && event.pathParameters != null && Object.keys(event.pathParameters).length > 0) ||
         (match && parameterId !== undefined && parameterId !== match[1]) ||
         ((membersMatch || invitationsMatch) && event.pathParameters != null && parameterId === undefined) ||
+        (memberId !== undefined && event.pathParameters != null &&
+          (event.pathParameters.memberId !== memberId || Object.keys(event.pathParameters).length !== 2)) ||
         (invitationsMatch && event.pathParameters != null &&
           (event.pathParameters.invitationId !== invitationId ||
             Object.keys(event.pathParameters).length !== (invitationId === undefined ? 1 : 2)))) {
@@ -161,6 +165,7 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
       else if (invitationsMatch) await eventInvitationHandler({ ...options, invitations })(request, output, invitationsMatch[1], invitationId);
       else if (collection && event.httpMethod === "GET") await listEventsHandler(options)(request, output);
       else if (collection) await createEventHandler(options)(request, output);
+      else if (membersMatch && memberId !== undefined) await removeEventMemberHandler(options)(request, output, membersMatch[1], memberId);
       else if (membersMatch) await listEventMembersHandler(options)(request, output, membersMatch[1]);
       else if (event.httpMethod === "GET") await getEventHandler(options)(request, output, match![1]);
       else if (event.httpMethod === "PATCH") await updateEventHandler(options)(request, output, match![1]);

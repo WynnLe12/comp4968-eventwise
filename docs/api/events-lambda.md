@@ -2,7 +2,7 @@
 
 Target function: **`eventwise-events`**. Handler: **`event-service/lambda/events.handler`**.
 
-This document describes a later deployment to the existing EventWise REST API, RDS instance `eventwise-db` (database `eventwise`), Secrets Manager secret and EventWise VPC. Invitation management and acceptance have not been deployed to AWS. Their database tests use disposable local MySQL.
+This document describes a later deployment to the existing EventWise REST API, RDS instance `eventwise-db` (database `eventwise`), Secrets Manager secret and EventWise VPC. Invitation management, acceptance, and co-planner removal have not been deployed to AWS. Their database tests use disposable local MySQL.
 
 ## Routes and implementation
 
@@ -14,6 +14,7 @@ This document describes a later deployment to the existing EventWise REST API, R
 | `/events/{eventId}` | PATCH | updateEventHandler | 200 direct updated event with role |
 | `/events/{eventId}` | DELETE | deleteEventHandler | 204 empty body |
 | `/events/{eventId}/members` | GET | listEventMembersHandler | 200 direct member roster |
+| `/events/{eventId}/members/{memberId}` | DELETE | removeEventMemberHandler | 204 empty body |
 | `/events/{eventId}/invitations` | POST | eventInvitationHandler | 201 pending invitation with acceptance URL |
 | `/events/{eventId}/invitations` | GET | eventInvitationHandler | 200 direct array of active pending invitations |
 | `/events/{eventId}/invitations/{invitationId}` | DELETE | eventInvitationHandler | 204 empty body |
@@ -62,6 +63,34 @@ The owner sorts first, then co-planners sort by join time and numeric member ID.
 | 500 | The roster could not be loaded. |
 
 Lambda errors use `{"error":"…"}`. The application database account needs `SELECT` on the existing `event_members` table. No schema migration is required. AWS deployment of Feature 2.1 has not been performed. In a later approved deployment, add the explicit GET method on `/events/{eventId}/members` to the existing Events Lambda proxy integration, with the Cognito authorizer and an unauthenticated OPTIONS method for browser preflight.
+
+## Remove a co-planner
+
+```http
+DELETE /events/42/members/8
+Authorization: Bearer <access-token>
+```
+
+An empty `204 No Content` confirms removal. The request has no body. Both path identifiers are positive unsigned BIGINT values, and `memberId` identifies the membership for this event. Only the current event owner can remove a co-planner. The Lambda uses the verified Cognito subject to check ownership in MySQL.
+
+| Status | Condition |
+| --- | --- |
+| 400 | Invalid event or membership ID. |
+| 401 | Missing or invalid authentication. |
+| 403 | The caller is not the owner, or the event is missing. |
+| 404 | The target membership is absent from the event, or the route metadata does not match. |
+| 409 | The target is the owner, or a task belonging to another event references the target membership. |
+| 500 | Removal failed unexpectedly. |
+
+The transaction locks the event first, verifies and locks the caller's owner membership, then locks the scoped target membership and its assigned task rows. The target lock blocks new foreign-key references. Locking the existing tasks prevents them from moving to another event between validation and deletion. If any assignment points across events, the transaction rolls back and returns `409`; resolve the inconsistent task assignment before retrying. Otherwise a scoped delete removes one co-planner row and the existing `ON DELETE SET NULL` foreign key clears that row's task assignments. Task rows, other members' assignments, and the event remain intact. A database failure rolls back both the deletion and its assignment changes. No schema migration is required.
+
+Feature 12 must verify that the assignee belongs to the task's event in the assignment transaction, since the current foreign key validates only the membership ID. Assignment or reassignment writes should lock the event first and then the relevant memberships. This keeps their lock order consistent with removal and invitation acceptance.
+
+After commit, subsequent event list, detail, roster, and other membership-checked requests use the current database rows, including when the caller reuses an existing Cognito JWT. Memberships in other events remain available. Requests that already passed their membership check may finish. Removal leaves invitation history in place. A separate, valid pending invitation can create a new membership after removal.
+
+For later AWS deployment, add the explicit DELETE and unauthenticated OPTIONS methods on `/events/{eventId}/members/{memberId}` to the Events REST proxy v1 integration. Apply the existing Cognito authorizer and access-token scope to DELETE. The database application account needs `SELECT` on `events`, `event_members` and `tasks`, plus `DELETE` on `event_members`. Feature 2.4 has not been deployed to AWS.
+
+Run `npm --prefix backend run typecheck` and `npm --prefix backend test`. To run the removal integration tests, use disposable local MySQL with the EventWise schema, leave Secrets Manager mode disabled, and set `EVENTWISE_MYSQL_TEST=1` before running the suite. The tests exercise current database authorization using the same mocked Gateway claims before and after removal, along with task locking, rollback, and concurrent acceptance.
 
 ## Manage co-planner invitations
 
@@ -293,7 +322,7 @@ No local .env, SQL schema/seeds, server.ts/server.js listener, test directory, d
 
 1. Record/export the current API configuration and integration IDs; confirm the existing RDS endpoint, secret ARN, VPC/subnets/SGs and table ARN. Coordinate with the resource owner. Preserve current guest/template resources, authorizers and integrations; do not import a replacement whole-API specification.
 2. Create/update only the approved `eventwise-events` deployment with the ZIP, handler path above, supported Node.js runtime compatible with Node >=22.12 (e.g. Node.js 22), role, VPC attachment and environment. Start with conservative concurrency, measured memory/timeout, log retention and a version/alias rollback target. Do not run migrations or seeds.
-3. Use REST proxy integration and the access-token authorizer/scopes described above for the Events methods in the routes table. Add the members method and, once the separately approved schema migration is verified, the invitation methods. Enable acceptance after confirming the pool's verified-email policy and GetUser connectivity. Leave existing methods and other integrations in place.
+3. Use REST proxy integration and the access-token authorizer/scopes described above for the Events methods in the routes table. Add the member listing and removal methods and, once the separately approved schema migration is verified, the invitation methods. Enable acceptance after confirming the pool's verified-email policy and GetUser connectivity. Leave existing methods and other integrations in place.
 4. Configure unauthenticated OPTIONS on newly added Events resources (Lambda proxy to this handler or equivalent mock integration). Set EVENTS_CORS_ORIGIN for cross-origin requests. The adapter adds headers to success/error responses and returns 204 for OPTIONS without auth/DB calls. Verify existing Gateway-generated 401/403/5xx CORS behavior with the cloud owner before relying on cross-origin requests.
 5. Deploy the existing REST API to the approved stage after review. Confirm frontend event API base URL includes the stage and that Authorization/Content-Type preflight succeeds. Do not change guest API URL or its methods.
 6. Later staging smoke tests: list scoped to caller, create/template category initialization, detail, owner PATCH, co-planner/unrelated denial, malformed requests, expired/wrong-client tokens, and OWNER DELETE using disposable event/guest fixtures. Verify actual RDS persistence and DynamoDB record removal. Test cleanup failure only in an isolated environment; preserve current 204 semantics.

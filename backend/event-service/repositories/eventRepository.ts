@@ -36,6 +36,10 @@ export class EventDeletionBlockedError extends Error {
   constructor(readonly reason: "payments" | "references") { super(reason); }
 }
 
+export class MemberRemovalBlockedError extends Error {
+  constructor(readonly reason: "forbidden" | "missing" | "owner" | "cross-event-task") { super(reason); }
+}
+
 interface TemplateCategoryRow extends RowDataPacket {
   template_category_id: string;
   name: string;
@@ -274,6 +278,45 @@ export class EventRepository {
         [eventId, cognitoSub, cognitoSub],
       );
       return members;
+    } finally {
+      connection.release();
+    }
+  }
+
+  async removeMember(eventId: string, memberId: string, cognitoSub: string): Promise<void> {
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [events] = await connection.execute<RowDataPacket[]>(
+        "SELECT event_id FROM events WHERE event_id = ? FOR UPDATE", [eventId],
+      );
+      if (!events.length) throw new MemberRemovalBlockedError("forbidden");
+      const [owners] = await connection.execute<RowDataPacket[]>(
+        `SELECT 1 FROM event_members WHERE event_id = ? AND cognito_sub = ?
+         AND CAST(cognito_sub AS BINARY) = CAST(? AS BINARY) AND role = 'OWNER' FOR SHARE`,
+        [eventId, cognitoSub, cognitoSub],
+      );
+      if (!owners.length) throw new MemberRemovalBlockedError("forbidden");
+      const [members] = await connection.execute<(RowDataPacket & { role: ListedEvent["role"] })[]>(
+        "SELECT role FROM event_members WHERE event_id = ? AND member_id = ? FOR UPDATE", [eventId, memberId],
+      );
+      if (!members[0]) throw new MemberRemovalBlockedError("missing");
+      if (members[0].role === "OWNER") throw new MemberRemovalBlockedError("owner");
+
+      // The member lock blocks new FK references. Lock all existing references
+      // so a task cannot move to another event between this check and the cascade.
+      const [tasks] = await connection.execute<(RowDataPacket & { event_id: string })[]>(
+        "SELECT CAST(event_id AS CHAR) AS event_id FROM tasks WHERE assigned_member_id = ? FOR UPDATE", [memberId],
+      );
+      if (tasks.some(task => task.event_id !== eventId)) throw new MemberRemovalBlockedError("cross-event-task");
+      const [result] = await connection.execute<ResultSetHeader>(
+        "DELETE FROM event_members WHERE event_id = ? AND member_id = ? AND role = 'CO_PLANNER'", [eventId, memberId],
+      );
+      if (result.affectedRows !== 1) throw new Error("Co-planner removal was not completed");
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
     } finally {
       connection.release();
     }

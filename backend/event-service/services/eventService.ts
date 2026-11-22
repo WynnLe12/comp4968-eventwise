@@ -1,4 +1,4 @@
-import { EventRepository, EventDeletionBlockedError, InvalidTemplateError, type EventInput, type EventRecord, type ListedEvent } from "../repositories/eventRepository";
+import { EventRepository, EventDeletionBlockedError, InvalidTemplateError, MemberRemovalBlockedError, type EventInput, type EventRecord, type ListedEvent } from "../repositories/eventRepository";
 import { localToday, validDate } from "../../shared/utils/dateOnly";
 import { GuestRepository } from "../../guest-service/repositories/guestRepository";
 
@@ -14,13 +14,13 @@ export interface EventMember {
   is_self: boolean;
 }
 
-export function validateEventId(eventId: unknown): string {
+export function validateEventId(eventId: unknown, field = "eventId"): string {
   if (typeof eventId !== "string" || !/^[0-9]+$/.test(eventId)) {
-    throw new EventValidationError("eventId must be a positive unsigned BIGINT");
+    throw new EventValidationError(`${field} must be a positive unsigned BIGINT`);
   }
   const normalized = eventId.replace(/^0+/, "");
   if (!normalized || normalized.length > 20 || BigInt(normalized) > 18446744073709551615n) {
-    throw new EventValidationError("eventId must be between 1 and 18446744073709551615");
+    throw new EventValidationError(`${field} must be between 1 and 18446744073709551615`);
   }
   return normalized;
 }
@@ -80,7 +80,7 @@ export function validateEventPatch(body: unknown, today = localToday()): Partial
 }
 
 export class EventService {
-  constructor(private readonly repository: Pick<EventRepository, "create"> & Partial<Pick<EventRepository, "list" | "getById" | "update" | "delete" | "listMembers">> = new EventRepository(), private readonly today = localToday,
+  constructor(private readonly repository: Pick<EventRepository, "create"> & Partial<Pick<EventRepository, "list" | "getById" | "update" | "delete" | "listMembers" | "removeMember">> = new EventRepository(), private readonly today = localToday,
     private readonly guests: Pick<GuestRepository, "deleteAllForEvent"> = new GuestRepository()) {}
 
   async delete(eventId: string, cognitoSub: string): Promise<void> {
@@ -157,6 +157,24 @@ export class EventService {
       joined_at: new Date(Number(member.joined_at_epoch) * 1000).toISOString(),
       is_self: member.cognito_sub === cognitoSub,
     }));
+  }
+
+  async removeMember(eventId: string, memberId: string, cognitoSub: string): Promise<void> {
+    if (!cognitoSub || cognitoSub.length > 128) throw new Error("Verified Cognito identity is required");
+    const event = validateEventId(eventId);
+    const member = validateEventId(memberId, "memberId");
+    if (!this.repository.removeMember) throw new Error("Event member removal repository is not configured");
+    try {
+      await this.repository.removeMember(event, member, cognitoSub);
+    } catch (error) {
+      if (!(error instanceof MemberRemovalBlockedError)) throw error;
+      switch (error.reason) {
+        case "forbidden": throw new EventAccessDeniedError("Only the event owner can remove co-planners");
+        case "missing": throw new EventNotFoundError("Member not found in this event");
+        case "owner": throw new EventConflictError("The event owner cannot be removed");
+        case "cross-event-task": throw new EventConflictError("This member is assigned to a task in another event and cannot be removed");
+      }
+    }
   }
 
   async create(body: unknown, cognitoSub: string): Promise<EventRecord> {
