@@ -146,7 +146,10 @@ test("domain errors and Cognito outages return safe responses; errors never log 
     assert.ok(!result.body.includes(accessToken));
     assert.deepEqual(unavailable.repositoryCalls, []);
   }
-  assert.deepEqual(logs, [["Event invitation operation failed"]]);
+  assert.deepEqual(logs, [["Event invitation operation failed", {
+    operation: "accept", step: undefined, errorType: "Error", errorMessage: "Unrecognized error details omitted.",
+    mysqlCode: undefined, mysqlErrno: undefined,
+  }]]);
 });
 
 test("production email lookup fails closed until the pool case policy is confirmed", async () => {

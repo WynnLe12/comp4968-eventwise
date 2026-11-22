@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { after, test } from "node:test";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { EventRepository } from "../event-service/repositories/eventRepository";
-import { InvitationInactiveError, InvitationRepository } from "../event-service/repositories/invitationRepository";
+import { InvitationCreationError, InvitationInactiveError, InvitationRepository } from "../event-service/repositories/invitationRepository";
 import { EventAccessDeniedError, EventConflictError, EventNotFoundError } from "../event-service/services/eventService";
 import { InvitationService } from "../event-service/services/invitationService";
 import { db } from "../shared/db/db";
@@ -125,7 +125,9 @@ test("MySQL: failure after insert rolls back the new row and the previous invita
         },
       }) as PoolConnection;
     } });
-    await assert.rejects(new InvitationService(repo, env).create(eventId, { email }, owner), /Injected failure/);
+    await assert.rejects(new InvitationService(repo, env).create(eventId, { email }, owner), error =>
+      error instanceof InvitationCreationError && error.step === "read-created-invitation" &&
+      error.cause instanceof Error && error.cause.message === "Injected failure after insert");
     const [rows] = await db.execute<RowDataPacket[]>(
       "SELECT CAST(invitation_id AS CHAR) AS invitation_id, status FROM event_invitations WHERE event_id = ?", [eventId],
     );

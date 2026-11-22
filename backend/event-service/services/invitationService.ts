@@ -23,6 +23,8 @@ function invitationToken(body: unknown): string {
   return body.token;
 }
 
+export const organizerOriginError = "Events organizer origin must be a valid HTTPS origin";
+
 function organizerOrigin(value: string | undefined): string {
   try {
     const configured = value?.trim() ?? "";
@@ -31,7 +33,7 @@ function organizerOrigin(value: string | undefined): string {
     if (url.username || url.password) throw new Error();
     return url.origin;
   } catch {
-    throw new Error("Events organizer origin must be a valid HTTPS origin");
+    throw new Error(organizerOriginError);
   }
 }
 

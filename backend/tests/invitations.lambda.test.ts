@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
+import type { PoolConnection } from "mysql2/promise";
 import { createEventsHandler, type EventsProxyEvent } from "../event-service/lambda/events";
+import { InvitationRepository } from "../event-service/repositories/invitationRepository";
 import { EventAccessDeniedError, EventConflictError, EventNotFoundError } from "../event-service/services/eventService";
 import { InvitationService } from "../event-service/services/invitationService";
 
@@ -169,4 +171,61 @@ test("invitation errors use safe response bodies and invalid origin configuratio
     assert.equal(response.statusCode, 500);
     assert.deepEqual(invalid.writes, []);
   }
+});
+
+test("creation diagnostics identify an invalid organizer origin without printing its value", async t => {
+  const logger = t.mock.method(console, "error", () => {});
+  const f = fixture({ ...env, EVENTS_ORGANIZER_ORIGIN: "https://test-user:test-secret@organizer.example" });
+  const response = await f.handler(proxy("POST"));
+  assert.equal(response.statusCode, 500);
+  assert.deepEqual(JSON.parse(response.body), { error: "Unable to complete invitation request" });
+  assert.equal(logger.mock.callCount(), 1);
+  const [summary, fields] = logger.mock.calls[0].arguments as unknown as [string, Record<string, unknown>];
+  assert.equal(summary, "Event invitation operation failed");
+  assert.equal(fields.operation, "create");
+  assert.equal(fields.step, "organizer-origin");
+  assert.equal(fields.errorType, "Error");
+  assert.equal(fields.errorMessage, "Events organizer origin must be a valid HTTPS origin");
+  assert.doesNotMatch(JSON.stringify(fields), /test-user|test-secret/);
+  assert.deepEqual(f.authorizations, []);
+});
+
+test("creation diagnostics distinguish a missing migration from a denied INSERT without logging sensitive driver fields", async t => {
+  const logger = t.mock.method(console, "error", () => {});
+  const privateValues = [env.COGNITO_CLIENT_ID, "secret-password", "private-invitation-token", "private-bearer", row.email];
+  for (const [match, step, code, errno, message] of [
+    ["pending_email", "find-pending-invitation", "ER_BAD_FIELD_ERROR", 1054, "Unknown column 'pending_email'"],
+    ["INSERT INTO event_invitations", "insert-invitation", "ER_TABLEACCESS_DENIED_ERROR", 1142, "INSERT command denied"],
+  ] as const) {
+    let rolledBack = false;
+    const driverError = Object.assign(new Error(`${message} ${privateValues.join(" ")}`), {
+      code, errno, sql: privateValues.join(" "), sqlMessage: privateValues.join(" "),
+    });
+    const repository = new InvitationRepository({ getConnection: async () => ({
+      async beginTransaction() {},
+      async execute(sql: string) {
+        if (sql.includes(match)) throw driverError;
+        if (sql.includes("FROM events") || sql.includes("FROM event_members")) return [[{}]];
+        if (sql.includes("pending_email")) return [[]];
+        assert.fail("Unexpected SQL after the failing step");
+      },
+      async rollback() { rolledBack = true; },
+      release() {},
+    }) as unknown as PoolConnection });
+    const handler = createEventsHandler({ invitations: new InvitationService(repository, env), env });
+    const response = await handler(proxy("POST"));
+    assert.equal(response.statusCode, 500);
+    assert.deepEqual(JSON.parse(response.body), { error: "Unable to complete invitation request" });
+    assert.ok(rolledBack);
+    const [, fields] = logger.mock.calls.at(-1)!.arguments as unknown as [string, Record<string, unknown>];
+    assert.equal(fields.operation, "create");
+    assert.equal(fields.step, step);
+    assert.equal(fields.errorType, driverError.name);
+    assert.equal(fields.mysqlCode, code);
+    assert.equal(fields.mysqlErrno, errno);
+    assert.match(String(fields.errorMessage), step === "find-pending-invitation" ? /pending_email.*migration 002/ : /table privilege/);
+    for (const value of privateValues) assert.ok(!JSON.stringify(fields).includes(value));
+    assert.ok(!("sql" in fields) && !("sqlMessage" in fields));
+  }
+  assert.equal(logger.mock.callCount(), 2);
 });

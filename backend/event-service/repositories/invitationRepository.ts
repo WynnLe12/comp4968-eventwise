@@ -5,6 +5,15 @@ import { EventAccessDeniedError, EventConflictError, EventNotFoundError } from "
 
 export class InvitationInactiveError extends Error {}
 
+type InvitationCreationStep = "connect-or-authorize" | "find-pending-invitation" | "expire-invitation" |
+  "insert-invitation" | "read-created-invitation" | "commit";
+
+export class InvitationCreationError extends Error {
+  constructor(readonly step: InvitationCreationStep, cause: unknown) {
+    super("Invitation creation failed", { cause });
+  }
+}
+
 export interface PendingInvitation {
   invitation_id: string;
   email: string;
@@ -82,33 +91,45 @@ export class InvitationRepository {
   }
 
   async create(eventId: string, sub: string, email: string, tokenHash: string): Promise<PendingInvitation> {
-    return this.withOwnerTransaction(eventId, sub, async connection => {
-      // Start the read after taking the event lock. Avoid gap locks on a missing
-      // invitation key, which could block inserts for a different event.
-      const [pending] = await connection.execute<(RowDataPacket & { invitation_id: string; elapsed: number | string })[]>(
-        `SELECT CAST(invitation_id AS CHAR) AS invitation_id, expires_at <= UTC_TIMESTAMP() AS elapsed
-         FROM event_invitations WHERE event_id = ? AND pending_email = ?`,
-        [eventId, email],
-      );
-      if (pending[0]) {
-        if (Number(pending[0].elapsed) !== 1) throw new EventConflictError("A pending invitation already exists for this email");
-        await connection.execute(
-          "UPDATE event_invitations SET status = 'EXPIRED' WHERE event_id = ? AND invitation_id = ? AND status = 'PENDING'",
-          [eventId, pending[0].invitation_id],
+    let step: InvitationCreationStep = "connect-or-authorize";
+    try {
+      return await this.withOwnerTransaction(eventId, sub, async connection => {
+        // Start the read after taking the event lock. Avoid gap locks on a missing
+        // invitation key, which could block inserts for a different event.
+        step = "find-pending-invitation";
+        const [pending] = await connection.execute<(RowDataPacket & { invitation_id: string; elapsed: number | string })[]>(
+          `SELECT CAST(invitation_id AS CHAR) AS invitation_id, expires_at <= UTC_TIMESTAMP() AS elapsed
+           FROM event_invitations WHERE event_id = ? AND pending_email = ?`,
+          [eventId, email],
         );
-      }
+        if (pending[0]) {
+          if (Number(pending[0].elapsed) !== 1) throw new EventConflictError("A pending invitation already exists for this email");
+          step = "expire-invitation";
+          await connection.execute(
+            "UPDATE event_invitations SET status = 'EXPIRED' WHERE event_id = ? AND invitation_id = ? AND status = 'PENDING'",
+            [eventId, pending[0].invitation_id],
+          );
+        }
 
-      await connection.execute(
-        `INSERT INTO event_invitations (event_id, email, invited_by_sub, token_hash, status, expires_at)
-         VALUES (?, ?, ?, ?, 'PENDING', UTC_TIMESTAMP() + INTERVAL 48 HOUR)`,
-        [eventId, email, sub, tokenHash],
-      );
-      const [rows] = await connection.execute<InvitationRow[]>(
-        `SELECT ${invitationFields} FROM event_invitations i WHERE i.invitation_id = LAST_INSERT_ID()`,
-      );
-      if (!rows[0]) throw new Error("Created invitation could not be read");
-      return pendingInvitation(rows[0]);
-    });
+        step = "insert-invitation";
+        await connection.execute(
+          `INSERT INTO event_invitations (event_id, email, invited_by_sub, token_hash, status, expires_at)
+           VALUES (?, ?, ?, ?, 'PENDING', UTC_TIMESTAMP() + INTERVAL 48 HOUR)`,
+          [eventId, email, sub, tokenHash],
+        );
+        step = "read-created-invitation";
+        const [rows] = await connection.execute<InvitationRow[]>(
+          `SELECT ${invitationFields} FROM event_invitations i WHERE i.invitation_id = LAST_INSERT_ID()`,
+        );
+        if (!rows[0]) throw new Error("Created invitation could not be read");
+        const invitation = pendingInvitation(rows[0]);
+        step = "commit";
+        return invitation;
+      });
+    } catch (error) {
+      if (error instanceof EventAccessDeniedError || error instanceof EventConflictError) throw error;
+      throw new InvitationCreationError(step, error);
+    }
   }
 
   async list(eventId: string, sub: string): Promise<PendingInvitation[]> {
