@@ -36,7 +36,7 @@ export const navGroups: { label: string; items: { id: Page; label: string; icon:
 export const pageTitles: Record<Page, [string, string]> = {
   dashboard: ["Good morning, Maya", "Here’s what’s happening with your wedding."],
   events: ["My events", "Create, edit, and switch between all your celebrations."],
-  coplanners: ["Co-planners", "Bring your planning team together and manage their access."],
+  coplanners: ["Co-planners", "Manage the people helping plan your event."],
   budget: ["Budget", "Keep every dollar intentional and your plans on track."],
   expenses: ["Expenses", "Track deposits, balances, and every payment in one place."],
   vendors: ["Vendors", "Keep contacts, quotes, contracts, and due dates organized."],

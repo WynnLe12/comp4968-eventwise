@@ -19,7 +19,7 @@ export class EventDetailsError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
 
-async function authenticatedEventRequest() {
+export async function authenticatedEventRequest() {
   let identity: Awaited<ReturnType<typeof requireAuthSession>>;
   try { identity = await requireAuthSession(); }
   catch { throw new EventSessionError("Your session has expired. Please sign in again."); }
@@ -158,7 +158,7 @@ export async function getEventDetails(eventId: string, signal?: AbortSignal): Pr
 }
 
 
-function requestEventId(eventId: string): string {
+export function requestEventId(eventId: string): string {
   if (typeof eventId !== "string" || !/^[0-9]+$/.test(eventId)) throw new EventValidationError("Select a valid event.");
   const id = eventId.replace(/^0+/, "");
   if (!id || id.length > 20 || BigInt(id) > 18446744073709551615n) throw new EventValidationError("Select a valid event.");

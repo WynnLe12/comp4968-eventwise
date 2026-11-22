@@ -310,6 +310,196 @@ const page = {
 };
 const presentation = loadModule("../src/features/events/eventPresentation.ts", {});
 
+const member = { member_id: first.event_id, role: "OWNER", joined_at: "2026-11-21T10:00:00.000Z", is_self: true };
+const coPlanner = { ...member, member_id: "2", role: "CO_PLANNER", is_self: false };
+const navigation = loadModule("../src/routes/navigation.ts", {});
+
+function withCollaborationApi(fetch, run, overrides = {}) {
+  return withApi(fetch, eventApi => run(loadModule("../src/features/collaboration/collaborationApi.ts", {
+    "../../services/apiConfig": { apiUrl: path => `/api${path}` },
+    "../events/services/eventApi": eventApi,
+    "../auth/services/authService": { getCurrentUser: async () => identity.user, ...overrides },
+  }), eventApi), overrides);
+}
+
+test("roster API uses the exact selected event ID, bearer token, and abort signal", async () => {
+  const controller = new AbortController();
+  await withCollaborationApi(async (url, options) => {
+    assert.equal(url, `/api/events/${first.event_id}/members`);
+    assert.equal(options.method ?? "GET", "GET");
+    assert.deepEqual(options.headers, { Authorization: "Bearer access-token-a" });
+    assert.equal(options.signal, controller.signal);
+    assert.equal(options.body, undefined);
+    return Response.json([{ ...member, cognito_sub: "private" }, coPlanner]);
+  }, async api => {
+    assert.deepEqual(await api.listEventMembers(first.event_id, identity.user.userId, controller.signal), [member, coPlanner]);
+  });
+});
+
+test("roster API rejects unauthorized, invalid, or wrong-account responses and accepts an empty roster", async () => {
+  for (const status of [401, 403, 404, 500]) {
+    await withCollaborationApi(async () => new Response("private error", { status }), async (api, eventApi) => {
+      await assert.rejects(api.listEventMembers(first.event_id, identity.user.userId), error =>
+        !error.message.includes("private") && (status === 401 ? error instanceof eventApi.EventSessionError
+          : error instanceof api.EventMembersError && error.status === status));
+    });
+  }
+  await withCollaborationApi(async () => Response.json([]), async api => {
+    assert.deepEqual(await api.listEventMembers(first.event_id, identity.user.userId), []);
+  });
+  for (const bad of [{ ...member, member_id: 1 }, { ...member, joined_at: "tomorrow" },
+    { ...member, role: "ADMIN" }, { ...member, is_self: "true" }]) {
+    await withCollaborationApi(async () => Response.json([bad]), async api => {
+      await assert.rejects(api.listEventMembers(first.event_id, identity.user.userId), { status: 502 });
+    });
+  }
+  await withCollaborationApi(async () => assert.fail("Request must not run for another account"), async api => {
+    await assert.rejects(api.listEventMembers(first.event_id, "user-b"), { status: 409 });
+  });
+  await withCollaborationApi(async () => Response.json([member]), async api => {
+    await assert.rejects(api.listEventMembers(first.event_id, identity.user.userId), { status: 409 });
+  }, { getCurrentUser: async () => ({ userId: "user-b" }) });
+});
+
+async function withRosterPage(run) {
+  const states = [], refs = [], effects = [], scheduled = [], requests = [];
+  let stateIndex, refIndex, effectIndex;
+  let selectedEvent = first, userId = identity.user.userId;
+  let expired = 0, refreshed = 0;
+  const isCurrentEvent = (user, eventId) => userId === user && selectedEvent?.event_id === eventId;
+  class EventSessionError extends Error {}
+  class EventMembersError extends Error {
+    constructor(status, message) { super(message); this.status = status; }
+  }
+  const pageComponents = loadModule("../src/components/page.tsx", {
+    "react/jsx-runtime": jsxRuntime, "../routes/navigation": navigation, "./ui": ui,
+  });
+  const { CoPlanners } = loadModule("../src/features/collaboration/CoPlanners.tsx", {
+    "react/jsx-runtime": jsxRuntime,
+    react: {
+      useState: initial => {
+        const index = stateIndex++;
+        if (!(index in states)) states[index] = initial;
+        return [states[index], value => { states[index] = typeof value === "function" ? value(states[index]) : value; }];
+      },
+      useRef: initial => { const index = refIndex++; return refs[index] ??= { current: initial }; },
+      useEffect: (callback, deps) => {
+        const index = effectIndex++;
+        if (!effects[index] || deps.some((dep, i) => dep !== effects[index].deps[i])) scheduled.push(() => {
+          effects[index]?.cleanup?.();
+          effects[index] = { deps, cleanup: callback() };
+        });
+      },
+    },
+    "../../components/page": pageComponents, "../../components/ui": ui,
+    "../../utils/dateFormat": loadModule("../src/utils/dateFormat.ts", {}),
+    "../events/eventPresentation": presentation,
+    "../events/EventsContext": { useEvents: () => ({
+      selectedEvent, userId, status: "ready", isCurrentEvent,
+      expireSession: () => { expired++; }, refresh: () => { refreshed++; },
+    }) },
+    "../events/services/eventApi": { EventSessionError },
+    "./collaborationApi": {
+      EventMembersError,
+      listEventMembers: (id, user, signal) => new Promise((resolve, reject) => requests.push({ id, user, signal, resolve, reject })),
+    },
+  });
+  const render = () => {
+    stateIndex = refIndex = effectIndex = 0;
+    const tree = CoPlanners();
+    for (const effect of scheduled.splice(0)) effect();
+    return tree;
+  };
+  try {
+    await run({
+      render, html: () => renderToStaticMarkup(render()), requests, EventSessionError, EventMembersError,
+      select: (event, user = userId) => { selectedEvent = event; userId = user; },
+      settle: () => new Promise(resolve => setImmediate(resolve)),
+      expired: () => expired, refreshed: () => refreshed,
+    });
+  } finally { effects.forEach(effect => effect.cleanup?.()); }
+}
+
+test("More links to Co-planners and both roles see the live roster with You marking the caller", async () => {
+  assert.equal(navigation.navGroups.find(group => group.label === "More").items.find(item => item.id === "coplanners").label, "Co-planners");
+  assert.equal(navigation.pagePath("coplanners"), "/app/coplanners");
+  await withRosterPage(async ({ html, requests, select, settle }) => {
+    assert.match(html(), /Loading event members/);
+    requests[0].resolve([member, coPlanner]);
+    await settle();
+    assert.match(html(), /Manage the people helping plan your event\./);
+    assert.match(html(), /<b>Owner<\/b><p>You · Joined/);
+    assert.match(html(), /Co-planner — Member #2/);
+    select(second);
+    const loading = html();
+    assert.match(loading, /Loading event members/);
+    assert.doesNotMatch(loading, /Member #2/);
+    assert.equal(requests[0].signal.aborted, true);
+    assert.equal(requests[1].id, second.event_id);
+    requests[1].resolve([{ ...member, is_self: false }, { ...coPlanner, is_self: true }]);
+    await settle();
+    const roster = html();
+    assert.match(roster, /<b>Co-planner<\/b><p>You · Joined.*Nov 21, 2026/);
+    assert.match(roster, new RegExp(`Owner — Member #${member.member_id}`));
+    assert.doesNotMatch(roster, /Maya Bennett|Eli Carter|Jessica Wu|example\.com|Full access|Guest manager|Invite co-planner|Revoke|Remove/);
+  });
+});
+
+test("roster supports retry, empty and denied states, and the shared expired-session flow", async () => {
+  await withRosterPage(async ({ html, render, requests, select, settle, EventMembersError, EventSessionError, expired, refreshed }) => {
+    select(null);
+    assert.match(html(), /Select an event/);
+    assert.equal(requests.length, 0);
+    select(first);
+    html();
+    requests[0].reject(new Error("private error"));
+    await settle();
+    assert.match(html(), /Unable to load event members/);
+    assert.match(html(), /Try again/);
+    render().props.children[1].props.onRetry();
+    assert.match(html(), /Loading event members/);
+    requests[1].resolve([]);
+    await settle();
+    assert.match(html(), /No members yet/);
+    select(second);
+    html();
+    requests[2].reject(new EventMembersError(403, "You no longer have access to this event."));
+    await settle();
+    assert.match(html(), /Event access unavailable/);
+    assert.doesNotMatch(html(), /Try again/);
+    render().props.children[1].props.children.props.action.props.onClick();
+    assert.equal(refreshed(), 1);
+    select(first);
+    html();
+    requests[3].reject(new EventSessionError("Please sign in again."));
+    await settle();
+    assert.equal(expired(), 1);
+  });
+});
+
+test("roster ignores an old response after switching events or accounts", async () => {
+  await withRosterPage(async ({ html, requests, select, settle, EventSessionError, expired }) => {
+    html();
+    select(second);
+    html();
+    requests[1].resolve([{ ...coPlanner, is_self: true }]);
+    await settle();
+    requests[0].resolve([member]);
+    await settle();
+    assert.match(html(), /Co-planner/);
+    assert.doesNotMatch(html(), /Owner/);
+    select(first);
+    html();
+    select(first, "user-b");
+    assert.match(html(), /Loading event members/);
+    assert.equal(requests[3].user, "user-b");
+    requests[2].reject(new EventSessionError());
+    await settle();
+    assert.equal(expired(), 0);
+    assert.match(html(), /Loading event members/);
+  });
+});
+
 test("the existing switcher and profile show the selected event's name and actual role", () => {
   let state = { events: [first, second], selectedEvent: second, eventDetails: second, detailsStatus: "ready", status: "ready", selectEvent: () => {} };
   const layout = loadModule("../src/components/layout.tsx", {
@@ -351,10 +541,13 @@ test("event workspace renders loading, empty, retry, and unavailable states inst
   assert.match(render(), /Try again/);
   state = { ...state, status: "ready" };
   assert.match(render(), /LIVE CONTENT/);
-  // Guests is connected to its API; unconnected sections still hide sample data.
+  // Connected pages receive the workspace; unconnected sections still hide sample data.
   assert.match(render("guests"), /LIVE CONTENT/);
-  assert.match(render("coplanners"), /not available for this event/);
-  assert.doesNotMatch(render("coplanners"), /LIVE CONTENT/);
+  assert.match(render("coplanners"), /LIVE CONTENT/);
+  assert.match(render("tasks"), /not available for this event/);
+  state = { ...state, status: "empty" };
+  assert.match(render("coplanners"), /LIVE CONTENT/);
+  state = { ...state, status: "ready" };
   assert.doesNotMatch(render("expenses"), /Preview: sample expenses/);
   assert.match(render("expenses"), /LIVE CONTENT/);
   // Vendors are live API data: no sample-data notice.

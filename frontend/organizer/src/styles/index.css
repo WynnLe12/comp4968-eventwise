@@ -2354,7 +2354,7 @@
 
 .person-row {
   display: grid;
-  grid-template-columns: 38px 1fr 140px 35px;
+  grid-template-columns: 38px minmax(0, 1fr);
   gap: 12px;
   align-items: center;
   padding: 14px 0;
@@ -3867,10 +3867,6 @@
 
   .photo-grid {
     grid-template-columns: repeat(2, 1fr);
-  }
-
-  .person-row {
-    grid-template-columns: 38px 1fr 35px;
   }
 
   .person-row select {

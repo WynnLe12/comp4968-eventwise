@@ -34,7 +34,7 @@ export function EventWorkspace({
         />
       </div>
     );
-  if (status === "empty")
+  if (status === "empty" && page !== "coplanners")
     return (
       <EmptyState
         title="No events yet"
@@ -89,7 +89,8 @@ export function EventWorkspace({
     page !== "budget" &&
     page !== "guests" &&
     page !== "vendors" &&
-    page !== "expenses"
+    page !== "expenses" &&
+    page !== "coplanners"
   )
     return (
       <>
