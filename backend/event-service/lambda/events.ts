@@ -6,7 +6,9 @@ import { listEventMembersHandler } from "../handlers/listEventMembersHandler";
 import { getEventHandler } from "../handlers/getEventHandler";
 import { updateEventHandler } from "../handlers/updateEventHandler";
 import { deleteEventHandler } from "../handlers/deleteEventHandler";
+import { eventInvitationHandler, type InvitationOperations } from "../handlers/eventInvitationHandler";
 import { EventService } from "../services/eventService";
+import { InvitationService } from "../services/invitationService";
 
 /** The REST API proxy-v1 fields consumed here; no HTTP API v2 fallback. */
 export interface EventsProxyEvent {
@@ -31,6 +33,7 @@ export interface EventsProxyResponse {
 export type EventsService = Pick<EventService, "list" | "getById" | "create" | "update" | "delete" | "listMembers">;
 export interface EventsLambdaDependencies {
   service?: EventsService;
+  invitations?: InvitationOperations;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -71,6 +74,7 @@ function requestFrom(event: EventsProxyEvent): IncomingMessage {
 export function createEventsHandler(dependencies: EventsLambdaDependencies = {}) {
   const env = dependencies.env ?? process.env;
   const service = dependencies.service ?? new EventService();
+  const invitations = dependencies.invitations ?? new InvitationService(undefined, env);
   return async (event: EventsProxyEvent): Promise<EventsProxyResponse> => {
     const headers: Record<string, string> = {};
     if (env.EVENTS_CORS_ORIGIN) {
@@ -86,18 +90,30 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
       return result;
     };
     const membersMatch = /^\/events\/([^/]+)\/members$/.exec(event.path);
-    const match = membersMatch ?? /^\/events\/([^/]+)$/.exec(event.path);
+    const invitationsMatch = /^\/events\/([^/]+)\/invitations(?:\/([^/]+))?$/.exec(event.path);
+    const invitationId = invitationsMatch?.[2];
+    const match = membersMatch ?? invitationsMatch ?? /^\/events\/([^/]+)$/.exec(event.path);
     const collection = event.path === "/events";
-    const expectedResource = collection ? "/events" : membersMatch ? "/events/{eventId}/members" : "/events/{eventId}";
+    let expectedResource = collection ? "/events" : "/events/{eventId}";
+    let supported = collection ? ["GET", "POST"] : ["GET", "PATCH", "DELETE"];
+    if (membersMatch) {
+      expectedResource += "/members";
+      supported = ["GET"];
+    } else if (invitationsMatch) {
+      expectedResource += invitationId === undefined ? "/invitations" : "/invitations/{invitationId}";
+      supported = invitationId === undefined ? ["GET", "POST"] : ["DELETE"];
+    }
     const parameterId = event.pathParameters?.eventId;
     if ((!collection && !match) ||
         (event.resource !== undefined && event.resource !== expectedResource) ||
         (match && parameterId !== undefined && parameterId !== match[1]) ||
-        (membersMatch && event.pathParameters != null && parameterId === undefined)) {
+        ((membersMatch || invitationsMatch) && event.pathParameters != null && parameterId === undefined) ||
+        (invitationsMatch && event.pathParameters != null &&
+          (event.pathParameters.invitationId !== invitationId ||
+            Object.keys(event.pathParameters).length !== (invitationId === undefined ? 1 : 2)))) {
       return json(404, "Not found");
     }
     if (event.httpMethod === "OPTIONS") { result.statusCode = 204; return result; }
-    const supported = collection ? ["GET", "POST"] : membersMatch ? ["GET"] : ["GET", "PATCH", "DELETE"];
     if (!supported.includes(event.httpMethod)) return json(404, "Not found");
 
     // Capture exactly the writeHead/end operations used by the existing handlers.
@@ -118,7 +134,7 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
       };
       // Require secret mode for the deployed service; never fall back to .env credentials.
       // Injected services are used by isolated tests and need no database configuration.
-      if (!dependencies.service) {
+      if (invitationsMatch ? !dependencies.invitations : !dependencies.service) {
         try { verifiedSubject(event, env); } catch { return json(401, "Invalid or expired authentication token"); }
         if (!env.DB_SECRET_ARN?.trim() || !env.DB_HOST?.trim() || !env.DB_NAME?.trim() || env.DYNAMODB_ENDPOINT) {
           console.error("Events Lambda requires RDS secret configuration and the AWS DynamoDB endpoint");
@@ -128,7 +144,8 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
       // The narrow response assertion is the only transport shim. Body parsing,
       // validation, serialization, status mapping and authorization stay in handlers.
       const output = response as unknown as ServerResponse;
-      if (collection && event.httpMethod === "GET") await listEventsHandler(options)(request, output);
+      if (invitationsMatch) await eventInvitationHandler({ ...options, invitations })(request, output, invitationsMatch[1], invitationId);
+      else if (collection && event.httpMethod === "GET") await listEventsHandler(options)(request, output);
       else if (collection) await createEventHandler(options)(request, output);
       else if (membersMatch) await listEventMembersHandler(options)(request, output, membersMatch[1]);
       else if (event.httpMethod === "GET") await getEventHandler(options)(request, output, match![1]);

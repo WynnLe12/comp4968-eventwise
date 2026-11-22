@@ -2,7 +2,7 @@
 
 Target function: **`eventwise-events`**. Handler: **`event-service/lambda/events.handler`**.
 
-This document describes a later deployment to the existing EventWise REST API, RDS instance `eventwise-db` (database `eventwise`), Secrets Manager secret and EventWise VPC. Implementation/build/tests do not create resources, import schema, seed data, or deploy anything. Existing guest and template integrations remain unchanged.
+This document describes a later deployment to the existing EventWise REST API, RDS instance `eventwise-db` (database `eventwise`), Secrets Manager secret and EventWise VPC. Feature 2.2 has not been deployed to AWS. Its database tests use disposable local MySQL.
 
 ## Routes and implementation
 
@@ -14,6 +14,9 @@ This document describes a later deployment to the existing EventWise REST API, R
 | `/events/{eventId}` | PATCH | updateEventHandler | 200 direct updated event with role |
 | `/events/{eventId}` | DELETE | deleteEventHandler | 204 empty body |
 | `/events/{eventId}/members` | GET | listEventMembersHandler | 200 direct member roster |
+| `/events/{eventId}/invitations` | POST | eventInvitationHandler | 201 pending invitation with acceptance URL |
+| `/events/{eventId}/invitations` | GET | eventInvitationHandler | 200 direct array of active pending invitations |
+| `/events/{eventId}/invitations/{invitationId}` | DELETE | eventInvitationHandler | 204 empty body |
 
 Use **REST API Lambda proxy integration (`AWS_PROXY`, payload v1)** for these exact methods. The integration's invocation method is POST regardless of the public HTTP method. No mapping template or HTTP API v2 adapter is needed. `event.path` is the application path without the external stage prefix; optional resource/path-parameter metadata must agree. Literal `/events/`, unsupported methods, nested budget/guest routes and unknown paths retain 404. No catch-all `ANY /{proxy+}` integration is introduced. [AWS REST proxy contract](https://docs.aws.amazon.com/apigateway/latest/developerguide/set-up-lambda-proxy-integrations.html).
 
@@ -59,11 +62,101 @@ The owner sorts first, then co-planners sort by join time and numeric member ID.
 
 Lambda errors use `{"error":"…"}`. The application database account needs `SELECT` on the existing `event_members` table. No schema migration is required. AWS deployment of Feature 2.1 has not been performed. In a later approved deployment, add the explicit GET method on `/events/{eventId}/members` to the existing Events Lambda proxy integration, with the Cognito authorizer and an unauthenticated OPTIONS method for browser preflight.
 
+## Manage co-planner invitations
+
+Send the existing `Authorization: Bearer <access-token>` header on all three methods. The handler uses the verified Cognito subject and requires the caller's exact subject to have the `OWNER` role on the requested event. Missing events, co-planners and unrelated callers receive `403`. Client-supplied identity and role have no authority. IDs are unsigned BIGINT strings.
+
+### Create
+
+```http
+POST /events/42/invitations
+Authorization: Bearer <access-token>
+Content-Type: application/json
+
+{"email":"planner@example.com"}
+```
+
+`201 Created` with `Cache-Control: no-store`.
+
+```json
+{
+  "invitation_id": "12",
+  "email": "planner@example.com",
+  "status": "PENDING",
+  "expires_at": "2026-11-24T12:00:00.000Z",
+  "created_at": "2026-11-22T12:00:00.000Z",
+  "acceptance_url": "https://organizer.example/accept-invitation#token=<token>"
+}
+```
+
+The server trims surrounding whitespace and lowercases the entire address. Version 1 accepts ASCII dot-atom mailboxes with DNS-style domains, including punycode domains. It preserves plus tags and dots. This is the invitation comparison rule and must be reviewed against the intended Cognito email policy before implementing acceptance. MySQL supplies the UTC creation/expiry clock and sets expiry 48 hours after creation. The Lambda generates 32 random bytes, base64url-encodes them, and stores only the SHA-256 hex digest of that encoded token. The link is returned once and no email is sent. The acceptance page belongs to a later feature.
+
+An existing unexpired pending invitation for the same event and normalized email returns `409`. A new create may replace a revoked invitation or mark an elapsed pending invitation `EXPIRED` and create its replacement within the same transaction. History stays in the table. If the original link is lost, revoke the pending invitation and create a fresh one.
+
+### List and revoke
+
+```http
+GET /events/42/invitations
+Authorization: Bearer <access-token>
+```
+
+```json
+[
+  {
+    "invitation_id": "12",
+    "email": "planner@example.com",
+    "status": "PENDING",
+    "expires_at": "2026-11-24T12:00:00.000Z",
+    "created_at": "2026-11-22T12:00:00.000Z"
+  }
+]
+```
+
+GET returns `200`, ordered newest first, or `[]`. It filters out elapsed invitations even while their stored status is `PENDING`. Lists contain neither tokens, hashes nor links.
+
+```http
+DELETE /events/42/invitations/12
+Authorization: Bearer <access-token>
+```
+
+DELETE returns empty `204` after changing active `PENDING` to `REVOKED`, or if the same invitation is already revoked. An ID outside the selected event returns `404`. Accepted, expired, or elapsed-pending invitations return `409`. The event lock precedes invitation writes. Revocation preserves the row and every event membership.
+
+Other errors use the existing Lambda JSON envelope `{"error":"…"}`. Invalid IDs, email or JSON return `400`. Missing or invalid authentication returns `401`. Unsupported route metadata returns `404`. The shared JSON parser returns `413` for oversized bodies and `415` for unsupported content types. Unexpected failures return a generic `500`.
+
+### Schema and migration preflight
+
+Fresh local databases use the updated bootstrap schema. Existing databases with `event_invitations` require `database/mysql/migrations/002_pending_event_invitations.sql` before enabling the new methods. Confirm the target schema version and table first. Migration 002 adds a generated pending-email key, a composite unique index, and an index for active invites. It does not alter membership rows. The generated key covers every stored `PENDING` row because time-dependent expressions cannot maintain the index as time passes.
+
+Pause invitation writers. Inspect elapsed pending rows and active duplicate groups in the intended database before applying the migration.
+
+```sql
+SELECT event_id, COUNT(*) AS elapsed_pending
+FROM event_invitations
+WHERE status = 'PENDING' AND expires_at <= UTC_TIMESTAMP()
+GROUP BY event_id;
+
+SELECT event_id, COUNT(*) AS active_pending
+FROM event_invitations
+WHERE status = 'PENDING' AND expires_at > UTC_TIMESTAMP()
+GROUP BY event_id, LOWER(TRIM(email)) COLLATE utf8mb4_bin
+HAVING COUNT(*) > 1;
+```
+
+With the database owner’s approval, mark elapsed pending rows `EXPIRED` using the preflight predicate. If active duplicates exist, have the event owner or data owner identify the link to retain and explicitly revoke the other IDs. Preserve the rows and record the decisions. Recheck all stored pending groups using the same normalization before applying 002. The additive ALTER fails if duplicates remain and does not select a winner. Verify the indexes after the ALTER. MySQL DDL commits implicitly. The application SQL account needs `SELECT` on `events` and `event_members` and `SELECT`, `INSERT`, and `UPDATE` on `event_invitations`.
+
+### Configuration and local verification
+
+Set `EVENTS_ORGANIZER_ORIGIN` to the intended organizer HTTPS origin, optionally with a trailing slash. Credentials, paths, queries and fragments are invalid. This setting is separate from `EVENTS_CORS_ORIGIN`. A missing or invalid origin fails creation before writing an invitation.
+
+Run `npm --prefix backend run typecheck` and `npm --prefix backend test` for the Lambda fixtures and MVP regressions. To include MySQL integration tests, point every `DB_*` setting at an isolated local MySQL 8.0 database with the updated bootstrap schema or migration 002 applied, leave Secrets Manager mode disabled, set `EVENTWISE_MYSQL_TEST=1`, and rerun the test command. The invitation suite covers concurrency, hash persistence, role and event isolation, expiry, revoke and rollback. The local HTTP server needs no new route for these tests because they invoke the Lambda adapter directly.
+
+For later deployment, configure the three explicit Gateway methods above on the Events REST proxy v1 integration and the existing scoped Cognito authorizer. Add unauthenticated `OPTIONS` to both invitation resources using the existing CORS pattern. Keep Gateway caching and request/response body tracing disabled for these routes, especially POST, which returns the private link. Verify the new routes through the approved stage before connecting the frontend.
+
 ## Cognito access-token authorizer configuration
 
 The organizer currently sends `Authorization: Bearer <access token>`. Keep that client behavior.
 
-1. On the **six authenticated Events methods**, select a `COGNITO_USER_POOLS` authorizer for the existing intended pool, with token source `Authorization`. Reuse an existing compatible authorizer or configure an Events-specific one later; do not change the guest methods or their authorizer.
+1. On the authenticated Events methods in the routes table, select a `COGNITO_USER_POOLS` authorizer for the existing intended pool, with token source `Authorization`. Reuse an existing compatible authorizer or configure an Events-specific one later; do not change the guest methods or their authorizer.
 2. **Set nonempty method Authorization Scopes** to a scope actually present in current frontend access tokens. For the existing Amplify username/password (Cognito API) sign-in flow, the compatibility scope is normally `aws.cognito.signin.user.admin`. Confirm that the actual sign-in token contains it, then use that scope on the authenticated Events methods. It is an access-token compatibility gate; SQL membership and OWNER checks remain the application permissions. Do not require newly invented custom scopes that current sign-in cannot issue.
 3. Do not configure the authorizer's optional Token validation/audience regular expression for ID-token `aud`; access tokens use `client_id` and may lack that audience. Empty method scopes select ID-token behavior, which is incompatible with this adapter. If the team already issues custom API scopes, retain the applicable existing scope instead of changing the frontend flow. [AWS method scope and validation configuration](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-enable-cognito-user-pool.html).
 4. Gateway performs signature, expiry, issuer and method-scope authorization. Lambda accepts identity **only** from `requestContext.authorizer.claims.sub`, checks a nonblank string of at most 128 characters, and additionally requires `token_use=access`, `client_id=COGNITO_CLIENT_ID`, and the issuer matching `COGNITO_USER_POOL_ID`. ID tokens, missing context, wrong client/pool, flat principalId and client-provided IDs are rejected. Claims are not independently signature-verified in this Lambda: the authenticated Gateway integration is the trust boundary.
@@ -84,6 +177,7 @@ No Cognito API calls or JWKS downloads occur in the Events Lambda authorizer pat
 | `COGNITO_CLIENT_ID` | Existing organizer app client ID; used to check authorizer client_id |
 | `GUESTS_TABLE_NAME` | Exact existing guest table, normally `EventWise_Guests`; set explicitly to avoid environment mixups |
 | `EVENTS_CORS_ORIGIN` | Exact organizer origin, e.g. `https://<branch>.<app>.amplifyapp.com`; omit for same-origin access |
+| `EVENTS_ORGANIZER_ORIGIN` | Explicit organizer HTTPS origin used for invitation links. Required for invitation creation. |
 | `DB_CONNECTION_LIMIT` | Start conservatively, e.g. `2`; size against reserved concurrency and database connection budget (existing default 5) |
 | `DB_CONNECT_TIMEOUT_MS` | Optional; existing default 10000 |
 | `DB_SSL_CA_FILE` | Optional override; packaged default resolves to `/var/task/certs/rds-ca.pem` |
@@ -158,8 +252,8 @@ No local .env, SQL schema/seeds, server.ts/server.js listener, test directory, d
 
 1. Record/export the current API configuration and integration IDs; confirm the existing RDS endpoint, secret ARN, VPC/subnets/SGs and table ARN. Coordinate with the resource owner. Preserve current guest/template resources, authorizers and integrations; do not import a replacement whole-API specification.
 2. Create/update only the approved `eventwise-events` deployment with the ZIP, handler path above, supported Node.js runtime compatible with Node >=22.12 (e.g. Node.js 22), role, VPC attachment and environment. Start with conservative concurrency, measured memory/timeout, log retention and a version/alias rollback target. Do not run migrations or seeds.
-3. Use REST proxy integration and the access-token authorizer/scopes described above for the Events methods in the routes table. For Feature 2.1, add GET `/events/{eventId}/members` to the existing Events Lambda integration. Leave existing methods and other integrations in place.
-4. Configure unauthenticated OPTIONS on the Events resources (Lambda proxy to this handler or equivalent mock integration), including the new members resource. Set EVENTS_CORS_ORIGIN for cross-origin requests; the adapter adds headers to success/error responses and returns 204 for OPTIONS without auth/DB calls. Verify existing Gateway-generated 401/403/5xx CORS behavior with the cloud owner; global GatewayResponse changes affect other routes and must not be changed as a side effect of this Events deployment.
+3. Use REST proxy integration and the access-token authorizer/scopes described above for the Events methods in the routes table. Add the members method and, once the separately approved schema migration is verified, the three invitation methods. Leave existing methods and other integrations in place.
+4. Configure unauthenticated OPTIONS on newly added Events resources (Lambda proxy to this handler or equivalent mock integration). Set EVENTS_CORS_ORIGIN for cross-origin requests. The adapter adds headers to success/error responses and returns 204 for OPTIONS without auth/DB calls. Verify existing Gateway-generated 401/403/5xx CORS behavior with the cloud owner before relying on cross-origin requests.
 5. Deploy the existing REST API to the approved stage after review. Confirm frontend event API base URL includes the stage and that Authorization/Content-Type preflight succeeds. Do not change guest API URL or its methods.
 6. Later staging smoke tests: list scoped to caller, create/template category initialization, detail, owner PATCH, co-planner/unrelated denial, malformed requests, expired/wrong-client tokens, and OWNER DELETE using disposable event/guest fixtures. Verify actual RDS persistence and DynamoDB record removal. Test cleanup failure only in an isolated environment; preserve current 204 semantics.
 7. Compare guest route integrations before/after and run the guest owner's agreed regression checks. Roll back Events integration/alias independently if necessary. Rollback does not undo committed event deletions or recreate guests.

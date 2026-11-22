@@ -151,6 +151,10 @@ CREATE TABLE event_invitations (
  expires_at DATETIME NOT NULL,
  accepted_at DATETIME NULL,
  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ pending_email VARCHAR(254) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
+   GENERATED ALWAYS AS (CASE WHEN status = 'PENDING' THEN LOWER(TRIM(email)) END) VIRTUAL,
+ UNIQUE KEY uq_invite_pending_email (event_id, pending_email),
+ KEY idx_invite_active (event_id, status, expires_at),
  KEY idx_invite_event (event_id),
  CONSTRAINT fk_invite_event FOREIGN KEY (event_id) REFERENCES events(event_id) ON DELETE CASCADE
 );
