@@ -2374,6 +2374,15 @@
   font-weight: 700;
 }
 
+.collaboration-invitations {
+  margin-top: 18px;
+}
+
+.collaboration-action-row {
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  overflow-wrap: anywhere;
+}
+
 .person-row>div b {
   font-size: 10.5px;
 }

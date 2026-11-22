@@ -8,6 +8,7 @@ import { LoadingState } from "./components/page";
 import { PublicApp } from "./features/auth/PublicPage";
 import { EventsProvider, useEvents } from "./features/events/EventsContext";
 import { EventWorkspace } from "./features/events/EventWorkspace";
+import { AcceptInvitation, invitationAcceptancePath } from "./features/collaboration/AcceptInvitation";
 import { pagePath } from "./routes/navigation";
 import type { Page, PublicPage } from "./types";
 
@@ -116,6 +117,7 @@ export default function App() {
   const [toast, setToast] = useState<{ message: string; tone: ToastTone } | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const go = (page: Page) => navigate(pagePath(page));
 
   const onEventSessionExpired = useCallback(async () => {
@@ -211,7 +213,7 @@ export default function App() {
     }
   };
 
-  const signOut = async () => {
+  const signOut = async (destination: "/" | null) => {
     if (signOutPending.current) return;
     signOutPending.current = true;
     ++sessionVersion.current;
@@ -221,7 +223,7 @@ export default function App() {
       setAuthenticated(false);
       setModal(null);
       setToast(null);
-      navigate("/");
+      if (destination) navigate(destination);
     } catch (error) {
       setToast({ message: `Sign out failed. ${authErrorMessage(error)}`, tone: "error" });
     } finally {
@@ -231,11 +233,17 @@ export default function App() {
     }
   };
 
-  if (checkingSession || signingOut) return <LoadingState label={signingOut ? "Signing out?" : "Checking your session?"} />;
+  if ((checkingSession || signingOut) && pathname !== invitationAcceptancePath) {
+    return <LoadingState label={signingOut ? "Signing out?" : "Checking your session?"} />;
+  }
 
   return (
     <>
       <Routes>
+        <Route path={invitationAcceptancePath} element={<AcceptInvitation
+          authenticated={authenticated} checkingSession={checkingSession || signingOut}
+          onAuthenticated={() => void refreshSession()} onSwitchAccount={() => void signOut(null)}
+        />} />
         <Route path="/" element={<PublicRoute authenticated={authenticated} page="landing" onAuthenticated={enterWorkspace} />} />
         <Route path="/login" element={<PublicRoute authenticated={authenticated} page="login" onAuthenticated={enterWorkspace} />} />
         <Route path="/signup" element={<PublicRoute authenticated={authenticated} page="signup" onAuthenticated={enterWorkspace} />} />
@@ -247,7 +255,7 @@ export default function App() {
         <Route
           path="/app"
           element={
-            authenticated ? <WorkspaceLayout onSignOut={signOut} onSessionExpired={onEventSessionExpired}
+            authenticated ? <WorkspaceLayout onSignOut={() => void signOut("/")} onSessionExpired={onEventSessionExpired}
               onEventDeleted={() => notify("Event deleted successfully.")} /> : <Navigate to="/login" replace />
           }
         >

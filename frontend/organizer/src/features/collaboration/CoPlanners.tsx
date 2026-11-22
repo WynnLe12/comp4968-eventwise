@@ -6,11 +6,35 @@ import { eventRole } from "../events/eventPresentation";
 import { useEvents } from "../events/EventsContext";
 import { EventSessionError } from "../events/services/eventApi";
 import { EventMembersError, listEventMembers, type EventMember } from "./collaborationApi";
+import { OwnerCoPlanners } from "./OwnerCoPlanners";
 
 type RosterState = { userId: string; eventId: string } & (
   | { members: EventMember[] }
   | { error: string; denied: boolean }
 );
+
+function roster(members: EventMember[], onRemove?: (member: EventMember) => void) {
+  if (!members.length) return <EmptyState title="No members yet" message="There are no members to display for this event." icon="users" />;
+  return <Card>
+    <div className="card-head"><div><h3>Planning team</h3></div></div>
+    <ul className="people-list" role="list">
+      {members.map(member => {
+        const canRemove = onRemove && member.role === "CO_PLANNER" && !member.is_self;
+        return <li className={canRemove ? "person-row collaboration-action-row" : "person-row"} key={member.member_id}>
+          <span><Icon name="users" size={16} /></span>
+          <div>
+            <b>{eventRole(member.role)}{!member.is_self && ` — Member #${member.member_id}`}</b>
+            <p>
+              {member.is_self && "You · "}
+              Joined <time dateTime={member.joined_at}>{formatCalendarDate(member.joined_at.slice(0, 10))}</time>
+            </p>
+          </div>
+          {canRemove && <Button variant="ghost" onClick={() => onRemove(member)}>Remove</Button>}
+        </li>;
+      })}
+    </ul>
+  </Card>;
+}
 
 export function CoPlanners() {
   const { selectedEvent, userId, status, openCreate, refresh, expireSession, isCurrentEvent } = useEvents();
@@ -63,26 +87,14 @@ export function CoPlanners() {
           setState(null);
           setRetry(value => value + 1);
         }} />;
-  } else if (!current.members.length) {
-    content = <EmptyState title="No members yet" message="There are no members to display for this event." icon="users" />;
   } else {
-    content = <Card>
-      <div className="card-head"><div><h3>Planning team</h3></div></div>
-      <ul className="people-list" role="list">
-        {current.members.map(member => (
-          <li className="person-row" key={member.member_id}>
-            <span><Icon name="users" size={16} /></span>
-            <div>
-              <b>{eventRole(member.role)}{!member.is_self && ` — Member #${member.member_id}`}</b>
-              <p>
-                {member.is_self && "You · "}
-                Joined <time dateTime={member.joined_at}>{formatCalendarDate(member.joined_at.slice(0, 10))}</time>
-              </p>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </Card>;
+    if (current.members.some(member => member.is_self && member.role === "OWNER")) {
+      return <OwnerCoPlanners key={JSON.stringify([userId, eventId])} eventId={eventId} userId={userId}
+        isCurrentEvent={isCurrentEvent} onSessionExpired={() => sessionExpired.current()}
+        onRosterChange={() => { setState(null); setRetry(value => value + 1); }}
+        renderRoster={onRemove => roster(current.members, onRemove)} />;
+    }
+    content = roster(current.members);
   }
 
   return <><PageHeader page="coplanners" />{content}</>;

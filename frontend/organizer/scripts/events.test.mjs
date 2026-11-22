@@ -361,6 +361,68 @@ test("roster API rejects unauthorized, invalid, or wrong-account responses and a
   }, { getCurrentUser: async () => ({ userId: "user-b" }) });
 });
 
+const inviteToken = Buffer.alloc(32, 11).toString("base64url");
+const pendingInvite = {
+  invitation_id: "9007199254740995", email: "planner@example.com", status: "PENDING",
+  expires_at: "2026-11-23T10:00:00.000Z", created_at: "2026-11-21T10:00:00.000Z",
+};
+const createdInvite = { ...pendingInvite, acceptance_url: `https://organizer.example/accept-invitation#token=${inviteToken}` };
+
+test("collaboration API uses the owner invitation, member removal and acceptance contracts", async () => {
+  const paths = [];
+  const user = identity.user.userId;
+  const { event_id: event } = first;
+  await withCollaborationApi(async (url, options) => {
+    assert.equal(options.headers.Authorization, "Bearer access-token-a");
+    paths.push([options.method ?? "GET", url, options.body ? JSON.parse(options.body) : null]);
+    if (options.method === "DELETE") return new Response(null, { status: 204 });
+    if (url.endsWith("/accept")) return Response.json({ event_id: event, member_id: coPlanner.member_id, role: "CO_PLANNER" });
+    if (options.method === "POST") {
+      assert.equal(options.headers["Content-Type"], "application/json");
+      return Response.json(createdInvite, { status: 201 });
+    }
+    return Response.json([{ ...createdInvite, token_hash: "private" }]);
+  }, async api => {
+    assert.deepEqual(await api.listPendingInvitations(event, user), [pendingInvite]);
+    assert.deepEqual(await api.createInvitation(event, user, ` ${pendingInvite.email} `), createdInvite);
+    await api.revokeInvitation(event, pendingInvite.invitation_id, user);
+    await api.removeEventMember(event, coPlanner.member_id, user);
+    assert.deepEqual(await api.acceptInvitation(inviteToken), { userId: user, event_id: event, member_id: coPlanner.member_id, role: "CO_PLANNER" });
+  });
+  assert.deepEqual(paths, [
+    ["GET", `/api/events/${event}/invitations`, null],
+    ["POST", `/api/events/${event}/invitations`, { email: pendingInvite.email }],
+    ["DELETE", `/api/events/${event}/invitations/${pendingInvite.invitation_id}`, null],
+    ["DELETE", `/api/events/${event}/members/${coPlanner.member_id}`, null],
+    ["POST", "/api/event-invitations/accept", { token: inviteToken }],
+  ]);
+});
+
+test("collaboration API maps safe action errors and rejects unsafe links and malformed tokens", async () => {
+  for (const [status, message] of [[400, /valid email/], [401, /session has expired/], [403, /event owner/], [409, /already exists/]]) {
+    await withCollaborationApi(async () => new Response("private", { status }), async api => {
+      await assert.rejects(api.createInvitation(first.event_id, identity.user.userId, pendingInvite.email), message);
+    });
+  }
+  for (const [status, message] of [[403, /verified email/], [404, /not be found/], [409, /already accepted/], [410, /expired or been revoked/], [503, /temporarily unavailable/]]) {
+    await withCollaborationApi(async () => new Response("private", { status }), async api => {
+      await assert.rejects(api.acceptInvitation(inviteToken), message);
+    });
+  }
+  await withCollaborationApi(async () => { throw new Error("private network detail"); }, async api => {
+    await assert.rejects(api.createInvitation(first.event_id, identity.user.userId, pendingInvite.email), /Unable to create/);
+  });
+  await withCollaborationApi(async () => assert.fail("Malformed tokens must not be sent"), async api => {
+    await assert.rejects(api.acceptInvitation("malformed"), /invalid/);
+  });
+  for (const acceptance_url of ["javascript:alert(1)", "http://organizer.example/accept-invitation#token=" + inviteToken,
+    "https://organizer.example/accept-invitation?token=" + inviteToken]) {
+    await withCollaborationApi(async () => Response.json({ ...createdInvite, acceptance_url }, { status: 201 }), async api => {
+      await assert.rejects(api.createInvitation(first.event_id, identity.user.userId, pendingInvite.email), { status: 502 });
+    });
+  }
+});
+
 async function withRosterPage(run) {
   const states = [], refs = [], effects = [], scheduled = [], requests = [];
   let stateIndex, refIndex, effectIndex;
@@ -399,6 +461,9 @@ async function withRosterPage(run) {
       expireSession: () => { expired++; }, refresh: () => { refreshed++; },
     }) },
     "../events/services/eventApi": { EventSessionError },
+    "./OwnerCoPlanners": { OwnerCoPlanners: ({ renderRoster }) => React.createElement(React.Fragment, null,
+      React.createElement(pageComponents.PageHeader, { page: "coplanners" }), renderRoster(() => {}),
+      "Pending invitations") },
     "./collaborationApi": {
       EventMembersError,
       listEventMembers: (id, user, signal) => new Promise((resolve, reject) => requests.push({ id, user, signal, resolve, reject })),
@@ -430,6 +495,7 @@ test("More links to Co-planners and both roles see the live roster with You mark
     assert.match(html(), /Manage the people helping plan your event\./);
     assert.match(html(), /<b>Owner<\/b><p>You · Joined/);
     assert.match(html(), /Co-planner — Member #2/);
+    assert.match(html(), /Pending invitations/);
     select(second);
     const loading = html();
     assert.match(loading, /Loading event members/);
@@ -441,7 +507,7 @@ test("More links to Co-planners and both roles see the live roster with You mark
     const roster = html();
     assert.match(roster, /<b>Co-planner<\/b><p>You · Joined.*Nov 21, 2026/);
     assert.match(roster, new RegExp(`Owner — Member #${member.member_id}`));
-    assert.doesNotMatch(roster, /Maya Bennett|Eli Carter|Jessica Wu|example\.com|Full access|Guest manager|Invite co-planner|Revoke|Remove/);
+    assert.doesNotMatch(roster, /Maya Bennett|Eli Carter|Jessica Wu|example\.com|Full access|Guest manager|Pending invitations|Invite co-planner|Revoke|Remove/);
   });
 });
 
@@ -498,6 +564,234 @@ test("roster ignores an old response after switching events or accounts", async 
     assert.equal(expired(), 0);
     assert.match(html(), /Loading event members/);
   });
+});
+
+function mountHooks() {
+  const states = [], refs = [], effects = [], scheduled = [];
+  let stateIndex, refIndex, effectIndex;
+  return {
+    react: {
+      useState: initial => {
+        const i = stateIndex++;
+        if (!(i in states)) states[i] = typeof initial === "function" ? initial() : initial;
+        return [states[i], value => { states[i] = typeof value === "function" ? value(states[i]) : value; }];
+      },
+      useRef: initial => { const i = refIndex++; return refs[i] ??= { current: initial }; },
+      useId: () => "invitation-form",
+      useEffect: (callback, deps) => {
+        const i = effectIndex++;
+        if (!effects[i] || deps.some((dep, index) => dep !== effects[i].deps[index])) scheduled.push(() => {
+          effects[i]?.cleanup?.();
+          effects[i] = { deps, cleanup: callback() };
+        });
+      },
+    },
+    render: component => {
+      stateIndex = refIndex = effectIndex = 0;
+      const result = component();
+      for (const effect of scheduled.splice(0)) effect();
+      return result;
+    },
+    unmount: () => effects.forEach(effect => effect.cleanup?.()),
+  };
+}
+
+function elementWith(tree, predicate) {
+  if (!React.isValidElement(tree)) return undefined;
+  if (predicate(tree)) return tree;
+  for (const child of React.Children.toArray(tree.props.children)) {
+    const match = elementWith(child, predicate);
+    if (match) return match;
+  }
+}
+
+const settleCollaboration = () => new Promise(resolve => setImmediate(resolve));
+
+function ownerPage() {
+  const hooks = mountHooks();
+  const requests = [];
+  let current = true, rosterChanges = 0, expirations = 0;
+  class EventSessionError extends Error {}
+  class EventMembersError extends Error {
+    constructor(status, message) { super(message); this.status = status; }
+  }
+  const defer = operation => (...args) => new Promise((resolve, reject) => requests.push({ operation, args, resolve, reject }));
+  const Modal = ({ title, children, footer }) => React.createElement("section", { "aria-label": title }, children, footer);
+  const Field = ({ value, error, readOnly }) => React.createElement("label", null, React.createElement("input", { value, readOnly: true }), error);
+  const ownerUi = { ...ui, Modal, Field };
+  const pageComponents = loadModule("../src/components/page.tsx", {
+    "react/jsx-runtime": jsxRuntime, "../routes/navigation": navigation, "./ui": ownerUi,
+  });
+  const { OwnerCoPlanners } = loadModule("../src/features/collaboration/OwnerCoPlanners.tsx", {
+    react: hooks.react, "react/jsx-runtime": jsxRuntime,
+    "../../components/page": pageComponents, "../../components/ui": ownerUi,
+    "../events/services/eventApi": { EventSessionError },
+    "./collaborationApi": {
+      EventMembersError, listPendingInvitations: defer("list"), createInvitation: defer("create"),
+      revokeInvitation: defer("revoke"), removeEventMember: defer("remove"),
+    },
+  });
+  const props = {
+    eventId: first.event_id, userId: identity.user.userId, isCurrentEvent: () => current,
+    onSessionExpired: () => { expirations++; }, onRosterChange: () => { rosterChanges++; },
+    renderRoster: remove => React.createElement(ui.Button, { onClick: () => remove(coPlanner) }, "Remove"),
+  };
+  const render = () => hooks.render(() => OwnerCoPlanners(props));
+  return {
+    render, requests, EventMembersError, EventSessionError,
+    modal: () => elementWith(render(), node => node.type === Modal),
+    field: () => elementWith(render(), node => node.type === Field),
+    html: () => renderToStaticMarkup(render()),
+    unmount: () => { current = false; hooks.unmount(); },
+    rosterChanges: () => rosterChanges, expirations: () => expirations,
+  };
+}
+
+test("owner invitation form validates, blocks duplicate submissions, preserves conflicts and clears the copied link on close", async () => {
+  const f = ownerPage();
+  const oldClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  const copied = [];
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async value => copied.push(value) } });
+  try {
+    assert.match(f.html(), /Loading invitations/);
+    f.requests[0].resolve([]);
+    await settleCollaboration();
+    assert.match(f.html(), /No pending invitations/);
+    f.render().props.children[0].props.action.props.onClick();
+    const submit = () => elementWith(f.modal(), node => node.type === "form").props.onSubmit({ preventDefault() {} });
+    submit();
+    assert.match(f.html(), /Enter a valid email address/);
+    assert.equal(f.requests.length, 1);
+    f.field().props.onChange({ target: { value: pendingInvite.email } });
+    submit(); submit();
+    assert.equal(f.requests.length, 2);
+    assert.match(f.html(), /Creating/);
+    f.requests[1].reject(new f.EventMembersError(409, "A pending invitation already exists for this email."));
+    await settleCollaboration();
+    assert.match(f.html(), /already exists/);
+    assert.equal(f.field().props.value, pendingInvite.email);
+    submit();
+    f.requests[2].resolve(createdInvite);
+    await settleCollaboration();
+    assert.equal(f.field().props.value, createdInvite.acceptance_url);
+    assert.ok(f.requests.some((request, index) => index > 2 && request.operation === "list"));
+    assert.match(f.html(), /Copy Link/);
+    assert.match(f.html(), /expires/);
+    assert.doesNotMatch(f.html(), /email was sent/);
+    elementWith(f.modal(), node => node.props.children === "Copy Link").props.onClick();
+    await settleCollaboration();
+    assert.deepEqual(copied, [createdInvite.acceptance_url]);
+    f.modal().props.onClose();
+    assert.doesNotMatch(f.html(), new RegExp(inviteToken));
+  } finally {
+    f.unmount();
+    if (oldClipboard) Object.defineProperty(navigator, "clipboard", oldClipboard);
+    else delete navigator.clipboard;
+  }
+});
+
+test("owner revoke and removal require confirmation and refresh their separate lists after 204", async () => {
+  const f = ownerPage();
+  try {
+    f.render();
+    f.requests[0].reject(new f.EventMembersError(503, "Temporarily unavailable."));
+    await settleCollaboration();
+    assert.match(f.html(), /Temporarily unavailable/);
+    elementWith(f.render(), node => typeof node.props.onRetry === "function").props.onRetry();
+    f.render();
+    f.requests[1].resolve([pendingInvite]);
+    await settleCollaboration();
+    assert.match(f.html(), /Pending · Expires/);
+    assert.doesNotMatch(f.html(), new RegExp(inviteToken));
+    elementWith(f.render(), node => node.props.children === "Revoke").props.onClick();
+    assert.match(f.html(), /will stop working/);
+    assert.equal(f.requests.length, 2);
+    const confirm = label => elementWith(f.modal().props.footer, node => node.props.children === label).props.onClick();
+    confirm("Revoke Invitation");
+    assert.deepEqual(f.requests[2].args.slice(0, 2), [first.event_id, pendingInvite.invitation_id]);
+    f.requests[2].resolve();
+    await settleCollaboration();
+    assert.equal(f.modal(), undefined);
+    assert.equal(f.requests[3].operation, "list");
+    elementWith(f.render(), node => node.props.children === "Remove").props.onClick();
+    assert.match(f.html(), /assigned tasks will become unassigned/);
+    confirm("Remove Co-planner");
+    assert.deepEqual(f.requests[4].args.slice(0, 2), [first.event_id, coPlanner.member_id]);
+    f.requests[4].resolve();
+    await settleCollaboration();
+    assert.equal(f.modal(), undefined);
+    assert.equal(f.rosterChanges(), 1);
+  } finally { f.unmount(); }
+});
+
+test("owner workflows abort pending reads and writes when leaving the selected event", async () => {
+  const f = ownerPage();
+  f.render().props.children[0].props.action.props.onClick();
+  f.field().props.onChange({ target: { value: pendingInvite.email } });
+  elementWith(f.modal(), node => node.type === "form").props.onSubmit({ preventDefault() {} });
+  f.unmount();
+  assert.ok(f.requests[0].args[2].aborted);
+  assert.ok(f.requests[1].args[3].aborted);
+  f.requests[1].resolve(createdInvite);
+  await settleCollaboration();
+  assert.equal(f.requests.length, 2);
+});
+
+test("acceptance strips the secret from browser history, retains it through sign-in, and selects the accepted event", async () => {
+  const hooks = mountHooks();
+  let activeHooks = hooks.react;
+  const location = { pathname: "/accept-invitation", hash: "#token=" + inviteToken };
+  const redirects = [], chosen = [], accepts = [];
+  const PublicApp = () => null;
+  const { AcceptInvitation, readInvitationFragment } = loadModule("../src/features/collaboration/AcceptInvitation.tsx", {
+    react: {
+      useEffect: (...args) => activeHooks.useEffect(...args),
+      useRef: (...args) => activeHooks.useRef(...args),
+      useState: (...args) => activeHooks.useState(...args),
+    },
+    "react/jsx-runtime": jsxRuntime,
+    "react-router-dom": {
+      useLocation: () => location, useNavigate: () => (to, options) => { redirects.push([to, options]); location.hash = ""; },
+    },
+    "../../components/page": page, "../../components/ui": ui, "../auth/PublicPage": { PublicApp },
+    "../auth/hooks/useUserProfile": { useUserProfile: () => ({ profile: { displayName: "Current account" } }) },
+    "../events/EventsContext": { rememberSelectedEvent: (...args) => chosen.push(args) },
+    "../events/services/eventApi": { EventSessionError: class extends Error {} },
+    "./collaborationApi": {
+      isInvitationToken: value => value === inviteToken, EventMembersError: class extends Error {},
+      acceptInvitation: (token, signal) => new Promise(resolve => accepts.push({ token, signal, resolve })),
+    },
+  });
+  const render = (authenticated, checkingSession) => hooks.render(() =>
+    AcceptInvitation({ authenticated, checkingSession, onAuthenticated() {}, onSwitchAccount() {} }));
+  assert.equal(readInvitationFragment("#token=" + inviteToken + "&extra=x"), null);
+  assert.equal(readInvitationFragment("#token=bad"), null);
+  render(false, true);
+  assert.deepEqual(redirects, [[{ pathname: "/accept-invitation", hash: "" }, { replace: true }]]);
+  let signIn = render(false, false);
+  assert.equal(signIn.type, PublicApp);
+  assert.equal(signIn.props.page, "login");
+  signIn.props.setPage("signup");
+  signIn = render(false, false);
+  assert.equal(signIn.props.page, "signup");
+  const signedIn = render(true, false);
+  assert.equal(signedIn.props.token, inviteToken);
+  assert.ok(!signedIn.key.includes(inviteToken));
+  const innerHooks = mountHooks();
+  activeHooks = innerHooks.react;
+  const pageTree = innerHooks.render(() => signedIn.type(signedIn.props));
+  assert.equal(accepts.length, 0);
+  const action = elementWith(pageTree, node => node.props.children === "Accept Invitation");
+  action.props.onClick();
+  action.props.onClick();
+  assert.equal(accepts.length, 1);
+  assert.equal(accepts[0].token, inviteToken);
+  accepts[0].resolve({ userId: identity.user.userId, event_id: first.event_id });
+  await settleCollaboration();
+  assert.deepEqual(chosen, [[identity.user.userId, first.event_id]]);
+  assert.deepEqual(redirects[1], ["/app/dashboard", { replace: true }]);
+  assert.ok(!JSON.stringify([redirects, chosen]).includes(inviteToken));
+  innerHooks.unmount();
 });
 
 test("the existing switcher and profile show the selected event's name and actual role", () => {

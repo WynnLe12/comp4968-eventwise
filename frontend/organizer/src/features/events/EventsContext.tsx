@@ -18,7 +18,7 @@ function readSelectedEvent(userId: string): string | null {
   }
 }
 
-function rememberSelectedEvent(userId: string, eventId: string | null) {
+export function rememberSelectedEvent(userId: string, eventId: string | null) {
   try {
     if (eventId) {
       window.sessionStorage.setItem(selectedEventKey(userId), eventId);
