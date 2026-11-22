@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Hub } from "aws-amplify/utils";
-import { authErrorMessage, requireAuthSession, signOut as cognitoSignOut } from "./features/auth/services/authService";
+import { authErrorMessage, inspectAuthSession, isInvalidAuthSession, requireAuthSession, signOut as cognitoSignOut } from "./features/auth/services/authService";
 import { Navigate, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { AppModal, type ModalName } from "./components/AppModal";
 import { Sidebar, Topbar } from "./components/layout";
@@ -122,6 +122,9 @@ export default function App() {
 
   const onEventSessionExpired = useCallback(async () => {
     if (signOutPending.current) return;
+    const checkedVersion = sessionVersion.current;
+    const session = await inspectAuthSession();
+    if (session.status !== "invalid" || checkedVersion !== sessionVersion.current || signOutPending.current) return;
     signOutPending.current = true;
     ++sessionVersion.current;
     setSigningOut(true);
@@ -159,21 +162,18 @@ export default function App() {
   const refreshSession = useCallback(async () => {
     if (signOutPending.current) return;
     const version = ++sessionVersion.current;
-    try {
-      await requireAuthSession();
-      if (version === sessionVersion.current) setAuthenticated(true);
-    } catch {
-      if (version === sessionVersion.current) setAuthenticated(false);
-    } finally {
-      if (version === sessionVersion.current) setCheckingSession(false);
-    }
+    const session = await inspectAuthSession();
+    if (version !== sessionVersion.current) return;
+    if (session.status !== "unavailable") setAuthenticated(session.status === "active");
+    setCheckingSession(false);
   }, []);
 
   useEffect(() => {
     void refreshSession();
     const refresh = () => { void refreshSession(); };
     const unsubscribe = Hub.listen("auth", ({ payload }) => {
-      if (payload.event === "signedOut" || payload.event === "tokenRefresh_failure") {
+      if (payload.event === "signedOut" ||
+          (payload.event === "tokenRefresh_failure" && isInvalidAuthSession(payload.data?.error))) {
         ++sessionVersion.current;
         setAuthenticated(false);
         setCheckingSession(false);

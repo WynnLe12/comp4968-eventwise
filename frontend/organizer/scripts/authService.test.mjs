@@ -69,6 +69,27 @@ test("session and refresh failures are propagated without granting entry", async
   await assert.rejects(signedOut.requireAuthSession(), (error) => error === failure);
 });
 
+test("session inspection distinguishes usable access tokens, ended sessions, and temporary failures", async () => {
+  const user = { userId: "test-user" };
+  const getCurrentUser = async () => user;
+  const valid = service({
+    getCurrentUser,
+    fetchAuthSession: async () => ({ tokens: { accessToken: { payload: { exp: Date.now() / 1000 + 3600 } } } }),
+  });
+  assert.deepEqual(await valid.inspectAuthSession(), { status: "active", userId: user.userId });
+  const expired = service({ getCurrentUser, fetchAuthSession: async () => ({ tokens: { accessToken: { payload: { exp: 1 } } } }) });
+  assert.deepEqual(await expired.inspectAuthSession(), { status: "invalid" });
+  for (const [name, status] of [
+    ["UserUnAuthenticatedException", "invalid"], ["NotAuthorizedException", "invalid"], ["TokenRevokedException", "invalid"],
+    ["NetworkError", "unavailable"], ["TooManyRequestsException", "unavailable"], ["Error", "unavailable"],
+  ]) {
+    const error = Object.assign(new Error("private details"), { name });
+    const api = service({ getCurrentUser: async () => { throw error; } });
+    assert.deepEqual(await api.inspectAuthSession(), { status });
+    assert.equal(api.isInvalidAuthSession(error), status === "invalid");
+  }
+});
+
 test("Cognito errors remain actionable without displaying raw error details", () => {
   const api = service();
   const error = new Error("Internal details that should not be displayed");

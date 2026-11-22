@@ -1,5 +1,5 @@
 import { apiUrl } from "../../services/apiConfig";
-import { getCurrentUser } from "../auth/services/authService";
+import { getCurrentUser, inspectAuthSession } from "../auth/services/authService";
 import { authenticatedEventRequest, EventSessionError, requestEventId, type OrganizerEvent } from "../events/services/eventApi";
 
 export interface EventMember {
@@ -84,7 +84,16 @@ async function collaborationRequest(path: string, options: {
     signal?.throwIfAborted();
     throw new EventMembersError(0, message);
   }
-  if (response.status === 401) throw new EventSessionError("Your session has expired. Please sign in again.");
+  if (response.status === 401) {
+    signal?.throwIfAborted();
+    const session = await inspectAuthSession();
+    signal?.throwIfAborted();
+    if (session.status === "invalid") throw new EventSessionError("Your session has expired. Please sign in again.");
+    if (session.status === "active" && session.userId !== identity.user.userId) throw accountChanged();
+    throw new EventMembersError(401, session.status === "active"
+      ? "The Co-planners API rejected this request. Your session is still active. Please try again."
+      : "Unable to verify your sign-in right now. Please try again.");
+  }
   if (response.status !== expected) throw new EventMembersError(response.status, errors[response.status] ?? message);
   const data: unknown = expected === 204 ? null : await response.json().catch(() => { throw new EventMembersError(502, message); });
   const current = await getCurrentUser().catch(() => { throw new EventSessionError("Please sign in again."); });

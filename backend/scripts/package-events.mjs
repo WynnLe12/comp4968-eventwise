@@ -48,11 +48,37 @@ try {
     if (fs.existsSync('.env')) throw new Error('Unexpected environment file');
   `], { cwd: staging, stdio: 'inherit' });
   if (existsSync(output)) rmSync(output);
-  if (process.platform === 'win32') {
-    execFileSync('tar.exe', ['-a', '-cf', output, '-C', staging, '.'], { stdio: 'inherit' });
-  } else {
-    execFileSync('zip', ['-qr', output, '.'], { cwd: staging, stdio: 'inherit' });
-  }
+  
+  
+if (process.platform === 'win32') {
+  // Create ZIP entries with forward slashes for AWS Lambda.
+  const pythonScript = `
+import os
+import sys
+import zipfile
+
+staging, output = sys.argv[1], sys.argv[2]
+
+with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+    for current_dir, dirs, files in os.walk(staging):
+        for filename in files:
+            full_path = os.path.join(current_dir, filename)
+            relative_path = os.path.relpath(full_path, staging)
+            archive.write(full_path, relative_path.replace(os.sep, "/"))
+`;
+
+  execFileSync(
+    'python',
+    ['-c', pythonScript, staging, output],
+    { stdio: 'inherit' }
+  );
+} else {
+  execFileSync('zip', ['-qr', output, '.'], {
+    cwd: staging,
+    stdio: 'inherit',
+  });
+}
+
   // Keep artifact path portable and explicit; no AWS commands are executed.
   console.log(`Created ${dirname(output)}${sep}${'eventwise-events.zip'}`);
 } finally {

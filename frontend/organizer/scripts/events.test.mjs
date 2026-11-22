@@ -318,7 +318,11 @@ function withCollaborationApi(fetch, run, overrides = {}) {
   return withApi(fetch, eventApi => run(loadModule("../src/features/collaboration/collaborationApi.ts", {
     "../../services/apiConfig": { apiUrl: path => `/api${path}` },
     "../events/services/eventApi": eventApi,
-    "../auth/services/authService": { getCurrentUser: async () => identity.user, ...overrides },
+    "../auth/services/authService": {
+      getCurrentUser: async () => identity.user,
+      inspectAuthSession: async () => ({ status: "active", userId: identity.user.userId }),
+      ...overrides,
+    },
   }), eventApi), overrides);
 }
 
@@ -337,12 +341,11 @@ test("roster API uses the exact selected event ID, bearer token, and abort signa
 });
 
 test("roster API rejects unauthorized, invalid, or wrong-account responses and accepts an empty roster", async () => {
-  for (const status of [401, 403, 404, 500]) {
-    await withCollaborationApi(async () => new Response("private error", { status }), async (api, eventApi) => {
+  for (const status of [403, 404, 500]) {
+    await withCollaborationApi(async () => new Response("private error", { status }), async api => {
       await assert.rejects(api.listEventMembers(first.event_id, identity.user.userId), error =>
-        !error.message.includes("private") && (status === 401 ? error instanceof eventApi.EventSessionError
-          : error instanceof api.EventMembersError && error.status === status));
-    });
+        !error.message.includes("private") && error instanceof api.EventMembersError && error.status === status);
+    }, { inspectAuthSession: async () => assert.fail("Other statuses must not check the session") });
   }
   await withCollaborationApi(async () => Response.json([]), async api => {
     assert.deepEqual(await api.listEventMembers(first.event_id, identity.user.userId), []);
@@ -359,6 +362,52 @@ test("roster API rejects unauthorized, invalid, or wrong-account responses and a
   await withCollaborationApi(async () => Response.json([member]), async api => {
     await assert.rejects(api.listEventMembers(first.event_id, identity.user.userId), { status: 409 });
   }, { getCurrentUser: async () => ({ userId: "user-b" }) });
+});
+
+test("working event and roster reads use the same access token and Authorization header format", async () => {
+  const requests = [];
+  await withCollaborationApi(async (url, options) => {
+    requests.push([url, options.headers.Authorization]);
+    if (url.endsWith("/members")) return Response.json([member]);
+    return Response.json(url.endsWith("/events") ? [first] : first);
+  }, async (api, eventApi) => {
+    await eventApi.listEvents();
+    await eventApi.getEventDetails(first.event_id);
+    await api.listEventMembers(first.event_id, identity.user.userId);
+  });
+  assert.deepEqual(requests, [
+    ["/api/events", "Bearer access-token-a"],
+    [`/api/events/${first.event_id}`, "Bearer access-token-a"],
+    [`/api/events/${first.event_id}/members`, "Bearer access-token-a"],
+  ]);
+});
+
+test("roster 401 rechecks Cognito and keeps gateway rejection, session expiry and lookup failures distinct", async () => {
+  for (const [session, expectedStatus, message] of [
+    [{ status: "active", userId: identity.user.userId }, 401, /session is still active/],
+    [{ status: "active", userId: "user-b" }, 409, /account changed/],
+    [{ status: "unavailable" }, 401, /Unable to verify your sign-in/],
+    [{ status: "invalid" }, null, /session has expired/],
+  ]) {
+    let requests = 0, checks = 0;
+    await withCollaborationApi(async () => {
+      requests++;
+      return new Response('{"message":"Unauthorized"}', { status: 401, headers: { "X-Amzn-ErrorType": "UnauthorizedException" } });
+    }, async (api, eventApi) => {
+      await assert.rejects(api.listEventMembers(first.event_id, identity.user.userId), error =>
+        message.test(error.message) && (expectedStatus === null ? error instanceof eventApi.EventSessionError
+          : error instanceof api.EventMembersError && error.status === expectedStatus));
+    }, { inspectAuthSession: async () => { checks++; return session; } });
+    assert.equal(requests, 1);
+    assert.equal(checks, 1);
+  }
+});
+
+test("an old 401 cannot expire the session after the roster request is aborted", async () => {
+  const controller = new AbortController();
+  await withCollaborationApi(async () => new Response(null, { status: 401 }), async api => {
+    await assert.rejects(api.listEventMembers(first.event_id, identity.user.userId, controller.signal), { name: "AbortError" });
+  }, { inspectAuthSession: async () => { controller.abort(); return { status: "invalid" }; } });
 });
 
 const inviteToken = Buffer.alloc(32, 11).toString("base64url");
@@ -399,7 +448,7 @@ test("collaboration API uses the owner invitation, member removal and acceptance
 });
 
 test("collaboration API maps safe action errors and rejects unsafe links and malformed tokens", async () => {
-  for (const [status, message] of [[400, /valid email/], [401, /session has expired/], [403, /event owner/], [409, /already exists/]]) {
+  for (const [status, message] of [[400, /valid email/], [401, /session is still active/], [403, /event owner/], [409, /already exists/]]) {
     await withCollaborationApi(async () => new Response("private", { status }), async api => {
       await assert.rejects(api.createInvitation(first.event_id, identity.user.userId, pendingInvite.email), message);
     });
@@ -566,9 +615,26 @@ test("roster ignores an old response after switching events or accounts", async 
   });
 });
 
+test("a route-specific 401 shows a retry action without calling the workspace sign-out flow", async () => {
+  await withRosterPage(async ({ html, render, requests, settle, EventMembersError, expired }) => {
+    html();
+    requests[0].reject(new EventMembersError(401, "The Co-planners API rejected this request. Your session is still active. Please try again."));
+    await settle();
+    assert.match(html(), /session is still active/);
+    assert.match(html(), /Try again/);
+    assert.equal(expired(), 0);
+    render().props.children[1].props.onRetry();
+    html();
+    requests[1].resolve([member]);
+    await settle();
+    assert.match(html(), /Planning team/);
+    assert.equal(expired(), 0);
+  });
+});
+
 function mountHooks() {
-  const states = [], refs = [], effects = [], scheduled = [];
-  let stateIndex, refIndex, effectIndex;
+  const states = [], refs = [], callbacks = [], effects = [], scheduled = [];
+  let stateIndex, refIndex, callbackIndex, effectIndex;
   return {
     react: {
       useState: initial => {
@@ -577,6 +643,11 @@ function mountHooks() {
         return [states[i], value => { states[i] = typeof value === "function" ? value(states[i]) : value; }];
       },
       useRef: initial => { const i = refIndex++; return refs[i] ??= { current: initial }; },
+      useCallback: (callback, deps) => {
+        const i = callbackIndex++;
+        if (!callbacks[i] || deps.some((dep, index) => dep !== callbacks[i].deps[index])) callbacks[i] = { callback, deps };
+        return callbacks[i].callback;
+      },
       useId: () => "invitation-form",
       useEffect: (callback, deps) => {
         const i = effectIndex++;
@@ -587,7 +658,7 @@ function mountHooks() {
       },
     },
     render: component => {
-      stateIndex = refIndex = effectIndex = 0;
+      stateIndex = refIndex = callbackIndex = effectIndex = 0;
       const result = component();
       for (const effect of scheduled.splice(0)) effect();
       return result;
@@ -606,6 +677,58 @@ function elementWith(tree, predicate) {
 }
 
 const settleCollaboration = () => new Promise(resolve => setImmediate(resolve));
+
+test("the App signs out only after invalid session confirmation and keeps transient refresh failures signed in", async () => {
+  const hooks = mountHooks();
+  const originalWindow = globalThis.window;
+  const redirects = [];
+  let signOuts = 0, listen, focus;
+  let session = { status: "active", userId: "user-a" };
+  const Route = () => null;
+  const Navigate = () => null;
+  const navigate = (...args) => redirects.push(args);
+  globalThis.window = {
+    addEventListener: (_name, callback) => { focus = callback; }, removeEventListener() {},
+    setInterval: () => 1, clearInterval() {}, clearTimeout() {},
+  };
+  try {
+    const { default: App } = loadModule("../src/App.tsx", {
+      react: { ...hooks.react, lazy: () => () => null }, "react/jsx-runtime": jsxRuntime,
+      "aws-amplify/utils": { Hub: { listen: (_channel, callback) => { listen = callback; return () => {}; } } },
+      "./features/auth/services/authService": {
+        inspectAuthSession: async () => session,
+        isInvalidAuthSession: error => error?.name === "NotAuthorizedException",
+        signOut: async () => { signOuts++; },
+      },
+      "react-router-dom": { Route, Navigate, Routes: () => null, useNavigate: () => navigate, useLocation: () => ({ pathname: "/app/coplanners" }) },
+      "./components/AppModal": {}, "./components/layout": {}, "./components/page": {},
+      "./features/auth/PublicPage": {}, "./features/events/EventsContext": {}, "./features/events/EventWorkspace": {},
+      "./features/collaboration/AcceptInvitation": { invitationAcceptancePath: "/accept-invitation" },
+      "./routes/navigation": navigation,
+    });
+    const workspace = () => elementWith(hooks.render(App), node => node.type === Route && node.props.path === "/app").props.element;
+    hooks.render(App);
+    await settleCollaboration();
+    await workspace().props.onSessionExpired();
+    assert.equal(signOuts, 0);
+    assert.deepEqual(redirects, []);
+    session = { status: "unavailable" };
+    listen({ payload: { event: "tokenRefresh_failure", data: { error: { name: "NetworkError" } } } });
+    focus();
+    await settleCollaboration();
+    assert.notEqual(workspace().type, Navigate);
+    await workspace().props.onSessionExpired();
+    assert.equal(signOuts, 0);
+    session = { status: "invalid" };
+    await workspace().props.onSessionExpired();
+    assert.equal(signOuts, 1);
+    assert.deepEqual(redirects, [["/login", { replace: true }]]);
+    assert.equal(workspace().type, Navigate);
+  } finally {
+    hooks.unmount();
+    globalThis.window = originalWindow;
+  }
+});
 
 function ownerPage() {
   const hooks = mountHooks();

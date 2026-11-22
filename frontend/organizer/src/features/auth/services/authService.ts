@@ -94,6 +94,27 @@ export async function requireAuthSession() {
   return { user, session };
 }
 
+const invalidSessionErrors = new Set([
+  "SessionExpiredError", "UserUnAuthenticatedException", "NotAuthorizedException",
+  "TokenRevokedException", "UserNotFoundException", "PasswordResetRequiredException",
+  "UserNotConfirmedException", "RefreshTokenReuseException",
+]);
+
+export function isInvalidAuthSession(error: unknown): boolean {
+  return error instanceof Error && invalidSessionErrors.has(error.name);
+}
+
+export async function inspectAuthSession(): Promise<
+  { status: "active"; userId: string } | { status: "invalid" | "unavailable" }
+> {
+  try {
+    const { user } = await requireAuthSession();
+    return { status: "active", userId: user.userId };
+  } catch (error) {
+    return { status: isInvalidAuthSession(error) ? "invalid" : "unavailable" };
+  }
+}
+
 export function authErrorMessage(error: unknown): string {
   const name = error instanceof Error ? error.name : "";
   const messages: Record<string, string> = {

@@ -2,7 +2,7 @@
 
 Target function: **`eventwise-events`**. Handler: **`event-service/lambda/events.handler`**.
 
-This document describes a later deployment to the existing EventWise REST API, RDS instance `eventwise-db` (database `eventwise`), Secrets Manager secret and EventWise VPC. Invitation management, acceptance, and co-planner removal have not been deployed to AWS. Their database tests use disposable local MySQL.
+This document describes the Events Lambda contract and deployment checks for the existing EventWise REST API, RDS instance `eventwise-db` (database `eventwise`), Secrets Manager secret and EventWise VPC. Check the target stage for the deployed routes. Database tests use disposable local MySQL.
 
 ## Routes and implementation
 
@@ -62,7 +62,42 @@ The owner sorts first, then co-planners sort by join time and numeric member ID.
 | 404 | The Lambda receives an unsupported method, malformed route, or mismatched Gateway resource or event ID metadata. |
 | 500 | The roster could not be loaded. |
 
-Lambda errors use `{"error":"…"}`. The application database account needs `SELECT` on the existing `event_members` table. No schema migration is required. AWS deployment of Feature 2.1 has not been performed. In a later approved deployment, add the explicit GET method on `/events/{eventId}/members` to the existing Events Lambda proxy integration, with the Cognito authorizer and an unauthenticated OPTIONS method for browser preflight.
+Lambda errors use `{"error":"…"}`. The application database account needs `SELECT` on the existing `event_members` table. The GET method on `/events/{eventId}/members` uses the Events Lambda proxy integration with the Cognito authorizer and an unauthenticated OPTIONS method for browser preflight.
+
+### Diagnose a roster 401
+
+All three organizer GET requests use the same Amplify access token and `Authorization: Bearer …` header. A roster-only `401` with `X-Amzn-ErrorType: UnauthorizedException` points to a Gateway authorizer rejection. The Lambda can return its own `401` for missing or invalid Gateway claims, using `{"error":"Invalid or expired authentication token"}` without the AWS error-type header. After identity verification, the roster's MySQL access check returns `403` for a nonmember. The organizer rechecks its session after a collaboration `401` and shows a retryable API error while the session is usable. [Gateway response types](https://docs.aws.amazon.com/apigateway/latest/developerguide/supported-gateway-response-types.html)
+
+1. In the AWS Console, select **us-west-2 → API Gateway → EventWise REST API → Stages**. Match the stage **Invoke URL** to the browser's actual upstream URL. The repository's Vite `/api` proxy removes `/api` and targets API ID `hd63bpgxm8`, stage `prod`. For a hosted frontend, check its configured API base or custom domain stage mapping.
+2. Under **Resources**, open **GET** on both `/events/{eventId}` and `/events/{eventId}/members`. Under **Method request → Method request settings**, compare the authorizer and the **Authorization Scopes**. Confirm the roster GET uses `EventWiseCognitoAuthorizer` and a nonempty scope present in the working access token. The usual SDK sign-in scope is `aws.cognito.signin.user.admin`; confirm it against the actual working method and token. An empty scope list selects ID-token behavior, even on the same authorizer. Under **Authorizers**, confirm `Authorization` is the token source and check for an ID-token audience validation regex. [REST Cognito method settings](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-enable-cognito-user-pool.html)
+3. Under the roster GET's **Integration request**, verify Lambda proxy integration points to the intended `eventwise-events` function or alias. Under **Stages**, select the actual stage and choose **Stage actions → Export** with API Gateway extensions. Compare the two GET operations' deployed `security` scopes and integrations. This distinguishes the active deployment from edits visible under **Resources**. Correct only the confirmed differences and redeploy to the intended stage through the team's normal review. [REST stage export](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-export-api.html)
+4. Reproduce and record only the Gateway request ID (prefer response header `x-amz-apigw-id`), status and error type. In the stage's CloudWatch access logs, correlate `$context.extendedRequestId`, `$context.error.responseType`, `$context.integration.requestId`, and `$context.integration.status`. `UNAUTHORIZED` with no integration request ID confirms rejection before Lambda. An integration request ID with integration status `401` points to Lambda's response. If Lambda returned it, compare the JWT issuer, `client_id` and `token_use` with the function's configured pool and app client and verify proxy v1 authorizer claims. Use metadata-only logging and keep request/response body tracing disabled. [Gateway access-log variables](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-variables-for-access-logging.html)
+
+For the Vite development app, sign in, open the browser console on `localhost:5173`, and run this read-only comparison for an event you can open. It uses one access token for all three requests and prints no JWTs or response bodies.
+
+```js
+await (async () => {
+  const { requireAuthSession } = await import("/src/features/auth/services/authService.ts");
+  const { session } = await requireAuthSession();
+  const token = session.tokens.accessToken;
+  const { token_use, exp, iss, client_id, scope } = token.payload;
+  console.table([{ token_use, expiresUtc: new Date(exp * 1000).toISOString(), iss, client_id, scope }]);
+  const routes = ["/api/events", "/api/events/22", "/api/events/22/members"];
+  console.table(await Promise.all(routes.map(async (path) => {
+    const response = await fetch(path, {
+      headers: { Authorization: `Bearer ${token.toString()}` },
+      cache: "no-store",
+    });
+    return {
+      path, status: response.status,
+      errorType: response.headers.get("x-amzn-errortype"),
+      gatewayRequestId: response.headers.get("x-amz-apigw-id"),
+    };
+  })));
+})();
+```
+
+Expect all three requests to return `200` for a member. Then open **More → Co-planners**. The roster should load and the owner should also see pending invitations. With a valid account that has no membership, the roster request should return `403` once the route authorizes its access token.
 
 ## Remove a co-planner
 
