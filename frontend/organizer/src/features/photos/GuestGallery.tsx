@@ -12,7 +12,7 @@ export function GuestGallery() {
 function GuestPhotos({ share }: { share: string }) {
   const path = guestPhotoPath(share);
   const load = useCallback((after?: string, signal?: AbortSignal) =>
-    photoRequest<PhotoPage & { name: string }>(`${path}${photoPageQuery(after)}`, { signal }), [path]);
+    photoRequest<PhotoPage>(`${path}${photoPageQuery(after)}`, { signal }), [path]);
   const { page, error, loading, fetchPage } = usePhotoPages(load);
   const [file, setFile] = useState<File>();
   const [uploading, setUploading] = useState(false);
@@ -61,14 +61,13 @@ function GuestPhotos({ share }: { share: string }) {
   }
 
   return <main className="guest-gallery">
-    <h1>{page?.name ?? "Guest photo gallery"}</h1>
+    <h1>Share a photo</h1>
     {error && <p role="alert">{error}</p>}
     {!page && !loading && <Button onClick={() => fetchPage()}>Try again</Button>}
     {page && <>
       <form className="gallery-upload" onSubmit={event => void upload(event)}>
-        <h2>Share a photo</h2>
-        <label htmlFor="guest-photo">Choose a JPEG, PNG or WebP image up to 10 MB</label>
-        <input id="guest-photo" type="file" accept="image/jpeg,image/png,image/webp" disabled={uploading}
+        <input type="file" aria-label="Choose a JPEG, PNG or WebP image up to 10 MB"
+          accept="image/jpeg,image/png,image/webp" disabled={uploading}
           onChange={event => setFile(event.target.files?.[0])} />
         <Button type="submit" disabled={uploading || !file}>{uploading ? "Uploading…" : "Upload photo"}</Button>
       </form>
@@ -76,7 +75,6 @@ function GuestPhotos({ share }: { share: string }) {
       {actionError && <p role="alert">{actionError}</p>}
       <div className="gallery-head">
         <h2>Approved photos</h2>
-        <Button variant="secondary" disabled={loading} onClick={() => fetchPage()}>Refresh</Button>
       </div>
       {!loading && !page.items.length && !page.next && <p>There are no approved photos yet.</p>}
       <div className="photo-grid">

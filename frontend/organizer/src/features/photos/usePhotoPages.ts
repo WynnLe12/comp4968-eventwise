@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { photoError, type PhotoPage } from "./photoApi";
 
 export function usePhotoPages<T extends PhotoPage>(load: (after?: string, signal?: AbortSignal) => Promise<T>) {
@@ -19,13 +19,10 @@ export function usePhotoPages<T extends PhotoPage>(load: (after?: string, signal
     return () => controller.abort();
   }, [load, request]);
 
-  function fetchPage(after?: string) {
+  const fetchPage = useCallback((after?: string) => {
     setError("");
     setLoading(true);
     setRequest({ after });
-  }
-  function remove(id: string) {
-    setPage(current => current && { ...current, items: current.items.filter(item => item.id !== id) });
-  }
-  return { page, loading, error, fetchPage, remove };
+  }, []);
+  return { page, loading, error, fetchPage };
 }

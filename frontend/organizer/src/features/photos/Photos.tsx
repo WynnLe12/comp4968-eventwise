@@ -1,6 +1,6 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import QRCode from "qrcode";
-import { Badge, Button } from "../../components/ui";
+import { Badge, Button, Icon, Modal } from "../../components/ui";
 import { PageHeader } from "../../components/page";
 import { useEvents } from "../events/EventsContext";
 import { authenticatedEventRequest } from "../events/services/eventApi";
@@ -56,9 +56,49 @@ function PhotoModeration({ eventId }: { eventId: string }) {
   const [actionError, setActionError] = useState("");
   const [approving, setApproving] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const busy = loading || approving || downloading;
+  const [photoToDelete, setPhotoToDelete] = useState<string>();
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const busy = loading || approving || downloading || deleting;
   const selectedIds = page?.items.filter(photo => selected.has(photo.id)).map(photo => photo.id) ?? [];
   const allSelected = Boolean(page?.items.length && selectedIds.length === page.items.length);
+
+  useEffect(() => {
+    if (busy || actionError || photoToDelete) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") fetchPage();
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [busy, actionError, photoToDelete, fetchPage]);
+
+  function openDeleteDialog(id: string) {
+    setDeleteError("");
+    setPhotoToDelete(id);
+  }
+
+  function closeDeleteDialog() {
+    if (!deleting) setPhotoToDelete(undefined);
+  }
+
+  async function deletePhoto() {
+    if (!photoToDelete || deleting) return;
+    const id = photoToDelete;
+    setDeleting(true);
+    setDeleteError("");
+    setActionError("");
+    setNotice("");
+    try {
+      await ownerRequest<void>(`${path}/photos/${id}`, { method: "DELETE" });
+      setSelected(current => new Set([...current].filter(value => value !== id)));
+      setPhotoToDelete(undefined);
+      setNotice("Photo deleted.");
+      fetchPage();
+    } catch (error) {
+      setDeleteError(photoError(error));
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   function toggle(id: string) {
     setSelected(current => {
@@ -145,13 +185,12 @@ function PhotoModeration({ eventId }: { eventId: string }) {
         <div><dt>approved</dt><dd>{page.approved.length}</dd></div>
       </dl>
     </section>}
-    <div className="gallery-head">
+    {Boolean(page?.items.length) && <div className="gallery-head">
       <div>
         <h3>Pending approval</h3>
         {page && <p>{page.items.length === 1 ? "1 guest upload needs your review" : `${page.items.length} guest uploads need your review`}</p>}
       </div>
       <div className="gallery-controls">
-        <Button variant="ghost" disabled={busy} onClick={() => fetchPage()}>Refresh</Button>
         {Boolean(page?.items.length) && <Button variant="ghost" disabled={busy} onClick={() => {
           setSelected(new Set(allSelected ? [] : page?.items.map(photo => photo.id)));
         }}>{allSelected ? "Deselect all" : "Select all"}</Button>}
@@ -159,12 +198,11 @@ function PhotoModeration({ eventId }: { eventId: string }) {
           {approving ? "Approving…" : `Approve selected (${selectedIds.length})`}
         </Button>}
       </div>
-    </div>
+    </div>}
     {error && <p role="alert">{error}</p>}
     {actionError && <p role="alert">{actionError}</p>}
     {notice && <p role="status">{notice}</p>}
-    {loading && <p role="status">Loading photos…</p>}
-    {page && !loading && !page.items.length && <p>No photos are awaiting approval.</p>}
+    {loading && !page && <p role="status">Loading photos…</p>}
     <div className="photo-grid">
       {page?.items.map((photo, index) => <figure className="gallery-photo moderation-photo" key={photo.id}>
         <img src={photo.thumbnailUrl} referrerPolicy="no-referrer" alt={`Pending photo ${index + 1}`} loading="lazy" />
@@ -172,7 +210,11 @@ function PhotoModeration({ eventId }: { eventId: string }) {
           <input type="checkbox" aria-label={`Select pending photo ${index + 1}`}
             checked={selected.has(photo.id)} disabled={busy} onChange={() => toggle(photo.id)} />
         </label>
-        <figcaption><Button disabled={busy} onClick={() => void approve([photo.id])}>Approve</Button></figcaption>
+        <figcaption>
+          <button type="button" className="icon-btn moderation-delete" aria-label={`Delete pending photo ${index + 1}`}
+            disabled={busy} onClick={() => openDeleteDialog(photo.id)}><Icon name="trash" size={18} /></button>
+          <Button disabled={busy} onClick={() => void approve([photo.id])}>Approve</Button>
+        </figcaption>
       </figure>)}
     </div>
     {!!page?.approved.length && <section aria-label="Approved photos">
@@ -181,8 +223,19 @@ function PhotoModeration({ eventId }: { eventId: string }) {
         {page.approved.map((photo, index) => <figure className="gallery-photo moderation-photo" key={photo.id}>
           <img src={photo.thumbnailUrl} referrerPolicy="no-referrer" alt={`Approved photo ${index + 1}`} loading="lazy" />
           <div className="moderation-badge"><Badge tone="success">Approved</Badge></div>
+          <figcaption><button type="button" className="icon-btn moderation-delete" aria-label={`Delete approved photo ${index + 1}`}
+            disabled={busy} onClick={() => openDeleteDialog(photo.id)}><Icon name="trash" size={18} /></button></figcaption>
         </figure>)}
       </div>
     </section>}
+    {photoToDelete && <Modal title="Delete photo?" onClose={closeDeleteDialog} footer={<>
+      <Button variant="secondary" disabled={deleting} onClick={closeDeleteDialog}>Cancel</Button>
+      <Button variant="danger" disabled={deleting} onClick={() => void deletePhoto()}>
+        {deleting ? "Deleting…" : "Delete photo"}
+      </Button>
+    </>}>
+      <p>This permanently deletes the photo from this event’s gallery.</p>
+      {deleteError && <p className="expense-form-error" role="alert">{deleteError}</p>}
+    </Modal>}
   </div>;
 }

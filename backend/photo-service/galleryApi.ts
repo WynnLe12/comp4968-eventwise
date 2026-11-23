@@ -9,7 +9,7 @@ import {
   PhotosRepository, sharedEventId, uploadLifetime, type Photo,
 } from "./photos";
 
-const eventGallery = /^\/events\/([^/]+)\/photo-gallery(?:\/(pending|approve)(?:\/([^/]+))?)?$/;
+const eventGallery = /^\/events\/([^/]+)\/photo-gallery(?:\/(pending|approve|photos)(?:\/([^/]+))?)?$/;
 const guestGallery = /^\/photo-gallery\/([^/]+)(?:\/(uploads|download)(?:\/([^/]+))?)?$/;
 const notFound = () => new ApiError(404, "NOT_FOUND", "Gallery or photo not found.");
 
@@ -56,6 +56,10 @@ function gatewaySubject(event: GalleryEvent, apiId: string, pool: string | undef
 export function createGalleryHandler({
   repository = new PhotosRepository() as Pick<PhotosRepository, "get" | "create" | "list" | "approve">,
   links = new PhotoLinks() as Pick<PhotoLinks, "upload" | "thumbnail" | "download">,
+  deletion = {
+    repository: new PhotosRepository() as Pick<PhotosRepository, "beginDeletion" | "completeDeletion">,
+    storage: new PhotoLinks() as Pick<PhotoLinks, "deleteObjects">,
+  },
   authenticate = createCognitoAuthenticator(),
   checkOwner = requireOwner,
   loadEventName = eventName,
@@ -83,7 +87,7 @@ export function createGalleryHandler({
     if (origin) {
       headers["Access-Control-Allow-Origin"] = origin;
       headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type";
-      headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS";
+      headers["Access-Control-Allow-Methods"] = "GET,POST,DELETE,OPTIONS";
     }
     const response = (statusCode: number, data?: unknown) => ({
       statusCode, headers, body: data === undefined ? "" : JSON.stringify(data),
@@ -106,6 +110,13 @@ export function createGalleryHandler({
         if (method === "GET" && action === "pending" && !photoId) return response(200, await list(event, eventId, "PENDING"));
         if (method === "POST" && action === "approve" && photoIdPattern.test(photoId ?? "")) {
           if (!await repository.approve({ eventId, photoId })) throw notFound();
+          return response(204);
+        }
+        if (method === "DELETE" && action === "photos" && photoIdPattern.test(photoId ?? "")) {
+          const key = { eventId, photoId };
+          if (!await deletion.repository.beginDeletion(key)) throw notFound();
+          await deletion.storage.deleteObjects(key);
+          await deletion.repository.completeDeletion(key);
           return response(204);
         }
         throw notFound();

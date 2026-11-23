@@ -4638,7 +4638,19 @@ h3,
   padding: 18px 10px 10px;
   margin: 0;
   background: linear-gradient(transparent, #211b32a3);
-  text-align: right;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.moderation-photo .moderation-delete {
+  background: #fff;
+  color: #a72d42;
+}
+
+.moderation-photo .moderation-delete:hover:not(:disabled) {
+  background: #fff0f2;
 }
 
 .moderation-select,

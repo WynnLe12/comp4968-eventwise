@@ -23,6 +23,40 @@ test("the share signature binds the QR link to its event", () => {
   assert.equal(sharedEventId(share + "x", secret), undefined);
 });
 
+test("only the owner can remove a photo and a failed storage deletion can be retried", async () => {
+  const steps: string[] = [];
+  let fail = true;
+  const handler = createGalleryHandler({
+    gatewayApiId: "",
+    authenticate: async identity => identity ?? "",
+    checkOwner: async (eventId, subject) => {
+      if (eventId !== key.eventId || subject !== "owner") throw new ApiError(403, "FORBIDDEN", "Owner only.");
+    },
+    deletion: {
+      repository: {
+        beginDeletion: async candidate => { assert.deepEqual(candidate, key); steps.push("hide"); return true; },
+        completeDeletion: async () => { steps.push("remove metadata"); },
+      },
+      storage: {
+        deleteObjects: async candidate => {
+          assert.deepEqual(candidate, key);
+          steps.push("delete objects");
+          if (fail) throw new Error("S3 temporarily unavailable");
+        },
+      },
+    },
+  });
+  const request = { httpMethod: "DELETE", path: `${owner}/photos/${key.photoId}` };
+  assert.equal((await handler({ ...request, headers: { Authorization: "co-planner" } })).statusCode, 403);
+  assert.deepEqual(steps, []);
+  const ownerRequest = { ...request, headers: { Authorization: "owner" } };
+  assert.equal((await handler(ownerRequest)).statusCode, 500);
+  assert.deepEqual(steps, ["hide", "delete objects"]);
+  fail = false;
+  assert.equal((await handler(ownerRequest)).statusCode, 204);
+  assert.deepEqual(steps, ["hide", "delete objects", "hide", "delete objects", "remove metadata"]);
+});
+
 test("shared gateway mode requires Cognito access-token claims from the configured API", async () => {
   const apiId = "galleryapi";
   const userPoolId = "us-west-2_fixture";

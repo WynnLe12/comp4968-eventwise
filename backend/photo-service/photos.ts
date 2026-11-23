@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, GetCommand, PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { getDocumentClient } from "../shared/db/dynamodb";
 
 export const maxPhotoBytes = 10 * 1024 * 1024;
@@ -30,7 +30,7 @@ export interface Photo {
   contentType: PhotoType;
   size: number;
   createdAt: string;
-  uploadStatus: "ISSUED" | "READY" | "FAILED";
+  uploadStatus: "ISSUED" | "READY" | "FAILED" | "DELETING";
   approval: "PENDING" | "APPROVED";
   expiresAt?: number;
 }
@@ -95,6 +95,25 @@ export class PhotosRepository {
     }
   }
 
+  async beginDeletion(key: PhotoKey): Promise<boolean> {
+    try {
+      await getDocumentClient().send(new UpdateCommand({
+        TableName: this.table, Key: key,
+        ConditionExpression: "uploadStatus IN (:ready, :deleting)",
+        UpdateExpression: "SET uploadStatus = :deleting",
+        ExpressionAttributeValues: { ":ready": "READY", ":deleting": "DELETING" },
+      }));
+      return true;
+    } catch (error) {
+      if (conditionalFailure(error)) return false;
+      throw error;
+    }
+  }
+
+  async completeDeletion(key: PhotoKey) {
+    await getDocumentClient().send(new DeleteCommand({ TableName: this.table, Key: key }));
+  }
+
   async finish({ eventId, photoId }: PhotoKey, status: "READY" | "FAILED") {
     try {
       await getDocumentClient().send(new UpdateCommand({
@@ -113,6 +132,12 @@ export const photoS3 = new S3Client({ requestChecksumCalculation: "WHEN_REQUIRED
 
 export class PhotoLinks {
   constructor(private readonly bucket = process.env.PHOTOS_BUCKET ?? "", private readonly client = photoS3) {}
+
+  async deleteObjects(photo: PhotoKey) {
+    await Promise.all([originalKey(photo), thumbnailKey(photo)].map(Key =>
+      this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key })),
+    ));
+  }
 
   async upload(photo: Photo) {
     const headers = { "Content-Type": photo.contentType, "If-None-Match": "*" };
