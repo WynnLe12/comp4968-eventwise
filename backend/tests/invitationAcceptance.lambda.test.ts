@@ -5,20 +5,17 @@ import { createEventsHandler, type EventsProxyEvent } from "../event-service/lam
 import { InvitationInactiveError } from "../event-service/repositories/invitationRepository";
 import { EventAccessDeniedError, EventConflictError, EventNotFoundError } from "../event-service/services/eventService";
 import { InvitationService } from "../event-service/services/invitationService";
-import { createCognitoVerifiedEmailResolver, createVerifiedEmailResolver, EmailVerificationUnavailableError } from "../shared/auth/verifiedEmail";
 
 const env = {
   COGNITO_USER_POOL_ID: "us-west-2_testpool", COGNITO_CLIENT_ID: "testclient",
   EVENTS_CORS_ORIGIN: "https://organizer.example",
+  EVENTS_INVITATION_ACCEPTANCE_METHOD_ARN: "arn:aws:execute-api:us-west-2:123456789012:hd63bpgxm8/prod/POST/event-invitations/accept",
 };
 const path = "/event-invitations/accept";
 const token = Buffer.alloc(32, 11).toString("base64url");
 const hash = createHash("sha256").update(token).digest("hex");
 const accessToken = "test-access-token";
 const sub = "verified-cognito-sub";
-const attributes = [
-  { Name: "sub", Value: sub }, { Name: "email", Value: " Planner@Example.com " }, { Name: "email_verified", Value: "true" },
-];
 const membership = { event_id: "9007199254740993", member_id: "18446744073709551615", role: "CO_PLANNER" as const };
 
 function proxy(): EventsProxyEvent {
@@ -26,15 +23,14 @@ function proxy(): EventsProxyEvent {
     httpMethod: "POST", path, resource: path, pathParameters: null,
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ token }),
-    requestContext: { authorizer: { claims: {
-      sub, token_use: "access", client_id: env.COGNITO_CLIENT_ID,
-      iss: `https://cognito-idp.us-west-2.amazonaws.com/${env.COGNITO_USER_POOL_ID}`,
-    } } },
+    requestContext: {
+      accountId: "123456789012", apiId: "hd63bpgxm8", stage: "prod",
+      authorizer: { principalId: sub, invitationAuthVersion: "1", invitationSub: sub, invitationVerifiedEmail: "planner@example.com" },
+    },
   };
 }
 
-function fixture(getUser: Parameters<typeof createVerifiedEmailResolver>[0] = async () => ({ UserAttributes: attributes })) {
-  const cognitoCalls: string[] = [];
+function fixture() {
   const repositoryCalls: string[][] = [];
   let failure: Error | undefined;
   const acceptance = new InvitationService({
@@ -48,15 +44,11 @@ function fixture(getUser: Parameters<typeof createVerifiedEmailResolver>[0] = as
       return membership;
     },
   });
-  const resolveVerifiedEmail = createVerifiedEmailResolver(async bearer => {
-    cognitoCalls.push(bearer);
-    return getUser(bearer);
-  });
-  return { handler: createEventsHandler({ acceptance, resolveVerifiedEmail, env }), cognitoCalls, repositoryCalls,
+  return { handler: createEventsHandler({ acceptance, env }), repositoryCalls,
     fail(error: Error) { failure = error; } };
 }
 
-test("acceptance sends the bearer to GetUser and only the digest and verified identity to MySQL", async () => {
+test("acceptance sends only the digest and Gateway-verified identity to MySQL", async () => {
   const f = fixture();
   const event = proxy();
   event.body = Buffer.from(event.body!).toString("base64");
@@ -67,47 +59,51 @@ test("acceptance sends the bearer to GetUser and only the digest and verified id
   assert.equal(result.headers["Cache-Control"], "no-store");
   assert.equal(result.headers["Access-Control-Allow-Origin"], env.EVENTS_CORS_ORIGIN);
   assert.deepEqual(JSON.parse(result.body), membership);
-  assert.deepEqual(f.cognitoCalls, [accessToken]);
   assert.deepEqual(f.repositoryCalls, [[hash, sub, "planner@example.com"]]);
 });
 
-test("invalid invite tokens and extra identity fields never reach Cognito or SQL", async () => {
+test("invalid invite tokens and extra identity fields never reach SQL", async () => {
   const f = fixture();
   for (const body of [{}, { token: 123 }, { token: "too-short" }, { token: token + "=" },
     { token: token.slice(0, -1) + "B" }, { token, email: "spoofed@example.com" }, { token, sub }, { token, role: "OWNER" }, { token, event_id: "1" }]) {
     const response = await f.handler({ ...proxy(), body: JSON.stringify(body) });
     assert.equal(response.statusCode, 400);
   }
-  assert.deepEqual(f.cognitoCalls, []);
   assert.deepEqual(f.repositoryCalls, []);
 });
 
-test("acceptance requires both the Gateway access-token subject and exactly one bearer token", async () => {
+test("acceptance requires the expected Gateway context and exactly one bearer token", async () => {
   const f = fixture();
-  const invalidClaims = proxy();
-  invalidClaims.requestContext!.authorizer!.claims!.token_use = "id";
+  const { requestContext } = proxy();
+  const validContext = requestContext!;
   for (const event of [
-    { ...proxy(), requestContext: undefined }, invalidClaims,
+    { ...proxy(), requestContext: undefined },
+    { ...proxy(), requestContext: { ...validContext, apiId: "anotherapi" } },
+    { ...proxy(), requestContext: { ...validContext, accountId: "999999999999" } },
+    { ...proxy(), requestContext: { ...validContext, stage: "dev" } },
     { ...proxy(), headers: {} },
     { ...proxy(), multiValueHeaders: { Authorization: [`Bearer ${accessToken}`, "Bearer second-token"] } },
+    { ...proxy(), headers: { Authorization: `Bearer ${accessToken}`, authorization: "Bearer second-token" } },
+    { ...proxy(), multiValueHeaders: { Authorization: ["Bearer second-token"] } },
+    { ...proxy(), requestContext: undefined, headers: {
+      Authorization: `Bearer ${accessToken}`, invitationAuthVersion: "1", invitationSub: sub, invitationVerifiedEmail: "planner@example.com",
+    } },
   ]) {
     assert.equal((await f.handler(event)).statusCode, 401);
   }
-  assert.deepEqual(f.cognitoCalls, []);
-  assert.deepEqual(f.repositoryCalls, []);
-});
-
-test("GetUser must return one matching subject, one email and explicit verification", async () => {
-  for (const UserAttributes of [undefined, attributes.slice(1), attributes.filter(value => value.Name !== "email"),
-    [...attributes, attributes[1]], [
-      ...attributes.slice(0, 2), { Name: "email_verified", Value: "false" },
-    ], [{ Name: "sub", Value: "different-account" }, ...attributes.slice(1)]]) {
-    const f = fixture(async () => ({ UserAttributes }));
-    const response = await f.handler(proxy());
-    assert.equal(response.statusCode, 403);
-    assert.deepEqual(JSON.parse(response.body), { error: "A matching verified email is required" });
-    assert.deepEqual(f.repositoryCalls, []);
+  for (const authorizer of [
+    { claims: { sub, token_use: "access" } }, { principalId: sub },
+    { ...validContext.authorizer, claims: {} },
+    { ...validContext.authorizer, invitationAuthVersion: "2" },
+    { ...validContext.authorizer, invitationSub: "" },
+    { ...validContext.authorizer, invitationVerifiedEmail: "not-an-email" },
+    { ...validContext.authorizer, invitationVerifiedEmail: ["planner@example.com"] },
+    { ...validContext.authorizer, principalId: "different-subject" },
+  ]) {
+    const response = await f.handler({ ...proxy(), requestContext: { ...validContext, authorizer } });
+    assert.equal(response.statusCode, 401);
   }
+  assert.deepEqual(f.repositoryCalls, []);
 });
 
 test("enforces literal Gateway resource, method and absent path parameters; OPTIONS bypasses auth", async () => {
@@ -121,10 +117,9 @@ test("enforces literal Gateway resource, method and absent path parameters; OPTI
   const preflight = await f.handler({ ...proxy(), httpMethod: "OPTIONS", requestContext: undefined });
   assert.equal(preflight.statusCode, 204);
   assert.equal(preflight.body, "");
-  assert.deepEqual(f.cognitoCalls, []);
 });
 
-test("domain errors and Cognito outages return safe responses; errors never log credentials", async t => {
+test("domain errors return safe responses without logging credentials", async t => {
   const logs: unknown[][] = [];
   t.mock.method(console, "error", (...args: unknown[]) => logs.push(args));
   const f = fixture();
@@ -140,20 +135,8 @@ test("domain errors and Cognito outages return safe responses; errors never log 
     assert.equal(response.statusCode, status);
     for (const value of [hash, token, accessToken]) assert.ok(!response.body.includes(value));
   }
-  for (const [name, status] of [["TooManyRequestsException", 503], ["TimeoutError", 503], ["NotAuthorizedException", 401]] as const) {
-    const unavailable = fixture(async () => { throw Object.assign(new Error(`private ${accessToken}`), { name }); });
-    const result = await unavailable.handler(proxy());
-    assert.equal(result.statusCode, status);
-    assert.ok(!result.body.includes(accessToken));
-    assert.deepEqual(unavailable.repositoryCalls, []);
-  }
   assert.deepEqual(logs, [["Event invitation operation failed", {
     operation: "accept", step: undefined, errorType: "Error", errorMessage: "Unrecognized error details omitted.",
     mysqlCode: undefined, mysqlErrno: undefined,
   }]]);
-});
-
-test("production email lookup fails closed until the pool case policy is confirmed", async () => {
-  const resolve = createCognitoVerifiedEmailResolver(env);
-  await assert.rejects(resolve(accessToken, sub), EmailVerificationUnavailableError);
 });

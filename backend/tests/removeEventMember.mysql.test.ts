@@ -196,7 +196,7 @@ test("MySQL: concurrent removal and invitation acceptance serialize without alte
     const invitation = await invitations.create(eventId, { email: "planner@example.com" }, owner);
     const token = new URLSearchParams(new URL(invitation.acceptance_url).hash.slice(1)).get("token")!;
     const [accept, removal] = await Promise.allSettled([
-      invitations.accept({ token }, removed, "mock", async () => "planner@example.com"),
+      invitations.accept({ token }, { sub: removed, email: "planner@example.com" }),
       new EventService(repo).removeMember(eventId, targetId, owner),
     ]);
     assert.equal(removal.status, "fulfilled");

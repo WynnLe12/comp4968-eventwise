@@ -1,8 +1,8 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { VerifiedEmailRequiredError, type ResolveVerifiedEmail } from "../../shared/auth/verifiedEmail";
+import type { VerifiedInvitationIdentity } from "../invitationAcceptanceAuth";
 import { normalizeInvitationEmail } from "../invitationEmail";
 import { InvitationRepository } from "../repositories/invitationRepository";
-import { EventValidationError, validateEventId } from "./eventService";
+import { EventAccessDeniedError, EventValidationError, validateEventId } from "./eventService";
 import { createInvitationEmailPublisher, invitationEmailKey, openInvitationUrl, sealInvitationUrl, type PublishInvitationEmail } from "./invitationEmailPublisher";
 
 const publishInvitationEmail = createInvitationEmailPublisher();
@@ -106,12 +106,12 @@ export class InvitationService {
     await this.repository.revoke(validateEventId(eventId), validateInvitationId(invitationId), sub);
   }
 
-  async accept(body: unknown, sub: string, accessToken: string, resolveVerifiedEmail: ResolveVerifiedEmail) {
+  async accept(body: unknown, identity: VerifiedInvitationIdentity) {
     const token = invitationToken(body);
     const hash = createHash("sha256").update(token).digest("hex");
-    const email = normalizeInvitationEmail(await resolveVerifiedEmail(accessToken, sub));
-    if (!email) throw new VerifiedEmailRequiredError("A matching verified email is required");
+    const email = normalizeInvitationEmail(identity.email);
+    if (!email) throw new EventAccessDeniedError("A matching verified email is required");
     if (!this.repository.accept) throw new Error("Invitation acceptance repository is not configured");
-    return this.repository.accept(hash, sub, email);
+    return this.repository.accept(hash, identity.sub, email);
   }
 }

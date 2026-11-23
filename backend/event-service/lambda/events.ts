@@ -10,7 +10,11 @@ import { deleteEventHandler } from "../handlers/deleteEventHandler";
 import { acceptInvitationHandler, eventInvitationHandler, type InvitationOperations } from "../handlers/eventInvitationHandler";
 import { EventService } from "../services/eventService";
 import { InvitationService } from "../services/invitationService";
-import { createCognitoVerifiedEmailResolver, type ResolveVerifiedEmail } from "../../shared/auth/verifiedEmail";
+import {
+  invitationAcceptancePath, invitationAcceptanceRoute, invitationAuthorizerVersion, invitationBearer,
+  validInvitationSubject, type VerifiedInvitationIdentity,
+} from "../invitationAcceptanceAuth";
+import { normalizeInvitationEmail } from "../invitationEmail";
 
 /** The REST API proxy-v1 fields consumed here; no HTTP API v2 fallback. */
 export interface EventsProxyEvent {
@@ -22,7 +26,12 @@ export interface EventsProxyEvent {
   multiValueHeaders?: Record<string, string[] | undefined> | null;
   body?: string | null;
   isBase64Encoded?: boolean;
-  requestContext?: { authorizer?: { claims?: Record<string, unknown> | null } | null };
+  requestContext?: {
+    accountId?: string;
+    apiId?: string;
+    stage?: string;
+    authorizer?: ({ claims?: Record<string, unknown> | null } & Record<string, unknown>) | null;
+  };
 }
 
 export interface EventsProxyResponse {
@@ -37,7 +46,6 @@ export interface EventsLambdaDependencies {
   service?: EventsService;
   invitations?: InvitationOperations;
   acceptance?: Pick<InvitationService, "accept">;
-  resolveVerifiedEmail?: ResolveVerifiedEmail;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -55,6 +63,28 @@ function verifiedSubject(event: EventsProxyEvent, env: NodeJS.ProcessEnv): strin
     throw new Error("Invalid authorizer identity");
   }
   return claims.sub;
+}
+
+function verifiedInvitationIdentity(event: EventsProxyEvent, route: ReturnType<typeof invitationAcceptanceRoute>): VerifiedInvitationIdentity | undefined {
+  const context = event.requestContext;
+  const authorizer = context?.authorizer;
+  // Only the exact Gateway integration can invoke this Events target. Context fields
+  // validate the contract, while the deployment's invoke policy establishes provenance.
+  if (!route || !context || context.accountId !== route.accountId || context.apiId !== route.apiId || context.stage !== route.stage ||
+      !authorizer || authorizer.claims !== undefined || authorizer.invitationAuthVersion !== invitationAuthorizerVersion ||
+      !validInvitationSubject(authorizer.invitationSub) || authorizer.principalId !== authorizer.invitationSub ||
+      typeof authorizer.invitationVerifiedEmail !== "string" ||
+      normalizeInvitationEmail(authorizer.invitationVerifiedEmail) !== authorizer.invitationVerifiedEmail) return undefined;
+
+  const singleHeaders = Object.entries(event.headers ?? {}).filter(([name]) => name.toLowerCase() === "authorization");
+  const multiHeaders = Object.entries(event.multiValueHeaders ?? {}).filter(([name]) => name.toLowerCase() === "authorization");
+  if (singleHeaders.length > 1 || multiHeaders.length > 1) return undefined;
+  const single = singleHeaders[0]?.[1];
+  const values = multiHeaders[0]?.[1];
+  if (values && (values.length !== 1 || (single !== undefined && single !== values[0]))) return undefined;
+  if (!invitationBearer(values?.[0] ?? single)) return undefined;
+
+  return { sub: authorizer.invitationSub, email: authorizer.invitationVerifiedEmail };
 }
 
 function requestFrom(event: EventsProxyEvent): IncomingMessage {
@@ -81,7 +111,7 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
   const invitationService = new InvitationService(undefined, env);
   const invitations = dependencies.invitations ?? invitationService;
   const acceptance = dependencies.acceptance ?? invitationService;
-  const resolveVerifiedEmail = dependencies.resolveVerifiedEmail ?? createCognitoVerifiedEmailResolver(env);
+  const acceptanceRoute = invitationAcceptanceRoute(env.EVENTS_INVITATION_ACCEPTANCE_METHOD_ARN);
   return async (event: EventsProxyEvent): Promise<EventsProxyResponse> => {
     const headers: Record<string, string> = {};
     if (env.EVENTS_CORS_ORIGIN) {
@@ -102,11 +132,11 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
     const invitationId = invitationsMatch?.[2];
     const match = membersMatch ?? invitationsMatch ?? /^\/events\/([^/]+)$/.exec(event.path);
     const collection = event.path === "/events";
-    const accepting = event.path === "/event-invitations/accept";
+    const accepting = event.path === invitationAcceptancePath;
     let expectedResource = collection ? "/events" : "/events/{eventId}";
     let supported = collection ? ["GET", "POST"] : ["GET", "PATCH", "DELETE"];
     if (accepting) {
-      expectedResource = "/event-invitations/accept";
+      expectedResource = invitationAcceptancePath;
       supported = ["POST"];
       headers["Cache-Control"] = "no-store";
     } else if (membersMatch) {
@@ -131,6 +161,8 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
     }
     if (event.httpMethod === "OPTIONS") { result.statusCode = 204; return result; }
     if (!supported.includes(event.httpMethod)) return json(404, "Not found");
+    const identity = accepting ? verifiedInvitationIdentity(event, acceptanceRoute) : undefined;
+    if (accepting && !identity) return json(401, "Invalid or expired authentication token");
 
     // Capture exactly the writeHead/end operations used by the existing handlers.
     const response = {
@@ -152,7 +184,9 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
       // Injected services are used by isolated tests and need no database configuration.
       const injected = accepting ? dependencies.acceptance : invitationsMatch ? dependencies.invitations : dependencies.service;
       if (!injected) {
-        try { verifiedSubject(event, env); } catch { return json(401, "Invalid or expired authentication token"); }
+        if (!accepting) {
+          try { verifiedSubject(event, env); } catch { return json(401, "Invalid or expired authentication token"); }
+        }
         if (!env.DB_SECRET_ARN?.trim() || !env.DB_HOST?.trim() || !env.DB_NAME?.trim() || env.DYNAMODB_ENDPOINT) {
           console.error("Events Lambda requires RDS secret configuration and the AWS DynamoDB endpoint");
           return json(500, "Internal server error");
@@ -161,7 +195,7 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
       // The narrow response assertion is the only transport shim. Body parsing,
       // validation, serialization, status mapping and authorization stay in handlers.
       const output = response as unknown as ServerResponse;
-      if (accepting) await acceptInvitationHandler({ ...options, acceptance, resolveVerifiedEmail })(request, output);
+      if (identity) await acceptInvitationHandler(acceptance)(request, output, identity);
       else if (invitationsMatch) await eventInvitationHandler({ ...options, invitations })(request, output, invitationsMatch[1], invitationId);
       else if (collection && event.httpMethod === "GET") await listEventsHandler(options)(request, output);
       else if (collection) await createEventHandler(options)(request, output);

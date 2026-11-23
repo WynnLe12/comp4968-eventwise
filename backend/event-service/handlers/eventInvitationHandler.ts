@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { EmailVerificationUnavailableError, InvalidCognitoAccessTokenError, VerifiedEmailRequiredError, type ResolveVerifiedEmail } from "../../shared/auth/verifiedEmail";
 import { readJsonBody, RequestError, sendJson } from "../../shared/utils/http";
+import type { VerifiedInvitationIdentity } from "../invitationAcceptanceAuth";
 import { InvitationCreationError, InvitationInactiveError } from "../repositories/invitationRepository";
 import { EventAccessDeniedError, EventConflictError, EventNotFoundError, EventValidationError } from "../services/eventService";
 import { organizerOriginError, type InvitationService } from "../services/invitationService";
@@ -66,13 +66,10 @@ function logInvitationFailure(operation: InvitationOperation, error: unknown) {
 function invitationError(response: ServerResponse, error: unknown, operation: InvitationOperation) {
   if (error instanceof RequestError) sendJson(response, error.status, { error: error.message });
   else if (error instanceof EventValidationError) sendJson(response, 400, { error: error.message });
-  else if (error instanceof InvalidCognitoAccessTokenError) sendJson(response, 401, { error: "Invalid or expired authentication token" });
-  else if (error instanceof VerifiedEmailRequiredError) sendJson(response, 403, { error: "A matching verified email is required" });
   else if (error instanceof EventAccessDeniedError) sendJson(response, 403, { error: error.message });
   else if (error instanceof EventNotFoundError) sendJson(response, 404, { error: error.message });
   else if (error instanceof EventConflictError) sendJson(response, 409, { error: error.message });
   else if (error instanceof InvitationInactiveError) sendJson(response, 410, { error: error.message });
-  else if (error instanceof EmailVerificationUnavailableError) sendJson(response, 503, { error: "Unable to verify your email right now. Please try again." });
   else {
     logInvitationFailure(operation, error);
     sendJson(response, 500, { error: "Unable to complete invitation request" });
@@ -106,20 +103,10 @@ export function eventInvitationHandler(dependencies: InvitationDependencies) {
   };
 }
 
-export function acceptInvitationHandler(dependencies: EventAuthentication & {
-  acceptance: Pick<InvitationService, "accept">;
-  resolveVerifiedEmail: ResolveVerifiedEmail;
-}) {
-  return async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
-    const sub = await authenticateEvent(request, response, dependencies);
-    if (sub === undefined) return;
-    const accessToken = /^Bearer\s+([^\s,]+)$/i.exec(request.headers.authorization ?? "")?.[1];
-    if (!accessToken) {
-      sendJson(response, 401, { error: "Missing or invalid authentication token" });
-      return;
-    }
+export function acceptInvitationHandler(acceptance: Pick<InvitationService, "accept">) {
+  return async (request: IncomingMessage, response: ServerResponse, identity: VerifiedInvitationIdentity): Promise<void> => {
     try {
-      const result = await dependencies.acceptance.accept(await readJsonBody(request), sub, accessToken, dependencies.resolveVerifiedEmail);
+      const result = await acceptance.accept(await readJsonBody(request), identity);
       sendJson(response, 200, result);
     } catch (error) {
       invitationError(response, error, "accept");
