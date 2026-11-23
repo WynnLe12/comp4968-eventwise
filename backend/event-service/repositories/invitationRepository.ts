@@ -230,7 +230,7 @@ export class InvitationRepository {
     });
   }
 
-  async accept(tokenHash: string, sub: string, email: string): Promise<{
+  async accept(tokenHash: string, sub: string, email: string, displayName: string | null): Promise<{
     event_id: string;
     member_id: string;
     role: "CO_PLANNER";
@@ -270,7 +270,8 @@ export class InvitationRepository {
         if (members.length) throw alreadyMember;
         try {
           await connection.execute(
-            "INSERT INTO event_members (event_id, cognito_sub, role) VALUES (?, ?, 'CO_PLANNER')", [eventId, sub],
+            "INSERT INTO event_members (event_id, cognito_sub, role, display_name) VALUES (?, ?, 'CO_PLANNER', ?)",
+            [eventId, sub, displayName],
           );
         } catch (error) {
           if ((error as { code?: string } | null)?.code === "ER_DUP_ENTRY") throw alreadyMember;

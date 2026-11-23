@@ -5,7 +5,7 @@ import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { createEventsHandler, type EventsProxyEvent } from "../event-service/lambda/events";
 import { EventRepository } from "../event-service/repositories/eventRepository";
 import { InvitationCreationError, InvitationInactiveError, InvitationRepository } from "../event-service/repositories/invitationRepository";
-import { EventAccessDeniedError, EventConflictError, EventNotFoundError } from "../event-service/services/eventService";
+import { EventAccessDeniedError, EventConflictError, EventNotFoundError, EventService } from "../event-service/services/eventService";
 import { InvitationService } from "../event-service/services/invitationService";
 import { db } from "../shared/db/db";
 
@@ -247,19 +247,23 @@ test("MySQL: failure after insert rolls back the new row and the previous invita
   });
 });
 
-test("MySQL: acceptance creates only the invited event membership and records UTC acceptance", integration, async () => {
+test("MySQL: acceptance stores the trusted profile name on the invited membership and records UTC acceptance", integration, async () => {
   await withEvents(async ({ eventId, otherEventId, owner }) => {
     const service = new InvitationService(undefined, env);
     const { token, invitationId } = await invitePlanner(service, eventId, owner);
     const sub = `invitee-${randomUUID()}`;
     await assert.rejects(service.accept({ token }, { sub, email: "another@example.com" }), EventAccessDeniedError);
     await assert.rejects(service.accept({ token: Buffer.alloc(32).toString("base64url") }, verifiedPlanner(sub)), EventNotFoundError);
-    const result = await service.accept({ token }, verifiedPlanner(sub));
+    const displayName = "Ambrose Ch.";
+    const result = await service.accept({ token }, { ...verifiedPlanner(sub), displayName });
     const [members] = await db.execute<RowDataPacket[]>(
-      "SELECT CAST(member_id AS CHAR) AS member_id, CAST(event_id AS CHAR) AS event_id, role FROM event_members WHERE cognito_sub = ?",
+      "SELECT CAST(member_id AS CHAR) AS member_id, CAST(event_id AS CHAR) AS event_id, role, display_name FROM event_members WHERE cognito_sub = ?",
       [sub],
     );
-    assert.deepEqual(members.map(row => ({ ...row })), [result]);
+    assert.deepEqual(members.map(row => ({ ...row })), [{ ...result, display_name: displayName }]);
+    const roster = await new EventService().listMembers(eventId, owner);
+    assert.equal(roster.find(member => member.member_id === result.member_id)?.displayName, displayName);
+    assert.equal(roster.find(member => member.role === "CO_PLANNER" && member.member_id !== result.member_id)?.displayName, "Co-planner");
     assert.equal(result.event_id, eventId);
     assert.equal(result.role, "CO_PLANNER");
     const [rows] = await db.execute<RowDataPacket[]>(
@@ -293,7 +297,10 @@ test("MySQL: expired, revoked and already-member invitations do not add or chang
     assert.deepEqual((await new EventRepository().listMembers(eventId, owner)).map(member => member.role), ["OWNER", "CO_PLANNER"]);
     assert.equal((await service.list(eventId, owner))[0].invitation_id, active.invitationId);
     const other = await invitePlanner(service, otherEventId, owner);
-    assert.equal((await service.accept({ token: other.token }, verifiedPlanner(coPlanner))).event_id, otherEventId);
+    const accepted = await service.accept({ token: other.token }, verifiedPlanner(coPlanner));
+    assert.equal(accepted.event_id, otherEventId);
+    const stored = await new EventRepository().listMembers(otherEventId, owner);
+    assert.equal(stored.find(member => member.member_id === accepted.member_id)?.display_name, null);
   });
 });
 

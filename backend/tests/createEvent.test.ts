@@ -79,7 +79,8 @@ test("invalid inputs and body-supplied identity return 400 without database acce
     { ...input, template_id: Number.MAX_SAFE_INTEGER + 1 },
     { ...input, event_date: "2027-02-29" }, { ...input, event_date: "2026-04-31" },
     { ...input, event_date: "0999-01-01" }, { ...input, event_date: "2026-01-01T00:00:00Z" },
-    { ...input, cognito_sub: "attacker" }, { ...input, role: "OWNER" }, { ...input, event_id: 1 }];
+    { ...input, cognito_sub: "attacker" }, { ...input, role: "OWNER" }, { ...input, event_id: 1 },
+    { ...input, ownerDisplayName: "Untrusted" }, { ...input, displayName: "Untrusted" }];
   await withServer({ verifyToken: async () => "user", service: new EventService({ create: async () => { assert.fail("Repository must not run"); } }) }, async (url) => {
     for (const body of invalid) assert.equal((await post(url, body)).status, 400, JSON.stringify(body));
     assert.equal((await fetch(url, { method: "POST", headers: { authorization: "Bearer valid", "content-type": "application/json" }, body: "{" })).status, 400);
@@ -149,13 +150,14 @@ function transaction(
 test("event and OWNER inserts share one committed transaction with bound values", async () => {
   const fixture = transaction();
   const values = { ...input, template_id: "1", name: "Robert'); DROP TABLE events; --" };
-  assert.equal(await fixture.repository.create(values, "owner-sub"), event);
+  assert.equal(await fixture.repository.create(values, "owner-sub", "Wynn Le"), event);
   assert.deepEqual(fixture.calls, ["begin", "event", "read", "member", "commit", "release"]);
   assert.match(fixture.queries[0].sql, /FOR SHARE/);
   assert.deepEqual(fixture.queries[0].values, ["1"]);
   assert.deepEqual(fixture.queries[1].values, [values.name, "1", input.event_date, input.venue, input.total_budget]);
   assert.ok(!fixture.queries[1].sql.includes(values.name));
-  assert.deepEqual(fixture.queries[3].values, [event.event_id, "owner-sub"]);
+  assert.deepEqual(fixture.queries[3].values, [event.event_id, "owner-sub", "Wynn Le"]);
+  assert.match(fixture.queries[3].sql, /display_name/);
   assert.match(fixture.queries[3].sql, /'OWNER'/);
   assert.match(fixture.queries[4].sql, /FROM template_budget_categories/);
   assert.deepEqual(fixture.queries[4].values, ["1"]);

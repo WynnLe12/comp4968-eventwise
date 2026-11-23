@@ -7,10 +7,13 @@ import {
 } from "aws-jwt-verify/error";
 import type { JwksCache } from "aws-jwt-verify/jwk";
 import {
-  createCognitoVerifiedEmailResolver, InvalidCognitoAccessTokenError,
-  VerifiedEmailRequiredError, type ResolveVerifiedEmail,
+  createCognitoDisplayNameResolver, createCognitoVerifiedProfileResolver, InvalidCognitoAccessTokenError,
+  VerifiedEmailRequiredError, type ResolveCognitoDisplayName, type ResolveVerifiedProfile,
 } from "../../shared/auth/verifiedEmail";
-import { invitationAcceptanceRoute, invitationAuthorizerVersion, invitationBearer, validInvitationSubject } from "../invitationAcceptanceAuth";
+import {
+  eventCreationAuthorizerVersion, eventCreationRoute, invitationAcceptanceRoute, invitationAuthorizerVersion,
+  invitationBearer, validInvitationSubject,
+} from "../invitationAcceptanceAuth";
 import { normalizeInvitationEmail } from "../invitationEmail";
 
 interface TokenAuthorizerEvent {
@@ -20,7 +23,9 @@ interface TokenAuthorizerEvent {
 }
 
 type ConfigurationField = "EVENTS_INVITATION_ACCEPTANCE_METHOD_ARN" | "COGNITO_USER_POOL_ID" | "COGNITO_CLIENT_ID" |
-  "EVENTS_INVITATION_EMAIL_CASE_INSENSITIVE";
+  "EVENTS_INVITATION_EMAIL_CASE_INSENSITIVE" | "EVENTS_CREATE_AUTHORIZATION_SCOPES";
+
+const getUserScope = "aws.cognito.signin.user.admin";
 
 function invalidConfiguration(field: ConfigurationField, issue: "missing" | "invalid"): never {
   console.warn("Invitation authorization failed", { reason: "configuration", field, issue });
@@ -63,14 +68,18 @@ function accessPolicy(methodArn: string, principalId: string, effect: "Allow" | 
 }
 
 export function createInvitationAuthorizer({
-  env = process.env, jwksCache, resolveVerifiedEmail = createCognitoVerifiedEmailResolver(env),
+  env = process.env, jwksCache, resolveVerifiedProfile = createCognitoVerifiedProfileResolver(env),
+  resolveOwnerName = createCognitoDisplayNameResolver(env),
 }: {
   env?: NodeJS.ProcessEnv;
   jwksCache?: JwksCache;
-  resolveVerifiedEmail?: ResolveVerifiedEmail;
+  resolveVerifiedProfile?: ResolveVerifiedProfile;
+  resolveOwnerName?: ResolveCognitoDisplayName;
 } = {}) {
   const methodArn = env.EVENTS_INVITATION_ACCEPTANCE_METHOD_ARN;
-  const route = invitationAcceptanceRoute(methodArn);
+  const acceptanceRoute = invitationAcceptanceRoute(methodArn);
+  const creationRoute = eventCreationRoute(env.EVENTS_CREATE_METHOD_ARN);
+  const creationScopes = env.EVENTS_CREATE_AUTHORIZATION_SCOPES?.trim().split(/\s+/).filter(Boolean) ?? [];
   const userPoolId = env.COGNITO_USER_POOL_ID;
   const clientId = env.COGNITO_CLIENT_ID;
   const poolRegion = /^([a-z0-9-]+)_[A-Za-z0-9]+$/.exec(userPoolId ?? "")?.[1];
@@ -78,11 +87,13 @@ export function createInvitationAuthorizer({
   let verifier: ReturnType<typeof CognitoJwtVerifier.create> | undefined;
 
   return async (event: TokenAuthorizerEvent) => {
+    const creating = creationRoute !== undefined && event?.methodArn === creationRoute.arn;
+    const route = creating ? creationRoute : acceptanceRoute;
     if (!route) invalidConfiguration("EVENTS_INVITATION_ACCEPTANCE_METHOD_ARN", methodArn ? "invalid" : "missing");
     if (!poolRegion || !userPoolId) invalidConfiguration("COGNITO_USER_POOL_ID", userPoolId ? "invalid" : "missing");
     if (!clientId) invalidConfiguration("COGNITO_CLIENT_ID", "missing");
     const caseInsensitive = env.EVENTS_INVITATION_EMAIL_CASE_INSENSITIVE;
-    if (caseInsensitive !== "true") {
+    if (!creating && caseInsensitive !== "true") {
       invalidConfiguration("EVENTS_INVITATION_EMAIL_CASE_INSENSITIVE", caseInsensitive ? "invalid" : "missing");
     }
     if (event?.type !== "TOKEN") unauthorized("event_type");
@@ -105,15 +116,35 @@ export function createInvitationAuthorizer({
     if (payload.iss !== issuer) unauthorized("jwt_issuer");
     if (!validInvitationSubject(sub)) unauthorized("jwt_subject");
     if (!Number.isSafeInteger(exp) || exp * 1000 <= Date.now()) unauthorized("jwt_expiration");
+    const tokenScopes = typeof scope === "string" ? scope.split(" ") : [];
+    if (creating) {
+      if (!creationScopes.length) invalidConfiguration("EVENTS_CREATE_AUTHORIZATION_SCOPES", "missing");
+      if (!creationScopes.some(required => tokenScopes.includes(required))) unauthorized("event_creation_scope");
+      let ownerName: string | undefined;
+      if (tokenScopes.includes(getUserScope)) {
+        try { ownerName = await resolveOwnerName(token, sub); }
+        catch { console.warn("Event owner profile unavailable"); }
+      }
+      return {
+        ...accessPolicy(route.arn, sub, "Allow"),
+        context: {
+          eventCreationAuthVersion: eventCreationAuthorizerVersion, eventCreationSub: sub,
+          ...(ownerName ? { eventOwnerDisplayName: ownerName } : {}),
+        },
+      };
+    }
     const deny = (reason: string) => {
       logFailure(reason);
       return accessPolicy(route.arn, sub, "Deny");
     };
-    if (typeof scope !== "string" || !scope.split(" ").includes("aws.cognito.signin.user.admin")) return deny("jwt_scope");
+    if (!tokenScopes.includes(getUserScope)) return deny("jwt_scope");
 
     let email: string | undefined;
+    let displayName: string | undefined;
     try {
-      email = normalizeInvitationEmail(await resolveVerifiedEmail(token, sub));
+      const profile = await resolveVerifiedProfile(token, sub);
+      email = normalizeInvitationEmail(profile.email);
+      displayName = profile.displayName;
     } catch (error) {
       if (error instanceof InvalidCognitoAccessTokenError) unauthorized("get_user_token_rejected");
       if (error instanceof VerifiedEmailRequiredError) return deny("get_user_identity_unverified");
@@ -124,7 +155,10 @@ export function createInvitationAuthorizer({
 
     return {
       ...accessPolicy(route.arn, sub, "Allow"),
-      context: { invitationAuthVersion: invitationAuthorizerVersion, invitationSub: sub, invitationVerifiedEmail: email },
+      context: {
+        invitationAuthVersion: invitationAuthorizerVersion, invitationSub: sub, invitationVerifiedEmail: email,
+        ...(displayName ? { invitationDisplayName: displayName } : {}),
+      },
     };
   };
 }

@@ -192,7 +192,7 @@ export function OwnerCoPlanners({ eventId, userId, isCurrentEvent, onSessionExpi
       </>}>
       {dialog.kind === "revoke"
         ? <p>The invitation link for <strong>{dialog.invitation.email}</strong> will stop working.</p>
-        : <p><strong>Member #{dialog.member.member_id}</strong> will lose access to this event. Their assigned tasks will become unassigned.</p>}
+        : <p><strong>{dialog.member.displayName ?? "This co-planner"}</strong> will lose access to this event. Their assigned tasks will become unassigned.</p>}
       {error && <p className="expense-form-error" role="alert">{error}</p>}
     </Modal>}
   </>;

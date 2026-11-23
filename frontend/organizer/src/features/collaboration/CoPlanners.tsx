@@ -23,9 +23,9 @@ function roster(members: EventMember[], onRemove?: (member: EventMember) => void
         return <li className={canRemove ? "person-row collaboration-action-row" : "person-row"} key={member.member_id}>
           <span><Icon name="users" size={16} /></span>
           <div>
-            <b>{eventRole(member.role)}{!member.is_self && ` — Member #${member.member_id}`}</b>
+            <b>{member.displayName ?? eventRole(member.role)}</b>
             <p>
-              {member.is_self && "You · "}
+              {eventRole(member.role)} · {member.role === "OWNER" && member.is_self && "You · "}
               Joined <time dateTime={member.joined_at}>{formatCalendarDate(member.joined_at.slice(0, 10))}</time>
             </p>
           </div>

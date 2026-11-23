@@ -19,17 +19,18 @@ test("MySQL: created event has its OWNER membership and exact date/budget", { sk
   if (templates[0]) values.template_id = String(templates[0].id);
   let eventId: string | undefined;
   try {
-    const event = await new EventRepository().create(values, sub);
+    const event = await new EventRepository().create(values, sub, "Wynn Le");
     eventId = event.event_id;
     assert.equal(event.event_date, values.event_date);
     assert.equal(event.total_budget, values.total_budget);
     assert.equal(event.template_id, values.template_id);
     const [members] = await db.execute<RowDataPacket[]>(
-      "SELECT cognito_sub, role FROM event_members WHERE event_id = ?", [eventId],
+      "SELECT cognito_sub, role, display_name FROM event_members WHERE event_id = ?", [eventId],
     );
     assert.equal(members.length, 1);
     assert.equal(members[0].cognito_sub, sub);
     assert.equal(members[0].role, "OWNER");
+    assert.equal(members[0].display_name, "Wynn Le");
   } finally {
     // Deletes only this test's event; the schema cascades its membership.
     if (eventId) await db.execute("DELETE FROM events WHERE event_id = ?", [eventId]);

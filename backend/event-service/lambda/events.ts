@@ -9,9 +9,10 @@ import { updateEventHandler } from "../handlers/updateEventHandler";
 import { deleteEventHandler } from "../handlers/deleteEventHandler";
 import { acceptInvitationHandler, eventInvitationHandler, type InvitationOperations } from "../handlers/eventInvitationHandler";
 import { EventService } from "../services/eventService";
+import { normalizeProfileDisplayName } from "../../shared/auth/profileDisplayName";
 import { InvitationService } from "../services/invitationService";
 import {
-  invitationAcceptancePath, invitationAcceptanceRoute, invitationAuthorizerVersion, invitationBearer,
+  eventCreationAuthorizerVersion, eventCreationRoute, invitationAcceptancePath, invitationAcceptanceRoute, invitationAuthorizerVersion, invitationBearer,
   validInvitationSubject, type VerifiedInvitationIdentity,
 } from "../invitationAcceptanceAuth";
 import { normalizeInvitationEmail } from "../invitationEmail";
@@ -65,6 +66,15 @@ function verifiedSubject(event: EventsProxyEvent, env: NodeJS.ProcessEnv): strin
   return claims.sub;
 }
 
+function verifiedEventCreator(event: EventsProxyEvent, route: ReturnType<typeof eventCreationRoute>) {
+  const context = event.requestContext;
+  const authorizer = context?.authorizer;
+  if (!route || !context || context.accountId !== route.accountId || context.apiId !== route.apiId || context.stage !== route.stage ||
+      !authorizer || authorizer.claims !== undefined || authorizer.eventCreationAuthVersion !== eventCreationAuthorizerVersion ||
+      !validInvitationSubject(authorizer.eventCreationSub) || authorizer.principalId !== authorizer.eventCreationSub) return undefined;
+  return { sub: authorizer.eventCreationSub, displayName: normalizeProfileDisplayName(authorizer.eventOwnerDisplayName) };
+}
+
 function verifiedInvitationIdentity(event: EventsProxyEvent, route: ReturnType<typeof invitationAcceptanceRoute>): VerifiedInvitationIdentity | undefined {
   const context = event.requestContext;
   const authorizer = context?.authorizer;
@@ -84,7 +94,11 @@ function verifiedInvitationIdentity(event: EventsProxyEvent, route: ReturnType<t
   if (values && (values.length !== 1 || (single !== undefined && single !== values[0]))) return undefined;
   if (!invitationBearer(values?.[0] ?? single)) return undefined;
 
-  return { sub: authorizer.invitationSub, email: authorizer.invitationVerifiedEmail };
+  return {
+    sub: authorizer.invitationSub,
+    email: authorizer.invitationVerifiedEmail,
+    displayName: normalizeProfileDisplayName(authorizer.invitationDisplayName),
+  };
 }
 
 function requestFrom(event: EventsProxyEvent): IncomingMessage {
@@ -112,6 +126,7 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
   const invitations = dependencies.invitations ?? invitationService;
   const acceptance = dependencies.acceptance ?? invitationService;
   const acceptanceRoute = invitationAcceptanceRoute(env.EVENTS_INVITATION_ACCEPTANCE_METHOD_ARN);
+  const creationRoute = eventCreationRoute(env.EVENTS_CREATE_METHOD_ARN);
   return async (event: EventsProxyEvent): Promise<EventsProxyResponse> => {
     const headers: Record<string, string> = {};
     if (env.EVENTS_CORS_ORIGIN) {
@@ -163,6 +178,7 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
     if (!supported.includes(event.httpMethod)) return json(404, "Not found");
     const identity = accepting ? verifiedInvitationIdentity(event, acceptanceRoute) : undefined;
     if (accepting && !identity) return json(401, "Invalid or expired authentication token");
+    const creator = collection && event.httpMethod === "POST" ? verifiedEventCreator(event, creationRoute) : undefined;
 
     // Capture exactly the writeHead/end operations used by the existing handlers.
     const response = {
@@ -178,13 +194,13 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
       request = requestFrom(event);
       const options = {
         service,
-        resolveIdentity: async () => verifiedSubject(event, env),
+        resolveIdentity: async () => creator?.sub ?? verifiedSubject(event, env),
       };
       // Require secret mode for the deployed service; never fall back to .env credentials.
       // Injected services are used by isolated tests and need no database configuration.
       const injected = accepting ? dependencies.acceptance : invitationsMatch ? dependencies.invitations : dependencies.service;
       if (!injected) {
-        if (!accepting) {
+        if (!accepting && !creator) {
           try { verifiedSubject(event, env); } catch { return json(401, "Invalid or expired authentication token"); }
         }
         if (!env.DB_SECRET_ARN?.trim() || !env.DB_HOST?.trim() || !env.DB_NAME?.trim() || env.DYNAMODB_ENDPOINT) {
@@ -198,7 +214,7 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
       if (identity) await acceptInvitationHandler(acceptance)(request, output, identity);
       else if (invitationsMatch) await eventInvitationHandler({ ...options, invitations })(request, output, invitationsMatch[1], invitationId);
       else if (collection && event.httpMethod === "GET") await listEventsHandler(options)(request, output);
-      else if (collection) await createEventHandler(options)(request, output);
+      else if (collection) await createEventHandler({ ...options, ownerDisplayName: creator?.displayName })(request, output);
       else if (membersMatch && memberId !== undefined) await removeEventMemberHandler(options)(request, output, membersMatch[1], memberId);
       else if (membersMatch) await listEventMembersHandler(options)(request, output, membersMatch[1]);
       else if (event.httpMethod === "GET") await getEventHandler(options)(request, output, match![1]);

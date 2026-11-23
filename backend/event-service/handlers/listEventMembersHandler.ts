@@ -13,7 +13,7 @@ export function listEventMembersHandler(dependencies: Partial<ListEventMembersDe
     const cognitoSub = await authenticateEvent(request, response, dependencies);
     if (cognitoSub === undefined) return;
     try {
-      sendJson(response, 200, await service.listMembers(eventId, cognitoSub));
+      sendJson(response, 200, await service.listMembers(eventId, cognitoSub), { "Cache-Control": "no-store" });
     } catch (error) {
       if (error instanceof EventValidationError || error instanceof EventAccessDeniedError) {
         sendJson(response, error instanceof EventValidationError ? 400 : 403, { error: error.message });

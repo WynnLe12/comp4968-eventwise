@@ -43,6 +43,7 @@ CREATE TABLE event_members (
  -- VIRTUAL, not STORED: MySQL 8.0 rejects ON DELETE CASCADE on event_id when a STORED
  -- generated column is built from it (error 1215; MariaDB allows it). The unique index still works.
  owner_event_id BIGINT UNSIGNED GENERATED ALWAYS AS (CASE WHEN role = 'OWNER' THEN event_id ELSE NULL END) VIRTUAL,
+ display_name VARCHAR(256) NULL DEFAULT NULL,
  UNIQUE KEY uq_event_member (event_id, cognito_sub),
  UNIQUE KEY uq_one_owner_per_event (owner_event_id),
  KEY idx_member_user (cognito_sub, event_id),

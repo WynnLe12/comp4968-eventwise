@@ -7,6 +7,7 @@ export interface EventMember {
   role: OrganizerEvent["role"];
   joined_at: string;
   is_self: boolean;
+  displayName?: string;
 }
 
 export class EventMembersError extends Error {
@@ -48,11 +49,12 @@ function parseMembers(body: unknown): EventMember[] {
   if (!Array.isArray(body)) throw invalid();
   return body.map((item: unknown) => {
     if (!item || typeof item !== "object") throw invalid();
-    const { member_id, role, joined_at, is_self } = item as Record<string, unknown>;
+    const { member_id, role, joined_at, is_self, displayName } = item as Record<string, unknown>;
     if (!isId(member_id) || (role !== "OWNER" && role !== "CO_PLANNER") || !isTimestamp(joined_at) || typeof is_self !== "boolean") {
       throw invalid();
     }
-    return { member_id, role, joined_at, is_self };
+    const name = typeof displayName === "string" ? displayName.trim() : "";
+    return { member_id, role, joined_at, is_self, ...(name && name.length <= 256 ? { displayName: name } : {}) };
   });
 }
 

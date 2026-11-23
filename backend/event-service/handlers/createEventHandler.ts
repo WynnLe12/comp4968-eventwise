@@ -5,6 +5,8 @@ import { EventService, EventValidationError } from "../services/eventService";
 
 export interface CreateEventDependencies extends EventAuthentication {
   service: Pick<EventService, "create">;
+  /** Only the trusted transport adapter supplies profile data. */
+  ownerDisplayName?: string;
 }
 
 export function createEventHandler(dependencies: Partial<CreateEventDependencies> = {}) {
@@ -13,7 +15,7 @@ export function createEventHandler(dependencies: Partial<CreateEventDependencies
     const cognitoSub = await authenticateEvent(request, response, dependencies);
     if (cognitoSub === undefined) return;
     try {
-      const event = await service.create(await readJsonBody(request), cognitoSub);
+      const event = await service.create(await readJsonBody(request), cognitoSub, dependencies.ownerDisplayName);
       sendJson(response, 201, event);
     } catch (error) {
       if (error instanceof RequestError || error instanceof EventValidationError) {

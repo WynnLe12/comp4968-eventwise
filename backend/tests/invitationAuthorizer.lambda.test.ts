@@ -4,7 +4,7 @@ import { test, type TestContext } from "node:test";
 import { FetchError } from "aws-jwt-verify/error";
 import { SimpleJwksCache } from "aws-jwt-verify/jwk";
 import { createInvitationAuthorizer } from "../event-service/lambda/invitationAuthorizer";
-import { createVerifiedEmailResolver } from "../shared/auth/verifiedEmail";
+import { createCognitoDisplayNameResolver, createVerifiedProfileResolver } from "../shared/auth/verifiedEmail";
 
 const methodArn = "arn:aws:execute-api:us-west-2:123456789012:hd63bpgxm8/prod/POST/event-invitations/accept";
 const env = {
@@ -37,15 +37,15 @@ function event(token: string) {
   return { type: "TOKEN", authorizationToken: `Bearer ${token}`, methodArn };
 }
 
-function fixture(getUser: Parameters<typeof createVerifiedEmailResolver>[0] = async () => ({ UserAttributes: attributes })) {
+function fixture(getUser: Parameters<typeof createVerifiedProfileResolver>[0] = async () => ({ UserAttributes: attributes })) {
   const jwksCache = new SimpleJwksCache({ fetcher: { async fetch() { assert.fail("Unexpected JWKS fetch"); } } });
   for (const origin of [issuer, alternateIssuer]) jwksCache.addJwks(`${origin}/.well-known/jwks.json`, { keys: [key] });
   const calls: string[] = [];
-  const resolveVerifiedEmail = createVerifiedEmailResolver(async token => {
+  const resolveVerifiedProfile = createVerifiedProfileResolver(async token => {
     calls.push(token);
     return getUser(token);
   });
-  return { calls, handler: createInvitationAuthorizer({ env, jwksCache, resolveVerifiedEmail }) };
+  return { calls, handler: createInvitationAuthorizer({ env, jwksCache, resolveVerifiedProfile }) };
 }
 
 function expectFailures(t: TestContext) {
@@ -66,6 +66,78 @@ test("authorizer verifies a signed access token, calls GetUser on every request 
   assert.deepEqual(await handler(event(token)), expected);
   assert.deepEqual(await handler(event(token)), expected);
   assert.deepEqual(calls, [token, token]);
+  assertFailures();
+});
+
+test("the existing authorizer scopes event creation and supplies an optional name from the same Cognito subject", async t => {
+  const invitationLookup = t.mock.fn(async () => { throw new Error("Invitation lookup must not run for event creation"); });
+  const warnings = t.mock.method(console, "warn", () => {});
+  const creationArn = methodArn.replace("/event-invitations/accept", "/events");
+  const jwksCache = new SimpleJwksCache();
+  jwksCache.addJwks(`${issuer}/.well-known/jwks.json`, { keys: [key] });
+  let returned: { Name: string; Value: string }[] | undefined;
+  let lookupFails = false;
+  const getUser = t.mock.fn(async (_token: string) => {
+    if (lookupFails) throw new Error("Private upstream details");
+    return { UserAttributes: returned };
+  });
+  const authorize = createInvitationAuthorizer({
+    env: { ...env, EVENTS_CREATE_METHOD_ARN: creationArn, EVENTS_CREATE_AUTHORIZATION_SCOPES: "custom/create aws.cognito.signin.user.admin" },
+    jwksCache,
+    resolveVerifiedProfile: invitationLookup,
+    resolveOwnerName: createCognitoDisplayNameResolver(env, getUser),
+  });
+  const token = jwt();
+  const request = { ...event(token), methodArn: creationArn };
+  const baseContext = { eventCreationAuthVersion: "1", eventCreationSub: sub };
+  const contextFor = async (input: typeof request) => {
+    const result = await authorize(input);
+    assert.ok("context" in result);
+    return result.context;
+  };
+  returned = [{ Name: "sub", Value: sub }, { Name: "name", Value: "Wynn Le" }, { Name: "given_name", Value: "Other" }];
+  assert.deepEqual(await authorize(request), {
+    principalId: sub,
+    policyDocument: { Version: "2012-10-17", Statement: [{ Action: "execute-api:Invoke", Effect: "Allow", Resource: creationArn }] },
+    context: { ...baseContext, eventOwnerDisplayName: "Wynn Le" },
+  });
+  assert.deepEqual(getUser.mock.calls[0].arguments, [token]);
+  returned = [{ Name: "sub", Value: sub }, { Name: "given_name", Value: "Wynn" }, { Name: "family_name", Value: "Le" }];
+  assert.deepEqual(await contextFor(request), { ...baseContext, eventOwnerDisplayName: "Wynn Le" });
+  returned = [{ Name: "sub", Value: "another-user" }, { Name: "name", Value: "Other" }];
+  assert.deepEqual(await contextFor(request), baseContext);
+  returned = [{ Name: "sub", Value: sub }];
+  assert.deepEqual(await contextFor(request), baseContext);
+  lookupFails = true;
+  assert.deepEqual(await contextFor(request), baseContext);
+  const scopedOnly = { ...event(jwt({ scope: "custom/create" })), methodArn: creationArn };
+  assert.deepEqual(await contextFor(scopedOnly), baseContext);
+  await assert.rejects(authorize({ ...event(jwt({ scope: "unrelated" })), methodArn: creationArn }), { message: "Unauthorized" });
+  await assert.rejects(authorize({ ...request, methodArn: creationArn.replace("/prod/", "/dev/") }), { message: "Unauthorized" });
+  assert.equal(getUser.mock.callCount(), 5);
+  assert.equal(invitationLookup.mock.callCount(), 0);
+  assert.deepEqual(warnings.mock.calls[0].arguments, ["Event owner profile unavailable"]);
+});
+
+test("authorizer sends a display name from the same verified Cognito profile when available", async t => {
+  const assertFailures = expectFailures(t);
+  const given = { Name: "given_name", Value: " Ambrose " };
+  const family = { Name: "family_name", Value: "Ch." };
+  for (const [names, expected] of [
+    [[{ Name: "name", Value: " Ambrose Chen " }, given, family], "Ambrose Chen"],
+    [[given, family], "Ambrose Ch."],
+    [[{ Name: "name", Value: "\u202eInvalid" }, given], "Ambrose"],
+    [[{ Name: "name", Value: "a".repeat(257) }], undefined],
+  ] as const) {
+    const { handler } = fixture(async () => ({ UserAttributes: [...attributes, ...names] }));
+    const result = await handler(event(jwt()));
+    assert.equal(result.policyDocument.Statement[0].Effect, "Allow");
+    assert.ok("context" in result);
+    assert.deepEqual(result.context, {
+      invitationAuthVersion: "1", invitationSub: sub, invitationVerifiedEmail: "planner@example.com",
+      ...(expected ? { invitationDisplayName: expected } : {}),
+    });
+  }
   assertFailures();
 });
 
@@ -103,7 +175,7 @@ test("authorizer reports an unknown signing key without logging the key ID", asy
   const jwksCache = new SimpleJwksCache({ fetcher: {
     async fetch() { return new TextEncoder().encode(JSON.stringify({ keys: [key] })).buffer; },
   } });
-  const handler = createInvitationAuthorizer({ env, jwksCache, async resolveVerifiedEmail() { assert.fail("Unexpected GetUser"); } });
+  const handler = createInvitationAuthorizer({ env, jwksCache, async resolveVerifiedProfile() { assert.fail("Unexpected GetUser"); } });
   await assert.rejects(handler(event(jwt({}, privateKey, "untrusted-key-id"))), { message: "Unauthorized" });
   assertFailures("jwt_signing_key");
 });
@@ -174,7 +246,7 @@ test("authorizer reports the failing configuration field without logging any sup
     const handler = createInvitationAuthorizer({
       env: { ...env, [field]: value },
       jwksCache: new SimpleJwksCache({ fetcher: { async fetch() { assert.fail("Unexpected JWKS fetch"); } } }),
-      async resolveVerifiedEmail() { assert.fail("Unexpected GetUser"); },
+      async resolveVerifiedProfile() { assert.fail("Unexpected GetUser"); },
     });
     await assert.rejects(handler(event(jwt())), { message: "Invitation authorizer configuration is invalid" });
   }

@@ -13,7 +13,8 @@ const handler = 'event-service/lambda/invitationAuthorizer.js';
 
 try {
   for (const name of ['package.json', 'package-lock.json']) cpSync(join(root, name), join(staging, name));
-  for (const file of [handler, 'event-service/invitationAcceptanceAuth.js', 'event-service/invitationEmail.js', 'shared/auth/verifiedEmail.js']) {
+  for (const file of [handler, 'event-service/invitationAcceptanceAuth.js', 'event-service/invitationEmail.js',
+    'shared/auth/verifiedEmail.js', 'shared/auth/profileDisplayName.js']) {
     const target = join(staging, file);
     mkdirSync(dirname(target), { recursive: true });
     cpSync(join(root, 'dist', file), target);

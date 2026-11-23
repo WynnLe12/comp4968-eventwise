@@ -7,13 +7,14 @@ import { EventDeletionBlockedError, MemberRemovalBlockedError, type EventRecord,
 const env = {
   COGNITO_USER_POOL_ID: "us-west-2_testpool", COGNITO_CLIENT_ID: "testclient",
   EVENTS_CORS_ORIGIN: "https://organizer.example",
+  EVENTS_CREATE_METHOD_ARN: "arn:aws:execute-api:us-west-2:123456789012:hd63bpgxm8/prod/POST/events",
 };
 const id = "18446744073709551615";
 const membersPath = `/events/${id}/members`;
 const memberItemPath = `${membersPath}/2`;
 const memberRows = [
-  { member_id: id, cognito_sub: "owner", role: "OWNER" as const, joined_at_epoch: "1795255200" },
-  { member_id: "2", cognito_sub: "co", role: "CO_PLANNER" as const, joined_at_epoch: 1795258800 },
+  { member_id: id, cognito_sub: "owner", role: "OWNER" as const, joined_at_epoch: "1795255200", display_name: null },
+  { member_id: "2", cognito_sub: "co", role: "CO_PLANNER" as const, joined_at_epoch: 1795258800, display_name: null },
 ];
 const record: EventRecord = {
   event_id: id, name: "Wedding", template_id: "2", event_date: null, venue: null,
@@ -36,7 +37,8 @@ function proxy(method = "GET", path = "/events", sub = "owner"): EventsProxyEven
   };
 }
 
-function fixture(options: { missing?: boolean; payments?: boolean; guestFailure?: boolean; sqlFailure?: boolean; crossEventTask?: boolean } = {}) {
+function fixture(options: { missing?: boolean; payments?: boolean; guestFailure?: boolean; sqlFailure?: boolean; crossEventTask?: boolean;
+  displayName?: string; ownerDisplayName?: string } = {}) {
   const calls: { operation: string; values: unknown[] }[] = [];
   const call = (operation: string, ...values: unknown[]) => { calls.push({ operation, values }); };
   const current = (sub: string) => options.missing ? undefined : {
@@ -46,7 +48,9 @@ function fixture(options: { missing?: boolean; payments?: boolean; guestFailure?
     async list(sub) { call("list", sub); return [{ ...record, role: "OWNER" }]; },
     async listMembers(eventId, sub) {
       call("list-members", eventId, sub);
-      return eventId === id && memberRows.some(member => member.cognito_sub === sub) ? memberRows : [];
+      return eventId === id && memberRows.some(member => member.cognito_sub === sub)
+        ? memberRows.map(member => ({ ...member, display_name: (member.role === "OWNER" ? options.ownerDisplayName : options.displayName) ?? null }))
+        : [];
     },
     async removeMember(eventId, memberId, sub) {
       call("remove-member", eventId, memberId, sub);
@@ -57,7 +61,7 @@ function fixture(options: { missing?: boolean; payments?: boolean; guestFailure?
       if (options.crossEventTask) throw new MemberRemovalBlockedError("cross-event-task");
       if (options.sqlFailure) throw new Error("private SQL detail");
     },
-    async create(input, sub) { call("create", input, sub); return { ...record, ...input }; },
+    async create(input, sub, displayName) { call("create", input, sub, displayName); return { ...record, ...input }; },
     async getById(eventId, sub) { call("get", eventId, sub); return current(sub); },
     async update(eventId, patch, sub, authorize) {
       call("update", eventId, patch, sub); const value = current(sub); authorize(value);
@@ -132,16 +136,17 @@ test("all six routes reject absent/untrusted identity without invoking services"
 });
 
 test("members route returns a private roster with the verified caller marked for either role", async () => {
-  const f = fixture();
+  const f = fixture({ displayName: "Maya Bennett", ownerDisplayName: "Wynn Le" });
   for (const sub of ["owner", "co"]) {
     const event = proxy("GET", membersPath, sub);
     event.body = '{"cognito_sub":"unrelated","eventId":"1"}';
     const result = await f.handler(event);
     assert.equal(result.statusCode, 200);
     assert.equal(result.headers["Access-Control-Allow-Origin"], env.EVENTS_CORS_ORIGIN);
+    assert.equal(result.headers["Cache-Control"], "no-store");
     assert.deepEqual(JSON.parse(result.body), [
-      { member_id: id, role: "OWNER", joined_at: "2026-11-21T10:00:00.000Z", is_self: sub === "owner" },
-      { member_id: "2", role: "CO_PLANNER", joined_at: "2026-11-21T11:00:00.000Z", is_self: sub === "co" },
+      { member_id: id, role: "OWNER", joined_at: "2026-11-21T10:00:00.000Z", is_self: sub === "owner", displayName: "Wynn Le" },
+      { member_id: "2", role: "CO_PLANNER", joined_at: "2026-11-21T11:00:00.000Z", is_self: sub === "co", displayName: "Maya Bennett" },
     ]);
   }
   assert.deepEqual(f.calls.map(call => call.values), [[id, "owner"], [id, "co"]]);
@@ -154,6 +159,36 @@ test("members route denies unrelated callers and access to another or missing ev
     assert.equal(result.statusCode, 403);
     assert.deepEqual(JSON.parse(result.body), { error: "You do not have access to this event" });
   }
+});
+
+test("members route uses the co-planner label for an existing row with no stored display name", async () => {
+  const f = fixture();
+  const result = await f.handler(proxy("GET", membersPath));
+  assert.equal(result.statusCode, 200);
+  assert.equal(JSON.parse(result.body)[0].displayName, "Owner");
+  assert.equal(JSON.parse(result.body)[1].displayName, "Co-planner");
+});
+
+test("event creation accepts a name only from the scoped profile authorizer context", async () => {
+  const f = fixture();
+  const event = proxy("POST");
+  event.body = '{"name":"New event"}';
+  event.headers = { ...event.headers, eventOwnerDisplayName: "Untrusted" };
+  const trustedContext = {
+    accountId: "123456789012", apiId: "hd63bpgxm8", stage: "prod",
+    authorizer: { eventCreationAuthVersion: "1", principalId: "owner", eventCreationSub: "owner", eventOwnerDisplayName: "Wynn Le" },
+  };
+  assert.equal((await f.handler({ ...event, requestContext: trustedContext })).statusCode, 201);
+  assert.equal((await f.handler(event)).statusCode, 201);
+  assert.equal((await f.handler({ ...event, requestContext: { ...trustedContext, authorizer: {
+    ...trustedContext.authorizer, eventOwnerDisplayName: undefined,
+  } } })).statusCode, 201);
+  assert.equal((await f.handler({ ...event, requestContext: { ...trustedContext, stage: "dev" } })).statusCode, 401);
+  assert.equal((await f.handler({ ...event, requestContext: { ...trustedContext, authorizer: {
+    ...trustedContext.authorizer, eventCreationSub: "someone-else",
+  } } })).statusCode, 401);
+  assert.equal((await f.handler({ ...event, body: '{"name":"New event","ownerDisplayName":"Untrusted"}', requestContext: trustedContext })).statusCode, 400);
+  assert.deepEqual(f.calls.map(call => call.values.slice(1)), [["owner", "Wynn Le"], ["owner", null], ["owner", null]]);
 });
 
 test("member DELETE uses the verified owner, preserves exact string IDs, and returns empty 204", async () => {

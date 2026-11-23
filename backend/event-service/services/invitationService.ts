@@ -112,6 +112,6 @@ export class InvitationService {
     const email = normalizeInvitationEmail(identity.email);
     if (!email) throw new EventAccessDeniedError("A matching verified email is required");
     if (!this.repository.accept) throw new Error("Invitation acceptance repository is not configured");
-    return this.repository.accept(hash, identity.sub, email);
+    return this.repository.accept(hash, identity.sub, email, identity.displayName ?? null);
   }
 }

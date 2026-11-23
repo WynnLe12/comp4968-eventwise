@@ -1,13 +1,16 @@
 import { CognitoIdentityProviderClient, GetUserCommand, type GetUserCommandOutput } from "@aws-sdk/client-cognito-identity-provider";
+import { profileDisplayName } from "./profileDisplayName";
 
 export class VerifiedEmailRequiredError extends Error {}
 export class EmailVerificationUnavailableError extends Error {}
 export class InvalidCognitoAccessTokenError extends Error {}
 
-export type ResolveVerifiedEmail = (accessToken: string, verifiedSub: string) => Promise<string>;
+interface VerifiedProfile { email: string; displayName?: string }
+export type ResolveVerifiedProfile = (accessToken: string, verifiedSub: string) => Promise<VerifiedProfile>;
+export type ResolveCognitoDisplayName = (accessToken: string, verifiedSub: string) => Promise<string | undefined>;
 type GetUser = (accessToken: string) => Promise<Pick<GetUserCommandOutput, "UserAttributes">>;
 
-export function createVerifiedEmailResolver(getUser: GetUser): ResolveVerifiedEmail {
+export function createVerifiedProfileResolver(getUser: GetUser): ResolveVerifiedProfile {
   return async (accessToken, verifiedSub) => {
     let result: Awaited<ReturnType<GetUser>>;
     try {
@@ -27,20 +30,36 @@ export function createVerifiedEmailResolver(getUser: GetUser): ResolveVerifiedEm
         verified.length !== 1 || verified[0].Value !== "true") {
       throw new VerifiedEmailRequiredError("A matching verified email is required");
     }
-    return email[0].Value;
+    return { email: email[0].Value, displayName: profileDisplayName(attributes) };
   };
 }
 
-export function createCognitoVerifiedEmailResolver(env: NodeJS.ProcessEnv): ResolveVerifiedEmail {
+export function createCognitoDisplayNameResolver(env: NodeJS.ProcessEnv, getUser = createGetUser(env, 1500)): ResolveCognitoDisplayName {
+  return async (accessToken, verifiedSub) => {
+    const attributes = (await getUser(accessToken)).UserAttributes ?? [];
+    const subjects = attributes.filter(attribute => attribute.Name === "sub");
+    return subjects.length === 1 && subjects[0].Value === verifiedSub ? profileDisplayName(attributes) : undefined;
+  };
+}
+
+function createGetUser(env: NodeJS.ProcessEnv, timeoutMs: number): GetUser {
   let client: CognitoIdentityProviderClient | undefined;
-  return createVerifiedEmailResolver(async accessToken => {
+  return async accessToken => {
     const region = /^([a-z0-9-]+)_[A-Za-z0-9]+$/.exec(env.COGNITO_USER_POOL_ID ?? "")?.[1];
+    if (!region) throw new Error("Cognito profile lookup is not configured");
+    client ??= new CognitoIdentityProviderClient({ region, maxAttempts: 1 });
+    return client.send(new GetUserCommand({ AccessToken: accessToken }), { abortSignal: AbortSignal.timeout(timeoutMs) });
+  };
+}
+
+export function createCognitoVerifiedProfileResolver(env: NodeJS.ProcessEnv): ResolveVerifiedProfile {
+  const getUser = createGetUser(env, 4000);
+  return createVerifiedProfileResolver(async accessToken => {
     // F2.2 collapses case variants. Enable only for a pool where they cannot
     // represent different verified accounts.
-    if (!region || env.EVENTS_INVITATION_EMAIL_CASE_INSENSITIVE !== "true") {
+    if (env.EVENTS_INVITATION_EMAIL_CASE_INSENSITIVE !== "true") {
       throw new Error("Cognito invitation email verification is not configured");
     }
-    client ??= new CognitoIdentityProviderClient({ region, maxAttempts: 1 });
-    return client.send(new GetUserCommand({ AccessToken: accessToken }), { abortSignal: AbortSignal.timeout(4_000) });
+    return getUser(accessToken);
   });
 }

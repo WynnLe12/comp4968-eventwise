@@ -1,6 +1,7 @@
 import { EventRepository, EventDeletionBlockedError, InvalidTemplateError, MemberRemovalBlockedError, type EventInput, type EventRecord, type ListedEvent } from "../repositories/eventRepository";
 import { localToday, validDate } from "../../shared/utils/dateOnly";
 import { GuestRepository } from "../../guest-service/repositories/guestRepository";
+import { normalizeProfileDisplayName } from "../../shared/auth/profileDisplayName";
 
 export class EventValidationError extends Error {}
 export class EventNotFoundError extends Error {}
@@ -12,6 +13,7 @@ export interface EventMember {
   role: ListedEvent["role"];
   joined_at: string;
   is_self: boolean;
+  displayName: string;
 }
 
 export function validateEventId(eventId: unknown, field = "eventId"): string {
@@ -156,6 +158,7 @@ export class EventService {
       role: member.role,
       joined_at: new Date(Number(member.joined_at_epoch) * 1000).toISOString(),
       is_self: member.cognito_sub === cognitoSub,
+      displayName: normalizeProfileDisplayName(member.display_name) ?? (member.role === "OWNER" ? "Owner" : "Co-planner"),
     }));
   }
 
@@ -177,11 +180,11 @@ export class EventService {
     }
   }
 
-  async create(body: unknown, cognitoSub: string): Promise<EventRecord> {
+  async create(body: unknown, cognitoSub: string, ownerDisplayName?: string): Promise<EventRecord> {
     if (!cognitoSub || cognitoSub.length > 128) throw new Error("Verified Cognito identity is required");
     const input = validateEventInput(body, this.today());
     try {
-      return await this.repository.create(input, cognitoSub);
+      return await this.repository.create(input, cognitoSub, normalizeProfileDisplayName(ownerDisplayName) ?? null);
     } catch (error) {
       if (error instanceof InvalidTemplateError) throw new EventValidationError(error.message);
       throw error;

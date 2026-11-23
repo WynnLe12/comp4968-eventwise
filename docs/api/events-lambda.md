@@ -41,18 +41,22 @@ Authorization: Bearer <access-token>
     "member_id": "1",
     "role": "OWNER",
     "joined_at": "2026-11-21T10:00:00.000Z",
-    "is_self": true
+    "is_self": true,
+    "displayName": "Wynn Le"
   },
   {
     "member_id": "2",
     "role": "CO_PLANNER",
     "joined_at": "2026-11-21T11:00:00.000Z",
-    "is_self": false
+    "is_self": false,
+    "displayName": "Maya Bennett"
   }
 ]
 ```
 
 The owner sorts first, then co-planners sort by join time and numeric member ID. IDs are strings, timestamps are ISO 8601 UTC, and `is_self` identifies the caller. The roster exposes no Cognito subjects.
+
+The same authorized MySQL query reads `event_members.display_name` for both roles. An owner's name is captured at event creation and a co-planner's name at invitation acceptance. A null name displays as `Owner` or `Co-planner`. Roster responses use `Cache-Control: no-store`.
 
 | Status | Condition |
 | --- | --- |
@@ -63,6 +67,35 @@ The owner sorts first, then co-planners sort by join time and numeric member ID.
 | 500 | The roster could not be loaded. |
 
 Lambda errors use `{"error":"…"}`. The application database account needs `SELECT` on the existing `event_members` table. The GET method on `/events/{eventId}/members` uses the Events Lambda proxy integration with the Cognito authorizer and an unauthenticated OPTIONS method for browser preflight.
+
+### Deploy stored Planning Team names
+
+1. On the target RDS database, check that `event_members.display_name` is absent, then apply `database/mysql/migrations/004_event_member_display_name.sql`. Fresh databases initialized from `eventwise_schema.sql` already contain the column. Verify it is nullable before publishing Lambda code. Existing rows keep their IDs, roles, and relationships and start with null names.
+2. Publish `backend/build/eventwise-events.zip` to the existing Events Lambda targets used by the roster and invitation acceptance. Keep their existing handlers, environment, VPC and Gateway integrations. The new Events handler accepts context from the previous invitation authorizer and stores null until a name is available.
+3. Publish `backend/build/eventwise-invitation-authorizer.zip` to the existing invitation authorizer target and update its serving alias or qualified integration as applicable. Keep its current environment, scope checks, and zero-second authorizer cache. Verify that the organizer app client can read `name`, `given_name`, and `family_name` if populated. The authorizer extracts the optional display name from the same live GetUser result that proves the subject and verified email. This uses the existing caller access token and requires no new IAM permissions or networking. [Cognito attribute permissions](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-attributes.html)
+4. Deploy the Organizer frontend. Accept a disposable invitation using a named account and verify the name appears for both roster roles. Repeat with an account without name attributes and check an existing null-name row, removal, and outsider 403. Roll back the Lambda aliases and frontend if needed and retain the additive column, which the previous code can coexist with.
+
+The stored value is a snapshot. For existing rows, leave the fallback in place or run a separately reviewed backfill. An authorized operator can read the profile in the existing Cognito pool, confirm its exact `sub` matches the membership row, and choose `name` or `given_name` and `family_name` using the same precedence and validation. Use a parameterized update scoped to the identified event, member ID and exact subject. Include the expected role and `display_name IS NULL` in the predicates. Skip any profile with an unknown or ambiguous subject or missing name. Keep the backfill limited to this column and preserve already populated values.
+
+### Deploy owner names when migration 004 is already applied
+
+The Organizer sends an access token. The native REST Cognito authorizer provides authenticated access claims, and the application makes no assumption about name claims in that context. Reuse the existing `eventwise-invitation-authorizer` Lambda and its REST TOKEN authorizer on `POST /events`. That route validates the same pool, app client, access-token type, signature and expiry. It requires a match against the existing method scope list, with the same any-of semantics. When the token has `aws.cognito.signin.user.admin`, the authorizer runs a bounded `GetUser` lookup. A name is passed only when Cognito returns the same subject. Event creation remains available with a null name if the profile is unavailable. The accepted name has no bearing on permissions. [REST method scope rules](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-enable-cognito-user-pool.html) · [Cognito GetUser](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_GetUser.html)
+
+1. Verify `event_members.display_name` already exists and export the deployed `prod` stage of REST API `hd63bpgxm8` with Gateway extensions. Record the current `POST /events` method scopes and the active Events and authorizer targets. The standard Organizer scope is normally `aws.cognito.signin.user.admin`. Use the actual deployed scope list. Review pending API edits before publishing the stage.
+2. Publish and activate `backend/build/eventwise-events.zip` on the existing targets for `POST /events` and `GET /events/{eventId}/members`. Set `EVENTS_CREATE_METHOD_ARN=arn:aws:execute-api:us-west-2:<account-id>:hd63bpgxm8/prod/POST/events` on the Events target serving creation. The Events handler continues to accept native Cognito context on creation during rollout and on rollback.
+3. Publish and activate `backend/build/eventwise-invitation-authorizer.zip` on the existing authorizer target. Set `EVENTS_CREATE_METHOD_ARN` to the same exact ARN and `EVENTS_CREATE_AUTHORIZATION_SCOPES` to the exported scope list separated by spaces. Retain the existing invitation acceptance environment variables and role. Verify acceptance still uses its own authorization policy and verified email check. Keep caching at zero seconds. The existing authorizer invoke grant covers reuse of the same Gateway authorizer and Lambda target. If using a qualified Lambda target, make sure the existing grant covers the serving version or alias.
+4. Change only **Resources → `/events` → POST → Method request** to use the existing custom REST TOKEN authorizer already configured for invitation acceptance. Keep `Authorization` as the token source, leave the `AWS_PROXY` integration and API-key setting in place, and deploy the reviewed stage. Keep `GET /events`, the roster, and other native Cognito methods on their current authorizer. The existing method’s scope list is enforced in the Lambda on the creation route. Check the organizer app client can read `name`, `given_name`, and `family_name` when these attributes are populated.
+5. Deploy the Organizer frontend. Create an event with a named account, verify the owner label as that user and as an invited co-planner, then check null-name fallback, outsider 403, invitation acceptance, and owner-only removal. Roll back by restoring the previous `POST /events` authorization configuration before reverting the Lambda aliases. Keep existing name data.
+
+For an existing owner backfill, confirm the Cognito profile's exact `sub`, derive a valid name, then bind the name, event ID, member ID and verified subject to this statement in a reviewed transaction. Verify one row changed before committing.
+
+```sql
+UPDATE event_members
+SET display_name = ?
+WHERE event_id = ? AND member_id = ?
+  AND CAST(cognito_sub AS BINARY) = CAST(? AS BINARY)
+  AND role = 'OWNER' AND display_name IS NULL;
+```
 
 ### Diagnose a roster 401
 
@@ -262,9 +295,9 @@ Content-Type: application/json
 {"event_id":"42","member_id":"8","role":"CO_PLANNER"}
 ```
 
-The dedicated REST TOKEN authorizer validates a Cognito access token for the configured issuer, pool, and app client, including the signature, expiration, and `aws.cognito.signin.user.admin` scope. It uses the same bearer for a live GetUser call and requires exactly one matching `sub`, one email, and `email_verified` equal to the string `"true"`. It passes the verified subject and normalized email to Events through the Gateway proxy authorizer context. Events validates the versioned context, API owner account, API ID, and stage. The request body accepts only the invitation token. [Cognito GetUser API](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_GetUser.html)
+The dedicated REST TOKEN authorizer validates a Cognito access token for the configured issuer, pool, and app client, including the signature, expiration, and `aws.cognito.signin.user.admin` scope. It uses the same bearer for a live GetUser call and requires exactly one matching `sub`, one email, and `email_verified` equal to the string `"true"`. It passes the verified subject, normalized email, and optional sanitized display name to Events through the Gateway proxy authorizer context. The name comes from `name`, or from `given_name` and `family_name` if available. Events validates the versioned context, API owner account, API ID, and stage. The request body accepts only the invitation token. [Cognito GetUser API](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_GetUser.html)
 
-Cognito verification runs before opening a database transaction. The service hashes the canonical 32-byte token and uses the digest to locate the event. The transaction locks the event first, then re-reads and locks the invitation. It checks the verified email, status, and UTC expiration, checks existing membership, inserts one `CO_PLANNER` row, and updates the invitation to `ACCEPTED` with UTC `accepted_at`. The conditional update also checks expiry at the time of consumption. Both writes commit together or roll back together. The unique membership key handles duplicates without changing the existing role. The same event lock serializes acceptance with revoke. Acceptance uses the existing schema and migration 002 without further schema changes.
+Cognito verification runs before opening a database transaction. The service hashes the canonical 32-byte token and uses the digest to locate the event. The transaction locks the event first, then re-reads and locks the invitation. It checks the verified email, status, and UTC expiration, checks existing membership, inserts one `CO_PLANNER` row with its nullable display name, and updates the invitation to `ACCEPTED` with UTC `accepted_at`. The conditional update also checks expiry at the time of consumption. Both writes commit together or roll back together. The unique membership key handles duplicates without changing the existing role. The same event lock serializes acceptance with revoke. Apply migration 004 for the display name column before deploying this Events version.
 
 | Status | Meaning |
 | --- | --- |
@@ -323,7 +356,7 @@ Enter the exact `execute-api` method ARN from the deployment table with the real
 
 ## Cognito access-token authorizer configuration
 
-The organizer currently sends `Authorization: Bearer <access token>`. The following native authorizer settings apply to authenticated Events methods other than invitation acceptance.
+The organizer currently sends `Authorization: Bearer <access token>`. The following settings apply to authenticated Events methods using the native Cognito authorizer. Invitation acceptance and the owner-name rollout for event creation use the custom authorizer described above.
 
 1. On the authenticated Events methods in the routes table, select a `COGNITO_USER_POOLS` authorizer for the existing intended pool, with token source `Authorization`. Reuse an existing compatible authorizer or configure an Events-specific one later; do not change the guest methods or their authorizer.
 2. **Set nonempty method Authorization Scopes** to a scope actually present in current frontend access tokens. For the existing Amplify username/password (Cognito API) sign-in flow, the compatibility scope is normally `aws.cognito.signin.user.admin`. Confirm that the actual sign-in token contains it, then use that scope on the authenticated Events methods. It is an access-token compatibility gate; SQL membership and OWNER checks remain the application permissions. Do not require newly invented custom scopes that current sign-in cannot issue.
@@ -332,7 +365,7 @@ The organizer currently sends `Authorization: Bearer <access token>`. The follow
 5. No public Lambda function URL. Grant Gateway invocation only for the intended API/account/stage/Events method ARNs (and OPTIONS if integrated with Lambda). Restrict direct `lambda:InvokeFunction` privileges to trusted deployment/operators: a caller with direct invocation permission can manufacture an authorizer context. Client headers cannot populate the Gateway-generated context through proxy integration.
 6. Test actual method requests through the deployed API in a later authorized deployment. The console's Cognito authorizer test supports ID-token testing, not access-token method validation. Missing/expired/wrong-scope tokens should fail at Gateway; its rejection response may differ from Lambda's existing `{error:string}` responses. [AWS access-token claims and scopes](https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-the-access-token.html).
 
-Events performs no Cognito API or JWKS network calls. The dedicated invitation authorizer performs both lookups. Local HTTP authentication continues to use the existing verifier.
+Events performs no Cognito API or JWKS network calls. The existing custom authorizer performs both lookups on its two configured routes. Local HTTP authentication continues to use the existing verifier.
 
 ## Environment variables
 

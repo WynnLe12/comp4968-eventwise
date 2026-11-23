@@ -1,14 +1,24 @@
 export const invitationAcceptancePath = "/event-invitations/accept";
 export const invitationAuthorizerVersion = "1";
+export const eventCreationAuthorizerVersion = "1";
 
 export interface VerifiedInvitationIdentity {
   sub: string;
   email: string;
+  displayName?: string;
 }
 
 export function invitationAcceptanceRoute(arn: string | undefined) {
-  const match = /^arn:aws:execute-api:[a-z0-9-]+:([0-9]{12}):([a-z0-9]+)\/([A-Za-z0-9_-]+)\/POST\/event-invitations\/accept$/.exec(arn ?? "");
-  if (!match || match[0] !== arn) return undefined;
+  return authorizedPostRoute(arn, invitationAcceptancePath);
+}
+
+export function eventCreationRoute(arn: string | undefined) {
+  return authorizedPostRoute(arn, "/events");
+}
+
+function authorizedPostRoute(arn: string | undefined, path: string) {
+  const match = /^arn:aws:execute-api:[a-z0-9-]+:([0-9]{12}):([a-z0-9]+)\/([A-Za-z0-9_-]+)\/POST(\/.*)$/.exec(arn ?? "");
+  if (!match || match[0] !== arn || match[4] !== path) return undefined;
   return { arn, accountId: match[1], apiId: match[2], stage: match[3] };
 }
 

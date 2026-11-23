@@ -31,15 +31,15 @@ function proxy(): EventsProxyEvent {
 }
 
 function fixture() {
-  const repositoryCalls: string[][] = [];
+  const repositoryCalls: (string | null)[][] = [];
   let failure: Error | undefined;
   const acceptance = new InvitationService({
     async create() { assert.fail("Acceptance must not create an invitation"); },
     async finishEmail() { assert.fail("Acceptance must not queue an email"); },
     async list() { assert.fail("Acceptance must not list invitations"); },
     async revoke() { assert.fail("Acceptance must not revoke an invitation"); },
-    async accept(digest, subject, email) {
-      repositoryCalls.push([digest, subject, email]);
+    async accept(digest, subject, email, displayName) {
+      repositoryCalls.push([digest, subject, email, displayName]);
       if (failure) throw failure;
       return membership;
     },
@@ -54,18 +54,32 @@ test("acceptance sends only the digest and Gateway-verified identity to MySQL", 
   event.body = Buffer.from(event.body!).toString("base64");
   event.isBase64Encoded = true;
   event.headers!["x-user-id"] = "spoofed";
+  event.headers!["invitationDisplayName"] = "Client-supplied name";
+  event.requestContext!.authorizer!.invitationDisplayName = "Ambrose Ch.";
   const result = await f.handler(event);
   assert.equal(result.statusCode, 200);
   assert.equal(result.headers["Cache-Control"], "no-store");
   assert.equal(result.headers["Access-Control-Allow-Origin"], env.EVENTS_CORS_ORIGIN);
   assert.deepEqual(JSON.parse(result.body), membership);
-  assert.deepEqual(f.repositoryCalls, [[hash, sub, "planner@example.com"]]);
+  assert.deepEqual(f.repositoryCalls, [[hash, sub, "planner@example.com", "Ambrose Ch."]]);
+});
+
+test("acceptance stores null for absent or malformed optional authorizer names", async () => {
+  const f = fixture();
+  for (const displayName of [undefined, ["Ambrose Ch."], "\u202eAmbrose Ch."]) {
+    const event = proxy();
+    event.headers!["invitationDisplayName"] = "Client-supplied name";
+    event.requestContext!.authorizer!.invitationDisplayName = displayName;
+    assert.equal((await f.handler(event)).statusCode, 200);
+  }
+  assert.deepEqual(f.repositoryCalls, Array.from({ length: 3 }, () => [hash, sub, "planner@example.com", null]));
 });
 
 test("invalid invite tokens and extra identity fields never reach SQL", async () => {
   const f = fixture();
   for (const body of [{}, { token: 123 }, { token: "too-short" }, { token: token + "=" },
-    { token: token.slice(0, -1) + "B" }, { token, email: "spoofed@example.com" }, { token, sub }, { token, role: "OWNER" }, { token, event_id: "1" }]) {
+    { token: token.slice(0, -1) + "B" }, { token, email: "spoofed@example.com" }, { token, sub }, { token, role: "OWNER" },
+    { token, event_id: "1" }, { token, displayName: "Client-supplied name" }]) {
     const response = await f.handler({ ...proxy(), body: JSON.stringify(body) });
     assert.equal(response.statusCode, 400);
   }

@@ -311,7 +311,7 @@ const page = {
 const presentation = loadModule("../src/features/events/eventPresentation.ts", {});
 
 const member = { member_id: first.event_id, role: "OWNER", joined_at: "2026-11-21T10:00:00.000Z", is_self: true };
-const coPlanner = { ...member, member_id: "2", role: "CO_PLANNER", is_self: false };
+const coPlanner = { ...member, member_id: "2", role: "CO_PLANNER", is_self: false, displayName: "Maya Bennett" };
 const navigation = loadModule("../src/routes/navigation.ts", {});
 
 function withCollaborationApi(fetch, run, overrides = {}) {
@@ -334,7 +334,7 @@ test("roster API uses the exact selected event ID, bearer token, and abort signa
     assert.deepEqual(options.headers, { Authorization: "Bearer access-token-a" });
     assert.equal(options.signal, controller.signal);
     assert.equal(options.body, undefined);
-    return Response.json([{ ...member, cognito_sub: "private" }, coPlanner]);
+    return Response.json([{ ...member, cognito_sub: "private" }, { ...coPlanner, displayName: " Maya Bennett " }]);
   }, async api => {
     assert.deepEqual(await api.listEventMembers(first.event_id, identity.user.userId, controller.signal), [member, coPlanner]);
   });
@@ -555,16 +555,17 @@ async function withRosterPage(run) {
   } finally { effects.forEach(effect => effect.cleanup?.()); }
 }
 
-test("More links to Co-planners and both roles see the live roster with You marking the caller", async () => {
+test("both roles see the live Planning Team with display names and no visible member IDs", async () => {
   assert.equal(navigation.navGroups.find(group => group.label === "More").items.find(item => item.id === "coplanners").label, "Co-planners");
   assert.equal(navigation.pagePath("coplanners"), "/app/coplanners");
   await withRosterPage(async ({ html, requests, select, settle }) => {
     assert.match(html(), /Loading event members/);
-    requests[0].resolve([member, coPlanner]);
+    requests[0].resolve([{ ...member, displayName: "Wynn Le" }, coPlanner]);
     await settle();
     assert.match(html(), /Manage the people helping plan your event\./);
-    assert.match(html(), /<b>Owner<\/b><p>You · Joined/);
-    assert.match(html(), /Co-planner — Member #2/);
+    assert.match(html(), /<b>Wynn Le<\/b><p>Owner · You · Joined/);
+    assert.match(html(), /<b>Maya Bennett<\/b><p>Co-planner · Joined/);
+    assert.doesNotMatch(html(), /Member #/);
     assert.match(html(), /Pending invitations/);
     select(second);
     const loading = html();
@@ -572,12 +573,21 @@ test("More links to Co-planners and both roles see the live roster with You mark
     assert.doesNotMatch(loading, /Member #2/);
     assert.equal(requests[0].signal.aborted, true);
     assert.equal(requests[1].id, second.event_id);
-    requests[1].resolve([{ ...member, is_self: false }, { ...coPlanner, is_self: true }]);
+    requests[1].resolve([{ ...member, is_self: false, displayName: "Wynn Le" }, { ...coPlanner, is_self: true, displayName: undefined }]);
     await settle();
     const roster = html();
-    assert.match(roster, /<b>Co-planner<\/b><p>You · Joined.*Nov 21, 2026/);
-    assert.match(roster, new RegExp(`Owner — Member #${member.member_id}`));
-    assert.doesNotMatch(roster, /Maya Bennett|Eli Carter|Jessica Wu|example\.com|Full access|Guest manager|Pending invitations|Invite co-planner|Revoke|Remove/);
+    assert.match(roster, /<b>Co-planner<\/b><p>Co-planner · Joined.*Nov 21, 2026/);
+    assert.match(roster, /<b>Wynn Le<\/b><p>Owner · Joined/);
+    assert.doesNotMatch(roster, /Member #|Maya Bennett|Eli Carter|Jessica Wu|example\.com|Full access|Guest manager|Pending invitations|Invite co-planner|Revoke|Remove/);
+  });
+});
+
+test("Planning Team displays Owner when the owner name is missing", async () => {
+  await withRosterPage(async ({ html, requests, settle }) => {
+    html();
+    requests[0].resolve([member]);
+    await settle();
+    assert.match(html(), /<b>Owner<\/b><p>Owner · You · Joined/);
   });
 });
 
@@ -859,6 +869,8 @@ test("owner revoke and removal require confirmation and refresh their separate l
     assert.equal(f.requests[3].operation, "list");
     elementWith(f.render(), node => node.props.children === "Remove").props.onClick();
     assert.match(f.html(), /assigned tasks will become unassigned/);
+    assert.match(f.html(), /<strong>Maya Bennett<\/strong>/);
+    assert.doesNotMatch(f.html(), /Member #/);
     confirm("Remove Co-planner");
     assert.deepEqual(f.requests[4].args.slice(0, 2), [first.event_id, coPlanner.member_id]);
     f.requests[4].resolve();

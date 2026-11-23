@@ -29,6 +29,7 @@ export interface EventMemberRow {
   cognito_sub: string;
   role: ListedEvent["role"];
   joined_at_epoch: number | string;
+  display_name: string | null;
 }
 
 export class InvalidTemplateError extends Error { }
@@ -265,7 +266,7 @@ export class EventRepository {
       // Authorize and read the roster in the same statement. Keep the indexed
       // subject lookup and require an exact match under case-insensitive collations.
       const [members] = await connection.execute<(RowDataPacket & EventMemberRow)[]>(
-        `SELECT CAST(m.member_id AS CHAR) AS member_id, m.cognito_sub, m.role,
+        `SELECT CAST(m.member_id AS CHAR) AS member_id, m.cognito_sub, m.role, m.display_name,
           UNIX_TIMESTAMP(m.joined_at) AS joined_at_epoch
          FROM event_members m
          INNER JOIN event_members requester ON requester.event_id = m.event_id
@@ -322,7 +323,7 @@ export class EventRepository {
     }
   }
 
-  async create(input: EventInput, cognitoSub: string): Promise<EventRecord> {
+  async create(input: EventInput, cognitoSub: string, ownerDisplayName: string | null = null): Promise<EventRecord> {
     const connection = await this.pool.getConnection();
     try {
       await connection.beginTransaction();
@@ -348,8 +349,8 @@ export class EventRepository {
       if (!event) throw new Error("Created event could not be read");
 
       await connection.execute(
-        "INSERT INTO event_members (event_id, cognito_sub, role) VALUES (?, ?, 'OWNER')",
-        [event.event_id, cognitoSub],
+        "INSERT INTO event_members (event_id, cognito_sub, role, display_name) VALUES (?, ?, 'OWNER', ?)",
+        [event.event_id, cognitoSub, ownerDisplayName],
       );
 
       // Initialize budget categories from the selected event template.
