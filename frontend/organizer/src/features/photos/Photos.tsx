@@ -1,68 +1,93 @@
-import { useState } from "react";
-import { Badge, Button, Icon } from "../../components/ui";
+import { useCallback, useState } from "react";
+import QRCode from "qrcode";
+import { Button } from "../../components/ui";
 import { PageHeader } from "../../components/page";
+import { useEvents } from "../events/EventsContext";
+import { authenticatedEventRequest } from "../events/services/eventApi";
+import { galleryUrl, ownerPhotoPath, photoError, photoPageQuery, photoRequest, type PhotoPage } from "./photoApi";
+import { usePhotoPages } from "./usePhotoPages";
 
-const qrFilled = new Set([0, 1, 2, 5, 7, 10, 12, 14, 16, 18, 20, 21, 22, 23, 24]);
+async function ownerRequest<T>(path: string, init?: RequestInit) {
+  const { token } = await authenticatedEventRequest();
+  return photoRequest<T>(path, { ...init, headers: { Authorization: `Bearer ${token}` } });
+}
 
 export function Photos() {
-  const [approved, setApproved] = useState<number[]>([0, 2, 4]);
-  const approve = (i: number) => {
-    if (!approved.includes(i)) setApproved([...approved, i]);
-  };
+  const { selectedEvent } = useEvents();
+  return <>
+    <PageHeader page="photos" />
+    {selectedEvent?.role === "OWNER"
+      ? <PhotoModeration key={selectedEvent.event_id} eventId={selectedEvent.event_id} />
+      : <p>{selectedEvent ? "Only the event owner can manage the photo gallery." : "Select an event to open its gallery."}</p>}
+  </>;
+}
 
-  return (
-    <>
-      <PageHeader page="photos" action={<Button icon="download">Download all</Button>} />
-      <div className="qr-banner">
-        <div className="qr-code" aria-hidden="true">
-          {Array.from({ length: 25 }).map((_, i) => (
-            <i key={i} className={qrFilled.has(i) ? "filled" : ""} />
-          ))}
-        </div>
-        <div>
-          <div className="eyebrow">GUEST PHOTO GALLERY</div>
-          <h2>Let guests capture every angle</h2>
-          <p>
-            Share the QR code at your event. Photos arrive here for your approval before appearing
-            in the gallery.
-          </p>
-          <Button variant="secondary" icon="link">
-            Copy upload link
-          </Button>
-        </div>
-        <div className="qr-stats">
-          <b>38</b>
-          <span>photos uploaded</span>
-          <b>24</b>
-          <span>approved</span>
+function PhotoModeration({ eventId }: { eventId: string }) {
+  const path = ownerPhotoPath(eventId);
+  const load = useCallback(async (after?: string, signal?: AbortSignal) => {
+    const pending = ownerRequest<PhotoPage>(`${path}/pending${photoPageQuery(after)}`, { signal });
+    if (after) return { ...await pending, shareInfo: undefined };
+    const [{ share }, page] = await Promise.all([ownerRequest<{ share: string }>(path, { signal }), pending]);
+    const url = galleryUrl(share);
+    return { ...page, shareInfo: { url, qr: await QRCode.toDataURL(url, { width: 256, margin: 4 }) } };
+  }, [path]);
+  const { page, loading, error, fetchPage, remove } = usePhotoPages(load);
+  const [notice, setNotice] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [approving, setApproving] = useState<string>();
+
+  async function approve(id: string) {
+    setApproving(id);
+    setActionError("");
+    setNotice("");
+    try {
+      await ownerRequest<void>(`${path}/approve/${id}`, { method: "POST" });
+      remove(id);
+      setNotice("Photo approved and visible in the guest gallery.");
+    } catch (error) { setActionError(photoError(error)); }
+    finally { setApproving(undefined); }
+  }
+
+  async function copy(url: string) {
+    setActionError("");
+    setNotice("");
+    try {
+      await navigator.clipboard.writeText(url);
+      setNotice("Gallery link copied.");
+    } catch {
+      setActionError("Unable to copy automatically. Open the guest gallery to copy its address.");
+    }
+  }
+
+  return <>
+    {page?.shareInfo && <section className="qr-banner">
+      <img className="gallery-qr" src={page.shareInfo.qr} alt="QR code for the guest gallery" />
+      <div>
+        <h2>Guest photo gallery</h2>
+        <p>Guests can scan the QR code to upload and view approved photos without an account.</p>
+        <div className="gallery-controls">
+          <Button variant="secondary" icon="link" onClick={() => void copy(page.shareInfo!.url)}>Copy gallery link</Button>
+          <a href={page.shareInfo.url} target="_blank" rel="noreferrer">Open guest gallery</a>
         </div>
       </div>
-      <div className="gallery-head">
-        <div>
-          <h3>Pending approval</h3>
-          <p>14 guest uploads need your review</p>
-        </div>
-        <Button variant="ghost">Select all</Button>
-      </div>
-      <div className="photo-grid">
-        {Array.from({ length: 8 }).map((_, i) => (
-          <div className={`photo-placeholder photo-${i % 4}`} key={i}>
-            <div className="photo-art">
-              <span />
-              <i />
-            </div>
-            <div className="photo-overlay">
-              <button onClick={() => approve(i)}>
-                {approved.includes(i) ? "Approved" : "Approve"}
-              </button>
-              <button aria-label="Delete photo">
-                <Icon name="trash" size={16} />
-              </button>
-            </div>
-            {approved.includes(i) && <Badge tone="success">Approved</Badge>}
-          </div>
-        ))}
-      </div>
-    </>
-  );
+    </section>}
+    <div className="gallery-head">
+      <h3>Pending approval</h3>
+      <Button variant="secondary" disabled={loading || Boolean(approving)} onClick={() => fetchPage()}>Refresh</Button>
+    </div>
+    {error && <p role="alert">{error}</p>}
+    {actionError && <p role="alert">{actionError}</p>}
+    {notice && <p role="status">{notice}</p>}
+    {loading && <p role="status">Loading photos…</p>}
+    {page && !loading && !page.items.length && !page.next && <p>No photos are awaiting approval.</p>}
+    <div className="photo-grid">
+      {page?.items.map((photo, index) => <figure className="gallery-photo" key={photo.id}>
+        <img src={photo.thumbnailUrl} referrerPolicy="no-referrer" alt={`Pending photo ${index + 1}`} loading="lazy" />
+        <figcaption><Button disabled={Boolean(approving) || loading} onClick={() => void approve(photo.id)}>
+          {approving === photo.id ? "Approving…" : "Approve"}
+        </Button></figcaption>
+      </figure>)}
+    </div>
+    {page?.next && <Button variant="secondary" disabled={loading || Boolean(approving)} onClick={() => fetchPage(page.next)}>Load more</Button>}
+  </>;
 }

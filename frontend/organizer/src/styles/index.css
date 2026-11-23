@@ -2515,25 +2515,6 @@
   gap: 23px;
 }
 
-.qr-code {
-  width: 100px;
-  height: 100px;
-  background: #fff;
-  padding: 10px;
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 2px;
-  border-radius: 8px;
-}
-
-.qr-code i {
-  background: #fff;
-}
-
-.qr-code i.filled {
-  background: #382a6a;
-}
-
 .qr-banner h2 {
   font-family: "Fraunces";
   font-size: 21px;
@@ -2541,27 +2522,8 @@
 }
 
 .qr-banner p {
-  font-size: 10px;
-  opacity: 0.8;
+  font-size: 14px;
   max-width: 500px;
-}
-
-.qr-stats {
-  margin-left: auto;
-  border-left: 1px solid #ffffff38;
-  padding-left: 25px;
-  display: grid;
-  grid-template-columns: 30px 100px;
-  align-items: center;
-}
-
-.qr-stats b {
-  font-size: 18px;
-}
-
-.qr-stats span {
-  font-size: 9px;
-  opacity: 0.8;
 }
 
 .gallery-head {
@@ -2575,84 +2537,6 @@
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 12px;
-}
-
-.photo-placeholder {
-  aspect-ratio: 1.2;
-  border-radius: 12px;
-  overflow: hidden;
-  position: relative;
-  background: linear-gradient(145deg, #f0d1c3, #9f7c70);
-}
-
-.photo-1 {
-  background: linear-gradient(145deg, #c6d8c4, #728b75);
-}
-
-.photo-2 {
-  background: linear-gradient(145deg, #eed9ad, #b3785e);
-}
-
-.photo-3 {
-  background: linear-gradient(145deg, #d6c7dd, #806e90);
-}
-
-.photo-art span {
-  position: absolute;
-  width: 55px;
-  height: 90px;
-  background: #ffffff30;
-  border-radius: 50% 50% 10px 10px;
-  left: 40%;
-  top: 22%;
-}
-
-.photo-art i {
-  position: absolute;
-  width: 80%;
-  height: 40%;
-  border-radius: 50%;
-  background: #53684a30;
-  bottom: -15%;
-  left: 10%;
-}
-
-.photo-overlay {
-  position: absolute;
-  inset: auto 0 0;
-  display: flex;
-  padding: 10px;
-  gap: 6px;
-  background: linear-gradient(transparent, #0008);
-  opacity: 0;
-  transition: 0.2s;
-}
-
-.photo-placeholder:hover .photo-overlay {
-  opacity: 1;
-}
-
-.photo-overlay button:first-child {
-  flex: 1;
-  border: 0;
-  border-radius: 7px;
-  background: #fff;
-  color: var(--ink);
-  font-size: 9px;
-}
-
-.photo-overlay button:last-child {
-  border: 0;
-  border-radius: 7px;
-  background: #ffffff30;
-  color: #fff;
-  padding: 7px;
-}
-
-.photo-placeholder>.badge {
-  position: absolute;
-  top: 8px;
-  right: 8px;
 }
 
 .stepper {
@@ -3867,11 +3751,8 @@
     text-align: center;
   }
 
-  .qr-stats {
-    border-left: 0;
-    border-top: 1px solid #ffffff38;
-    padding: 15px 0 0;
-    margin: 0;
+  .gallery-controls {
+    justify-content: center;
   }
 
   .photo-grid {
@@ -4250,10 +4131,6 @@ h3,
   background: #ffe0ea;
 }
 
-.photo-placeholder {
-  border-radius: 16px;
-}
-
 .state-card {
   min-height: 320px;
   background: #fff;
@@ -4616,4 +4493,56 @@ h3,
   background: var(--lavender);
   color: var(--purple-dark);
   font-size: 13px;
+}
+
+.gallery-qr {
+  width: 144px;
+  height: 144px;
+  flex: none;
+}
+
+.gallery-controls a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.gallery-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.guest-gallery {
+  width: min(100% - 32px, 960px);
+  margin: 36px auto;
+}
+
+.gallery-upload {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  margin: 20px 0 28px;
+}
+
+.gallery-upload input {
+  max-width: 100%;
+}
+
+.gallery-photo {
+  min-width: 0;
+  margin: 0;
+}
+
+.gallery-photo img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+  border-radius: 10px;
+  background: #191923;
+}
+
+.gallery-photo figcaption {
+  margin: 8px 0 16px;
 }

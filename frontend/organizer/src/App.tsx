@@ -31,6 +31,7 @@ const Timeline = named(() => import("./features/planning/Timeline"), "Timeline")
 const Documents = named(() => import("./features/documents/Documents"), "Documents");
 const CoPlanners = named(() => import("./features/collaboration/CoPlanners"), "CoPlanners");
 const Alerts = named(() => import("./features/alerts/Alerts"), "Alerts");
+const GuestGallery = named(() => import("./features/photos/GuestGallery"), "GuestGallery");
 const Photos = named(() => import("./features/photos/Photos"), "Photos");
 
 const publicPaths: Record<PublicPage, string> = {
@@ -118,6 +119,7 @@ export default function App() {
   const toastTimer = useRef<number | undefined>(undefined);
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const guestGallery = /^\/gallery\/[^/]+\/?$/i.test(pathname);
   const go = (page: Page) => navigate(pagePath(page));
 
   const onEventSessionExpired = useCallback(async () => {
@@ -169,6 +171,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (guestGallery) return;
     void refreshSession();
     const refresh = () => { void refreshSession(); };
     const unsubscribe = Hub.listen("auth", ({ payload }) => {
@@ -189,7 +192,7 @@ export default function App() {
       window.removeEventListener("focus", refresh);
       window.clearInterval(timer);
     };
-  }, [refreshSession]);
+  }, [guestGallery, refreshSession]);
 
   useEffect(() => {
     if (!authenticated) setModal(null);
@@ -233,13 +236,16 @@ export default function App() {
     }
   };
 
-  if ((checkingSession || signingOut) && pathname !== invitationAcceptancePath) {
+  if ((checkingSession || signingOut) && !guestGallery && pathname !== invitationAcceptancePath) {
     return <LoadingState label={signingOut ? "Signing out?" : "Checking your session?"} />;
   }
 
   return (
     <>
       <Routes>
+        <Route path="/gallery/:share" element={
+          <Suspense fallback={<LoadingState label="Loading gallery…" />}><GuestGallery /></Suspense>
+        } />
         <Route path={invitationAcceptancePath} element={<AcceptInvitation
           authenticated={authenticated} checkingSession={checkingSession || signingOut}
           onAuthenticated={() => void refreshSession()} onSwitchAccount={() => void signOut(null)}
