@@ -83,8 +83,8 @@ export function OwnerCoPlanners({ eventId, userId, isCurrentEvent, onSessionExpi
   }
 
   async function submit() {
-    if (!dialog || mutation.current || created || !isCurrentEvent(userId, eventId)) return;
-    const address = email.trim();
+    if (!dialog || mutation.current || (created && created.email_status !== "retryable") || !isCurrentEvent(userId, eventId)) return;
+    const address = created?.email ?? email.trim();
     if (dialog.kind === "invite" && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address) || address.length > 254)) {
       setFieldError("Enter a valid email address.");
       return;
@@ -159,7 +159,7 @@ export function OwnerCoPlanners({ eventId, userId, isCurrentEvent, onSessionExpi
           </ul>}
     </Card>
     {dialog?.kind === "invite" && <Modal title="Invite Co-planner" onClose={closeDialog} footer={created
-      ? <Button onClick={closeDialog}>Done</Button>
+      ? <Button disabled={busy} onClick={closeDialog}>Done</Button>
       : <>
         <Button variant="secondary" disabled={busy} onClick={closeDialog}>Cancel</Button>
         <Button type="submit" form={formId} disabled={busy}>{busy ? "Creating..." : "Create Invitation"}</Button>
@@ -168,7 +168,13 @@ export function OwnerCoPlanners({ eventId, userId, isCurrentEvent, onSessionExpi
         <p>Share this link with {created.email}. It expires {expiry(created.expires_at)}.</p>
         <Field label="Invitation link" value={created.acceptance_url} readOnly onFocus={event => event.currentTarget.select()} />
         <Button variant="secondary" onClick={() => void copyLink()}>Copy Link</Button>
+        {created.email_status === "queued" && <p role="status">Invitation email queued.</p>}
+        {created.email_status === "retryable" && <>
+          <p>The invitation was created. Email could not be queued. You can retry or share the link above.</p>
+          <Button variant="secondary" disabled={busy} onClick={() => void submit()}>{busy ? "Retrying..." : "Retry Email"}</Button>
+        </>}
         {copyStatus && <p role="status">{copyStatus}</p>}
+        {error && <p className="expense-form-error" role="alert">{error}</p>}
       </> : <form id={formId} onSubmit={submitForm} noValidate>
         <Field label="Email address" type="email" autoComplete="email" required maxLength={254}
           disabled={busy} value={email} error={fieldError}

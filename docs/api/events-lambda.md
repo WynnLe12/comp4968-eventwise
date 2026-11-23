@@ -150,13 +150,42 @@ Content-Type: application/json
   "status": "PENDING",
   "expires_at": "2026-11-24T12:00:00.000Z",
   "created_at": "2026-11-22T12:00:00.000Z",
-  "acceptance_url": "https://organizer.example/accept-invitation#token=<token>"
+  "acceptance_url": "https://organizer.example/accept-invitation#token=<token>",
+  "email_status": "queued"
 }
 ```
 
-The server trims surrounding whitespace and lowercases the entire address. Version 1 accepts ASCII dot-atom mailboxes with DNS-style domains, including punycode domains. It preserves plus tags and dots. This is the invitation comparison rule and must be reviewed against the intended Cognito email policy before implementing acceptance. MySQL supplies the UTC creation/expiry clock and sets expiry 48 hours after creation. The Lambda generates 32 random bytes, base64url-encodes them, and stores only the SHA-256 hex digest of that encoded token. The link is returned once and no email is sent. The acceptance page belongs to a later feature.
+The server trims surrounding whitespace and lowercases the entire address. It accepts ASCII dot-atom mailboxes with DNS-style domains, including punycode domains, and preserves plus tags and dots. MySQL supplies the UTC creation/expiry clock and sets expiry 48 hours after creation. The Lambda generates 32 random bytes, base64url-encodes them, and stores the SHA-256 hex digest for token verification. The response still includes the copyable acceptance URL.
 
-An existing unexpired pending invitation for the same event and normalized email returns `409`. A new create may replace a revoked invitation or mark an elapsed pending invitation `EXPIRED` and create its replacement within the same transaction. History stays in the table. If the original link is lost, revoke the pending invitation and create a fresh one.
+An existing unexpired pending invitation for the same event and normalized email returns `409` unless it has an email eligible for retry. A new create may replace a revoked invitation or mark an elapsed pending invitation `EXPIRED` and create its replacement within the same transaction. History stays in the table.
+
+### Invitation email publishing and retry
+
+Set `EVENTS_INVITATION_QUEUE_URL` to enable publishing. After committing the invitation in RDS, the Events Lambda calls `SendMessage` on the `eventwise-invitation-emails` Standard queue. The message body matches the existing `eventwise-email` consumer contract.
+
+```json
+{
+  "to": "planner@example.com",
+  "eventName": "Example Wedding",
+  "invitationUrl": "https://organizer.example/accept-invitation#token=<token>"
+}
+```
+
+| Response | Meaning |
+| --- | --- |
+| `201` with `email_status: "queued"` | New invitation committed and SQS acknowledged the message. |
+| `201` with `email_status: "retryable"` | New invitation committed. The link can be shared, or the owner can retry queueing. |
+| `201` with `email_status: "not_configured"` | Queue URL is unset. Use the copyable link. |
+| `200` with `email_status: "queued"` or `"retryable"` | The same POST retried delivery for an existing pending invitation. Invitation ID, expiry, and link are unchanged. |
+| `409` | An active invitation already has a queue acknowledgement, was created without email enabled, or has an unexpired publishing claim. |
+
+Queue acknowledgement does not confirm SES delivery. Both `200` and `201` use `Cache-Control: no-store`. To retry, resubmit the same normalized email for the same event as an owner. The **Retry Email** action does this while the copyable link stays available. MySQL stores an AES-256-GCM encrypted link and a 60-second publishing claim with the invitation in the creation transaction. Definitive publish failures clear the claim and retain the encrypted link. SQS acknowledgement clears the encrypted link and records the queue timestamp. If the Lambda stops or recording fails, the claim expires and the owner can retry. Only live pending invitations are eligible. Revoked, expired, and consumed links remain unusable even if the email was already queued.
+
+SQS and MySQL cannot commit atomically. A timeout or interruption after SQS accepts a message can produce a duplicate email on retry. Standard SQS delivery can also repeat a message. Retrying reuses the existing invitation and token. The queue body contains the link, so restrict queue and dead-letter queue access, enable encryption at rest, and keep message bodies and invitation URLs out of producer and consumer logs. [SQS Standard queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues.html)
+
+Before enabling email, apply `003_invitation_email_delivery.sql` after migration 002. Fresh databases already include the columns in the bootstrap schema. Use the existing invitation table grants, including `SELECT`, `INSERT`, and `UPDATE`. Provision `EVENTS_INVITATION_EMAIL_KEY` as a secret containing a base64-encoded 32-byte key. Supply the same key to each active Events Lambda version and keep it until invitations with retryable links are queued or have expired. Missing or invalid key configuration fails before a new invitation is written when a queue URL is set.
+
+Grant the Events Lambda role `sqs:SendMessage` on the exact `us-west-2` queue ARN. Verify the queue and VPC endpoint policies allow the role and action, and that private DNS and the endpoint security group allow the Lambda to reach SQS over HTTPS. If the queue uses SSE-KMS, verify the producer's required access on the queue's key. The existing email consumer owns SES delivery. Its contract was supplied separately from this repository. [SQS endpoint connectivity](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-internetwork-traffic-privacy.html) · [SQS access policies](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/troubleshooting-access-denied.html)
 
 ### List and revoke
 
@@ -211,7 +240,7 @@ With the database owner’s approval, mark elapsed pending rows `EXPIRED` using 
 
 ### Configuration and local verification
 
-Set `EVENTS_ORGANIZER_ORIGIN` to the intended organizer HTTPS origin, optionally with a trailing slash. Credentials, paths, queries and fragments are invalid. This setting is separate from `EVENTS_CORS_ORIGIN`. A missing or invalid origin fails creation before writing an invitation.
+Set `EVENTS_ORGANIZER_ORIGIN` to the intended organizer HTTPS origin, optionally with a trailing slash. For local development, `http://localhost` and `http://127.0.0.1` also work with an optional port, such as `http://localhost:5173`. Credentials, paths, queries and fragments are invalid. This setting is separate from `EVENTS_CORS_ORIGIN`. A missing or invalid origin fails creation before writing an invitation.
 
 Run `npm --prefix backend run typecheck` and `npm --prefix backend test` for the Lambda fixtures and MVP regressions. To include MySQL integration tests, point every `DB_*` setting at an isolated local MySQL 8.0 database with the updated bootstrap schema or migration 002 applied, leave Secrets Manager mode disabled, set `EVENTWISE_MYSQL_TEST=1`, and rerun the test command. The invitation suite covers concurrency, hash persistence, role and event isolation, expiry, revoke and rollback. The local HTTP server needs no new route for these tests because they invoke the Lambda adapter directly.
 
@@ -281,7 +310,9 @@ The Gateway identity check requires no Cognito API or JWKS network call in Lambd
 | `COGNITO_CLIENT_ID` | Existing organizer app client ID; used to check authorizer client_id |
 | `GUESTS_TABLE_NAME` | Exact existing guest table, normally `EventWise_Guests`; set explicitly to avoid environment mixups |
 | `EVENTS_CORS_ORIGIN` | Exact organizer origin, e.g. `https://<branch>.<app>.amplifyapp.com`; omit for same-origin access |
-| `EVENTS_ORGANIZER_ORIGIN` | Explicit organizer HTTPS origin used for invitation links. Required for invitation creation. |
+| `EVENTS_ORGANIZER_ORIGIN` | Organizer HTTPS origin used for invitation links. HTTP is allowed for `localhost` and `127.0.0.1` during development. Required for invitation creation. |
+| `EVENTS_INVITATION_QUEUE_URL` | URL of the Standard invitation-email queue. Unset preserves manual link sharing. |
+| `EVENTS_INVITATION_EMAIL_KEY` | Secret base64-encoded 32-byte key for links retained for retry. Required when the queue URL is set. |
 | `EVENTS_INVITATION_EMAIL_CASE_INSENSITIVE` | Enables acceptance email resolution only when set to `true` after confirming live pool policy. |
 | `DB_CONNECTION_LIMIT` | Start conservatively, e.g. `2`; size against reserved concurrency and database connection budget (existing default 5) |
 | `DB_CONNECT_TIMEOUT_MS` | Optional; existing default 10000 |

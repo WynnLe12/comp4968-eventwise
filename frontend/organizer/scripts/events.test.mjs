@@ -447,6 +447,24 @@ test("collaboration API uses the owner invitation, member removal and acceptance
   ]);
 });
 
+test("creation reads both new invitation and email retry responses with the existing copyable link", async () => {
+  for (const [status, email_status] of [[201, "retryable"], [200, "queued"]]) {
+    const invitation = { ...createdInvite, email_status };
+    await withCollaborationApi(async () => Response.json(invitation, { status }), async api => {
+      assert.deepEqual(await api.createInvitation(first.event_id, identity.user.userId, pendingInvite.email), invitation);
+    });
+  }
+});
+
+test("invitation links can be copied from literal HTTP loopback origins", async () => {
+  for (const origin of ["http://localhost", "http://localhost:5173", "http://127.0.0.1", "http://127.0.0.1:5173"]) {
+    const invitation = { ...createdInvite, acceptance_url: `${origin}/accept-invitation#token=${inviteToken}` };
+    await withCollaborationApi(async () => Response.json(invitation, { status: 201 }), async api => {
+      assert.deepEqual(await api.createInvitation(first.event_id, identity.user.userId, pendingInvite.email), invitation);
+    });
+  }
+});
+
 test("collaboration API maps safe action errors and rejects unsafe links and malformed tokens", async () => {
   for (const [status, message] of [[400, /valid email/], [401, /session is still active/], [403, /event owner/], [409, /already exists/]]) {
     await withCollaborationApi(async () => new Response("private", { status }), async api => {
@@ -465,7 +483,10 @@ test("collaboration API maps safe action errors and rejects unsafe links and mal
     await assert.rejects(api.acceptInvitation("malformed"), /invalid/);
   });
   for (const acceptance_url of ["javascript:alert(1)", "http://organizer.example/accept-invitation#token=" + inviteToken,
-    "https://organizer.example/accept-invitation?token=" + inviteToken]) {
+    "https://organizer.example/accept-invitation?token=" + inviteToken,
+    ...["localhost.evil.example", "user@localhost", "127.1", "2130706433", "%6cocalhost"].map(host =>
+      `http://${host}/accept-invitation#token=${inviteToken}`),
+  ]) {
     await withCollaborationApi(async () => Response.json({ ...createdInvite, acceptance_url }, { status: 201 }), async api => {
       await assert.rejects(api.createInvitation(first.event_id, identity.user.userId, pendingInvite.email), { status: 502 });
     });
@@ -844,6 +865,27 @@ test("owner revoke and removal require confirmation and refresh their separate l
     await settleCollaboration();
     assert.equal(f.modal(), undefined);
     assert.equal(f.rosterChanges(), 1);
+  } finally { f.unmount(); }
+});
+
+test("retrying queue delivery keeps the original copyable link and reports the queue result", async () => {
+  const f = ownerPage();
+  try {
+    f.render().props.children[0].props.action.props.onClick();
+    f.field().props.onChange({ target: { value: pendingInvite.email } });
+    elementWith(f.modal(), node => node.type === "form").props.onSubmit({ preventDefault() {} });
+    f.requests[1].resolve({ ...createdInvite, email_status: "retryable" });
+    await settleCollaboration();
+    assert.match(f.html(), /Email could not be queued/);
+    assert.equal(f.field().props.value, createdInvite.acceptance_url);
+    elementWith(f.modal(), node => node.props.children === "Retry Email").props.onClick();
+    const retry = f.requests.at(-1);
+    assert.deepEqual(retry.args.slice(0, 3), [first.event_id, identity.user.userId, pendingInvite.email]);
+    retry.resolve({ ...createdInvite, email_status: "queued" });
+    await settleCollaboration();
+    assert.match(f.html(), /Invitation email queued/);
+    assert.equal(f.field().props.value, createdInvite.acceptance_url);
+    assert.doesNotMatch(f.html(), /Retry Email/);
   } finally { f.unmount(); }
 });
 

@@ -46,7 +46,8 @@ function fixture(testEnv: NodeJS.ProcessEnv = env) {
     if (failure) throw failure;
   }
   const invitations = new InvitationService({
-    async create(id, sub, email, digest) { authorize(id, sub); writes.push([id, sub, email, digest]); return row; },
+    async create(id, sub, email, material) { authorize(id, sub); writes.push([id, sub, email, material().tokenHash]); return row; },
+    async finishEmail() { assert.fail("Email is disabled for this fixture"); },
     async list(id, sub) { authorize(id, sub); return [row]; },
     async revoke(id, invite, sub) { authorize(id, sub); writes.push([id, invite, sub]); },
   }, testEnv);
@@ -64,7 +65,8 @@ test("POST normalizes email and returns a one-time link backed by a SHA-256 dige
     assert.equal(result.statusCode, 201);
     assert.equal(result.headers["Cache-Control"], "no-store");
     assert.equal(result.headers["Access-Control-Allow-Origin"], env.EVENTS_CORS_ORIGIN);
-    const { acceptance_url, ...invitation } = JSON.parse(result.body);
+    const { acceptance_url, email_status, ...invitation } = JSON.parse(result.body);
+    assert.equal(email_status, "not_configured");
     assert.deepEqual(invitation, row);
     const url = new URL(acceptance_url);
     assert.equal(url.origin, "https://organizer.example");
@@ -164,12 +166,34 @@ test("invitation errors use safe response bodies and invalid origin configuratio
     assert.ok(!response.body.includes("private"));
   }
   for (const origin of [undefined, "http://organizer.example", "https://organizer.example/path",
-    "https://user@organizer.example", "https://organizer.example#fragment"]) {
+    "https://user@organizer.example", "https://organizer.example#fragment",
+    "http://localhost.evil.example", "http://127.0.0.2", "http://127.1", "http://2130706433",
+    "http://%6cocalhost", "http://[::1]", "http://localhost:65536", "http://localhost:", "https://organizer.example:",
+    "http://localhost/.", "http://localhost/?", "http://localhost#", "http://user:secret@localhost",
+    "http://localhost\\path", "https:///organizer.example", "ftp://localhost"]) {
     const invalid = fixture({ ...env, EVENTS_ORGANIZER_ORIGIN: origin });
     const response = await invalid.handler(proxy("POST"));
     assert.deepEqual(JSON.parse(response.body), { error: "Unable to complete invitation request" });
     assert.equal(response.statusCode, 500);
     assert.deepEqual(invalid.writes, []);
+  }
+});
+
+test("creation permits HTTPS and literal HTTP loopback organizer origins with optional ports", async () => {
+  for (const [configured, origin] of [
+    ["https://organizer.example:8443/", "https://organizer.example:8443"],
+    ["http://localhost", "http://localhost"],
+    ["http://localhost:5173/", "http://localhost:5173"],
+    ["http://127.0.0.1", "http://127.0.0.1"],
+    ["http://127.0.0.1:5173", "http://127.0.0.1:5173"],
+  ]) {
+    const f = fixture({ ...env, EVENTS_ORGANIZER_ORIGIN: configured });
+    const response = await f.handler(proxy("POST"));
+    assert.equal(response.statusCode, 201, configured);
+    const url = new URL(JSON.parse(response.body).acceptance_url);
+    assert.equal(url.origin, origin);
+    assert.equal(url.pathname, "/accept-invitation");
+    assert.match(url.hash, /^#token=[A-Za-z0-9_-]{43}$/);
   }
 });
 
@@ -185,7 +209,7 @@ test("creation diagnostics identify an invalid organizer origin without printing
   assert.equal(fields.operation, "create");
   assert.equal(fields.step, "organizer-origin");
   assert.equal(fields.errorType, "Error");
-  assert.equal(fields.errorMessage, "Events organizer origin must be a valid HTTPS origin");
+  assert.equal(fields.errorMessage, "Events organizer origin must be a valid HTTPS origin or an HTTP origin on localhost or 127.0.0.1");
   assert.doesNotMatch(JSON.stringify(fields), /test-user|test-secret/);
   assert.deepEqual(f.authorizations, []);
 });

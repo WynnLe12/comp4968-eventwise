@@ -28,6 +28,7 @@ export interface PendingInvitation {
 
 export interface CreatedInvitation extends PendingInvitation {
   acceptance_url: string;
+  email_status?: "not_configured" | "queued" | "retryable";
 }
 
 export function isInvitationToken(value: unknown): value is string {
@@ -66,6 +67,7 @@ function parseInvitation(body: unknown, message: string): PendingInvitation {
 async function collaborationRequest(path: string, options: {
   method?: "POST" | "DELETE"; userId?: string; signal?: AbortSignal; body?: object;
   message: string; errors?: Record<number, string>; expected?: number;
+  retryStatus?: number;
 }) {
   const { signal, method, body, message, errors = {}, expected = 200 } = options;
   const identity = await authenticatedEventRequest();
@@ -94,7 +96,9 @@ async function collaborationRequest(path: string, options: {
       ? "The Co-planners API rejected this request. Your session is still active. Please try again."
       : "Unable to verify your sign-in right now. Please try again.");
   }
-  if (response.status !== expected) throw new EventMembersError(response.status, errors[response.status] ?? message);
+  if (response.status !== expected && response.status !== options.retryStatus) {
+    throw new EventMembersError(response.status, errors[response.status] ?? message);
+  }
   const data: unknown = expected === 204 ? null : await response.json().catch(() => { throw new EventMembersError(502, message); });
   const current = await getCurrentUser().catch(() => { throw new EventSessionError("Please sign in again."); });
   signal?.throwIfAborted();
@@ -120,21 +124,24 @@ export async function listPendingInvitations(eventId: string, userId: string, si
 export async function createInvitation(eventId: string, userId: string, email: string, signal?: AbortSignal): Promise<CreatedInvitation> {
   const message = "Unable to create the invitation. Please try again.";
   const { data } = await collaborationRequest(`/events/${requestEventId(eventId)}/invitations`, {
-    method: "POST", userId, signal, body: { email: email.trim() }, expected: 201, message,
+    method: "POST", userId, signal, body: { email: email.trim() }, expected: 201, retryStatus: 200, message,
     errors: { 400: "Enter a valid email address.", 403: ownerRequired, 409: "A pending invitation already exists for this email." },
   });
   const invitation = parseInvitation(data, "The invitation was created, but its link could not be read. Refresh the invitations before creating another.");
-  const value = (data as Record<string, unknown>).acceptance_url;
+  const { acceptance_url: value, email_status } = data as Record<string, unknown>;
   let url: URL;
   try {
     if (typeof value !== "string") throw new Error();
     url = new URL(value);
-    if (url.protocol !== "https:" || url.username || url.password || url.search ||
+    const localHttp = /^http:\/\/(?:localhost|127\.0\.0\.1)(?::[0-9]+)?\/accept-invitation#/i.test(value);
+    if ((url.protocol !== "https:" && !localHttp) || url.username || url.password || url.search ||
         url.pathname !== "/accept-invitation" || !url.hash.startsWith("#token=") || !isInvitationToken(url.hash.slice(7))) throw new Error();
   } catch {
     throw new EventMembersError(502, "The invitation was created, but its link could not be read. Refresh the invitations before creating another.");
   }
-  return { ...invitation, acceptance_url: url.href };
+  return { ...invitation, acceptance_url: url.href,
+    ...(email_status === "queued" || email_status === "retryable" || email_status === "not_configured" ? { email_status } : {}),
+  };
 }
 
 export async function revokeInvitation(eventId: string, invitationId: string, userId: string, signal?: AbortSignal): Promise<void> {

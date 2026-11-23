@@ -39,6 +39,7 @@ function fixture(getUser: Parameters<typeof createVerifiedEmailResolver>[0] = as
   let failure: Error | undefined;
   const acceptance = new InvitationService({
     async create() { assert.fail("Acceptance must not create an invitation"); },
+    async finishEmail() { assert.fail("Acceptance must not queue an email"); },
     async list() { assert.fail("Acceptance must not list invitations"); },
     async revoke() { assert.fail("Acceptance must not revoke an invitation"); },
     async accept(digest, subject, email) {

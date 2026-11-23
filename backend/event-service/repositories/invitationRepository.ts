@@ -22,6 +22,18 @@ export interface PendingInvitation {
   created_at: string;
 }
 
+interface NewInvitationMaterial {
+  tokenHash: string;
+  envelope?: Buffer;
+}
+
+interface InvitationEmailAttempt {
+  envelope: Buffer;
+  eventName: string;
+  claimId: string;
+  retry: boolean;
+}
+
 interface InvitationRow extends RowDataPacket {
   invitation_id: string;
   email: string;
@@ -52,16 +64,16 @@ export class InvitationRepository {
     connection: PoolConnection,
     eventId: string,
     missingEvent: Error,
-    operation: () => Promise<T>,
+    operation: (eventName: string) => Promise<T>,
   ): Promise<T> {
     await connection.beginTransaction();
     try {
       // Take the same event lock for every write before touching invitation rows.
-      const [events] = await connection.execute<RowDataPacket[]>(
-        "SELECT event_id FROM events WHERE event_id = ? FOR UPDATE", [eventId],
+      const [events] = await connection.execute<(RowDataPacket & { name: string })[]>(
+        "SELECT name FROM events WHERE event_id = ? FOR UPDATE", [eventId],
       );
       if (!events.length) throw missingEvent;
-      const result = await operation();
+      const result = await operation(events[0].name);
       await connection.commit();
       return result;
     } catch (error) {
@@ -73,27 +85,28 @@ export class InvitationRepository {
   private async withOwnerTransaction<T>(
     eventId: string,
     sub: string,
-    operation: (connection: PoolConnection) => Promise<T>,
+    operation: (connection: PoolConnection, eventName: string) => Promise<T>,
   ): Promise<T> {
     const connection = await this.pool.getConnection();
     const forbidden = new EventAccessDeniedError("Only the event owner can manage invitations");
     try {
-      return await this.withEventTransaction(connection, eventId, forbidden, async () => {
+      return await this.withEventTransaction(connection, eventId, forbidden, async eventName => {
         const [owners] = await connection.execute<RowDataPacket[]>(
           `SELECT 1 FROM event_members m WHERE ${ownerPredicate} FOR SHARE`, [eventId, sub, sub],
         );
         if (!owners.length) throw forbidden;
-        return operation(connection);
+        return operation(connection, eventName);
       });
     } finally {
       connection.release();
     }
   }
 
-  async create(eventId: string, sub: string, email: string, tokenHash: string): Promise<PendingInvitation> {
+  async create(eventId: string, sub: string, email: string, material: () => NewInvitationMaterial, claimId?: string):
+  Promise<PendingInvitation & { delivery?: InvitationEmailAttempt }> {
     let step: InvitationCreationStep = "connect-or-authorize";
     try {
-      return await this.withOwnerTransaction(eventId, sub, async connection => {
+      return await this.withOwnerTransaction(eventId, sub, async (connection, eventName) => {
         // Start the read after taking the event lock. Avoid gap locks on a missing
         // invitation key, which could block inserts for a different event.
         step = "find-pending-invitation";
@@ -103,7 +116,12 @@ export class InvitationRepository {
           [eventId, email],
         );
         if (pending[0]) {
-          if (Number(pending[0].elapsed) !== 1) throw new EventConflictError("A pending invitation already exists for this email");
+          if (Number(pending[0].elapsed) !== 1) {
+            if (!claimId) throw new EventConflictError("A pending invitation already exists for this email");
+            const invitation = await this.retryEmail(connection, pending[0].invitation_id, claimId, eventName);
+            step = "commit";
+            return invitation;
+          }
           step = "expire-invitation";
           await connection.execute(
             "UPDATE event_invitations SET status = 'EXPIRED' WHERE event_id = ? AND invitation_id = ? AND status = 'PENDING'",
@@ -112,6 +130,7 @@ export class InvitationRepository {
         }
 
         step = "insert-invitation";
+        const { tokenHash, envelope } = material();
         await connection.execute(
           `INSERT INTO event_invitations (event_id, email, invited_by_sub, token_hash, status, expires_at)
            VALUES (?, ?, ?, ?, 'PENDING', UTC_TIMESTAMP() + INTERVAL 48 HOUR)`,
@@ -123,12 +142,54 @@ export class InvitationRepository {
         );
         if (!rows[0]) throw new Error("Created invitation could not be read");
         const invitation = pendingInvitation(rows[0]);
+        if (claimId && envelope) {
+          await connection.execute(
+            `UPDATE event_invitations SET email_envelope = ?, email_claim_id = ?,
+               email_claim_until = UTC_TIMESTAMP(6) + INTERVAL 60 SECOND
+             WHERE invitation_id = ?`,
+            [envelope, claimId, invitation.invitation_id],
+          );
+          step = "commit";
+          return { ...invitation, delivery: { envelope, eventName, claimId, retry: false } };
+        }
         step = "commit";
         return invitation;
       });
     } catch (error) {
       if (error instanceof EventAccessDeniedError || error instanceof EventConflictError) throw error;
       throw new InvitationCreationError(step, error);
+    }
+  }
+
+  private async retryEmail(connection: PoolConnection, invitationId: string, claimId: string, eventName: string) {
+    const [rows] = await connection.execute<(InvitationRow & { email_envelope: Buffer })[]>(
+      `SELECT ${invitationFields}, i.email_envelope FROM event_invitations i
+       WHERE i.invitation_id = ? AND i.email_envelope IS NOT NULL AND i.email_queued_at IS NULL`, [invitationId],
+    );
+    if (!rows[0]) throw new EventConflictError("A pending invitation already exists for this email");
+    const [updated] = await connection.execute<ResultSetHeader>(
+      `UPDATE event_invitations SET email_claim_id = ?, email_claim_until = UTC_TIMESTAMP(6) + INTERVAL 60 SECOND
+       WHERE invitation_id = ? AND status = 'PENDING' AND expires_at > UTC_TIMESTAMP()
+         AND email_queued_at IS NULL AND (email_claim_until IS NULL OR email_claim_until <= UTC_TIMESTAMP(6))`,
+      [claimId, invitationId],
+    );
+    if (updated.affectedRows !== 1) throw new EventConflictError("Invitation email is already being queued or the invitation expired. Try again.");
+    return { ...pendingInvitation(rows[0]), delivery: { envelope: rows[0].email_envelope, eventName, claimId, retry: true } };
+  }
+
+  async finishEmail(invitationId: string, claimId: string, queued: boolean): Promise<void> {
+    const connection = await this.pool.getConnection();
+    try {
+      const [updated] = await connection.execute<ResultSetHeader>(
+        `UPDATE event_invitations
+         SET email_queued_at = IF(?, UTC_TIMESTAMP(6), email_queued_at), email_envelope = IF(?, NULL, email_envelope),
+             email_claim_id = NULL, email_claim_until = NULL
+         WHERE invitation_id = ? AND email_claim_id = ?`,
+        [queued, queued, invitationId, claimId],
+      );
+      if (updated.affectedRows !== 1) throw new Error("Invitation email claim is no longer current");
+    } finally {
+      connection.release();
     }
   }
 

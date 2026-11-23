@@ -35,6 +35,8 @@ const safeMessages = new Set([
   "Database secret must contain nonempty username and password strings",
   "Created invitation could not be read",
   "Accepted membership could not be read",
+  "EVENTS_INVITATION_EMAIL_KEY must be a base64-encoded 32-byte key",
+  "Unable to recover invitation email link",
 ]);
 const safeErrorTypes = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "AggregateError"]);
 type InvitationOperation = "create" | "list" | "revoke" | "accept" | "dispatch";
@@ -85,8 +87,8 @@ export function eventInvitationHandler(dependencies: InvitationDependencies) {
     try {
       if (request.method === "POST") {
         operation = "create";
-        const invitation = await dependencies.invitations.create(eventId, await readJsonBody(request), sub);
-        sendJson(response, 201, invitation, { "Cache-Control": "no-store" });
+        const { email_retry, ...invitation } = await dependencies.invitations.create(eventId, await readJsonBody(request), sub);
+        sendJson(response, email_retry ? 200 : 201, invitation, { "Cache-Control": "no-store" });
       } else if (request.method === "GET") {
         operation = "list";
         sendJson(response, 200, await dependencies.invitations.list(eventId, sub));

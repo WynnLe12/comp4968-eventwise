@@ -151,6 +151,10 @@ CREATE TABLE event_invitations (
  expires_at DATETIME NOT NULL,
  accepted_at DATETIME NULL,
  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ email_envelope BLOB NULL,
+ email_claim_id CHAR(36) NULL,
+ email_claim_until DATETIME(6) NULL,
+ email_queued_at DATETIME(6) NULL,
  pending_email VARCHAR(254) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
    GENERATED ALWAYS AS (CASE WHEN status = 'PENDING' THEN LOWER(TRIM(email)) END) VIRTUAL,
  UNIQUE KEY uq_invite_pending_email (event_id, pending_email),

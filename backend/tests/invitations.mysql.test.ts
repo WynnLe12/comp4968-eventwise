@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { after, test } from "node:test";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
+import { createEventsHandler, type EventsProxyEvent } from "../event-service/lambda/events";
 import { EventRepository } from "../event-service/repositories/eventRepository";
 import { InvitationCreationError, InvitationInactiveError, InvitationRepository } from "../event-service/repositories/invitationRepository";
 import { EventAccessDeniedError, EventConflictError, EventNotFoundError } from "../event-service/services/eventService";
@@ -10,6 +11,11 @@ import { db } from "../shared/db/db";
 
 const integration = { skip: process.env.EVENTWISE_MYSQL_TEST !== "1" };
 const env = { EVENTS_ORGANIZER_ORIGIN: "https://organizer.example" };
+const emailEnv = {
+  ...env, EVENTS_INVITATION_EMAIL_KEY: Buffer.alloc(32, 7).toString("base64"),
+  EVENTS_INVITATION_QUEUE_URL: "https://sqs.us-west-2.amazonaws.com/123456789012/eventwise-invitation-emails",
+  COGNITO_USER_POOL_ID: "us-west-2_testpool", COGNITO_CLIENT_ID: "testclient",
+};
 const verifiedPlanner = async () => " Planner@Example.com ";
 after(async () => { await db.end(); });
 
@@ -50,7 +56,9 @@ test("MySQL: owner-only create/list/revoke preserve history and never affect oth
     assert.deepEqual({ ...created[0] }, {
       token_hash: createHash("sha256").update(token).digest("hex"), invited_by_sub: owner, pending_email: invite.email,
     });
-    const { acceptance_url: _link, ...publicInvite } = invite;
+    const { acceptance_url: _link, email_status, email_retry, ...publicInvite } = invite;
+    assert.equal(email_status, "not_configured");
+    assert.equal(email_retry, false);
     assert.deepEqual(await service.list(eventId, owner), [publicInvite]);
     assert.deepEqual(await service.list(otherEventId, owner), []);
     for (const sub of [coPlanner, "unrelated", owner.toUpperCase()]) {
@@ -70,6 +78,109 @@ test("MySQL: owner-only create/list/revoke preserve history and never affect oth
     );
     assert.deepEqual(history.map(row => row.status), ["REVOKED", "PENDING"]);
     assert.equal((await new EventRepository().listMembers(eventId, owner)).length, 2);
+  });
+});
+
+test("MySQL: SQS failure preserves an encrypted retry; the same POST queues the original link without another invitation", integration, async t => {
+  const warning = t.mock.method(console, "warn", () => {});
+  await withEvents(async ({ eventId, owner, coPlanner }) => {
+    const emails: { to: string; eventName: string; invitationUrl: string }[] = [];
+    let resolvePublish!: () => void;
+    let startPublish!: () => void;
+    const publishStarted = new Promise<void>(resolve => { startPublish = resolve; });
+    const completing = new Promise<void>(resolve => { resolvePublish = resolve; });
+    const invites = new InvitationService(undefined, emailEnv, async (queue, message) => {
+      assert.equal(queue, emailEnv.EVENTS_INVITATION_QUEUE_URL);
+      const [rows] = await db.execute<RowDataPacket[]>(
+        "SELECT email_envelope, token_hash FROM event_invitations WHERE event_id = ?", [eventId],
+      );
+      assert.equal(rows.length, 1, "Invitation must be committed before publishing");
+      assert.ok(Buffer.isBuffer(rows[0].email_envelope) && !rows[0].email_envelope.includes(Buffer.from(message.invitationUrl)));
+      const token = new URLSearchParams(new URL(message.invitationUrl).hash.slice(1)).get("token")!;
+      assert.equal(createHash("sha256").update(token).digest("hex"), rows[0].token_hash);
+      emails.push(message);
+      if (emails.length === 1) throw new Error(`Sensitive queue failure: ${message.invitationUrl}`);
+      startPublish();
+      await completing;
+    });
+    const handler = createEventsHandler({ invitations: invites, env: emailEnv });
+    const request = (sub = owner): EventsProxyEvent => ({
+      httpMethod: "POST", path: `/events/${eventId}/invitations`, resource: "/events/{eventId}/invitations",
+      pathParameters: { eventId }, headers: { "Content-Type": "application/json" }, body: '{"email":" Planner@Example.com "}',
+      requestContext: { authorizer: { claims: {
+        sub, token_use: "access", client_id: emailEnv.COGNITO_CLIENT_ID,
+        iss: `https://cognito-idp.us-west-2.amazonaws.com/${emailEnv.COGNITO_USER_POOL_ID}`,
+      } } },
+    });
+    const first = await handler(request());
+    const original = JSON.parse(first.body);
+    assert.equal(first.statusCode, 201);
+    assert.equal(first.headers["Cache-Control"], "no-store");
+    assert.equal(original.email_status, "retryable");
+    assert.equal(emails[0].invitationUrl, original.acceptance_url);
+    assert.equal((await handler(request(coPlanner))).statusCode, 403);
+    assert.equal(emails.length, 1);
+    const retry = handler(request());
+    try {
+      const reachedPublisher = await Promise.race([publishStarted.then(() => true), retry.then(() => false)]);
+      assert.ok(reachedPublisher);
+      assert.equal((await handler(request())).statusCode, 409);
+    } finally {
+      resolvePublish();
+    }
+    const retried = await retry;
+    const response = JSON.parse(retried.body);
+    assert.equal(retried.statusCode, 200);
+    assert.equal(retried.headers["Cache-Control"], "no-store");
+    assert.deepEqual(response, { ...original, email_status: "queued" });
+    assert.deepEqual(emails, [0, 1].map(() => ({
+      to: "planner@example.com", eventName: "Invitation test", invitationUrl: original.acceptance_url,
+    })));
+    assert.equal((await handler(request())).statusCode, 409);
+    const [rows] = await db.execute<RowDataPacket[]>(
+      "SELECT email_envelope, email_queued_at, email_claim_id, status FROM event_invitations WHERE event_id = ?", [eventId],
+    );
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].status, "PENDING");
+    assert.ok(rows[0].email_queued_at);
+    assert.equal(rows[0].email_envelope, null);
+    assert.equal(rows[0].email_claim_id, null);
+    assert.deepEqual(warning.mock.calls.map(call => call.arguments), [["Invitation email could not be queued"]]);
+  });
+});
+
+test("MySQL: legacy pending invitations still conflict and cannot be emailed with a replacement token", integration, async () => {
+  await withEvents(async ({ eventId, owner }) => {
+    const body = { email: "planner@example.com" };
+    await new InvitationService(undefined, env).create(eventId, body, owner);
+    const configured = new InvitationService(undefined, emailEnv, async () => assert.fail("No original link is available"));
+    await assert.rejects(configured.create(eventId, body, owner), EventConflictError);
+  });
+});
+
+test("MySQL: an unreleased email claim can be retried after its lease expires", integration, async t => {
+  t.mock.method(console, "warn", () => {});
+  await withEvents(async ({ eventId, owner }) => {
+    class InterruptedRepository extends InvitationRepository {
+      override async finishEmail(): Promise<void> {
+        throw new Error("Simulated failure recording the queue result");
+      }
+    }
+    const body = { email: "planner@example.com" };
+    const initial = new InvitationService(new InterruptedRepository(), emailEnv, async () => {
+      throw new Error("Simulated queue failure");
+    });
+    const first = await initial.create(eventId, body, owner);
+    assert.equal(first.email_status, "retryable");
+    const retry = new InvitationService(undefined, emailEnv, async (_queueUrl, message) => {
+      assert.equal(message.invitationUrl, first.acceptance_url);
+    });
+    await assert.rejects(retry.create(eventId, body, owner), /already being queued/);
+    await db.execute(
+      "UPDATE event_invitations SET email_claim_until = UTC_TIMESTAMP(6) WHERE invitation_id = ?", [first.invitation_id],
+    );
+    const final = await retry.create(eventId, body, owner);
+    assert.deepEqual(final, { ...first, email_status: "queued", email_retry: true });
   });
 });
 
