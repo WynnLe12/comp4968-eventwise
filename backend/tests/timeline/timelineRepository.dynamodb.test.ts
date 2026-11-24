@@ -13,7 +13,7 @@ import { TimelineRepository } from "../../timeline-service/repositories/timeline
 
 const enabled = process.env.EVENTWISE_DYNAMODB_TEST === "1" && isLocalEndpoint(process.env.DYNAMODB_ENDPOINT);
 
-test("DynamoDB Local: create, list, versioned update, reminder reset and delete", { skip: !enabled }, async () => {
+test("DynamoDB Local: create, list, versioned update, reminder reset, subscribers and delete", { skip: !enabled }, async () => {
   const client = createDocumentClient();
   const repo = new TimelineRepository({ client });
   const eventId = `test-${randomUUID()}`;
@@ -54,10 +54,21 @@ test("DynamoDB Local: create, list, versioned update, reminder reset and delete"
     assert.equal(cancelled?.reminderStatus, undefined);
 
     assert.deepEqual((await repo.listItems(eventId)).map((r) => r.title), ["Dinner", "Ceremony"]);
+
+    // Subscribers share the partition but never appear in the activity list.
+    await repo.putSubscriber(eventId, "sub-owner", "maya@example.com");
+    await repo.putSubscriber(eventId, "sub-planner", "eli@example.com");
+    assert.deepEqual((await repo.listSubscribers(eventId)).map((r) => r.email).sort(), ["eli@example.com", "maya@example.com"]);
+    assert.equal((await repo.getSubscriber(eventId, "sub-owner"))?.email, "maya@example.com");
+    assert.equal(await repo.countItems(eventId), 2);
+    await repo.deleteSubscriber(eventId, "sub-owner");
+    await repo.deleteSubscriber(eventId, "sub-owner");
+    assert.equal(await repo.getSubscriber(eventId, "sub-owner"), null);
     assert.equal((await repo.deleteItem(eventId, dinner.itemId))?.title, "Dinner");
     assert.equal(await repo.deleteItem(eventId, dinner.itemId), null);
   } finally {
     for (const record of await repo.listItems(eventId)) await repo.deleteItem(eventId, record.itemId);
+    for (const record of await repo.listSubscribers(eventId)) await repo.deleteSubscriber(eventId, record.sub);
     client.destroy();
   }
 });

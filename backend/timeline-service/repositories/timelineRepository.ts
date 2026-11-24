@@ -7,7 +7,7 @@
 // Every method takes an eventId, so no call can read or change another event's timeline.
 // Event membership and field validation are NOT checked here: the service must verify the
 // caller belongs to the event and validate input before calling this repository.
-// Subscriber rows and reminder claims are added with the notification commits.
+// Subscriber rows ("SUBSCRIBER#<sub>") hold organizers who opted in to timeline emails.
 
 import { randomUUID } from "node:crypto";
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
@@ -24,11 +24,14 @@ import { compareTimeline } from "../services/timelineMapper";
 import {
   ITEM_SORT_KEY_PREFIX,
   REMINDER_PENDING,
+  SUBSCRIBER_SORT_KEY_PREFIX,
   itemSortKey,
+  subscriberSortKey,
   timelineTableName,
 } from "../tableDefinition";
 import type {
   NewTimelineItem,
+  SubscriberRecord,
   TimelineChanges,
   TimelineFields,
   TimelineRecord,
@@ -255,6 +258,48 @@ export class TimelineRepository {
       if (error instanceof ConditionalCheckFailedException) return null;
       throw error;
     }
+  }
+
+  // --- Subscribers ------------------------------------------------------------------
+
+  async getSubscriber(eventId: string, sub: string): Promise<SubscriberRecord | null> {
+    const result = await this.client.send(
+      new GetCommand({ TableName: this.tableName, Key: { eventId, sk: subscriberSortKey(sub) } }),
+    );
+    return (result.Item as SubscriberRecord | undefined) ?? null;
+  }
+
+  /** Creates or replaces the organizer's subscription with their current verified email. */
+  async putSubscriber(eventId: string, sub: string, email: string): Promise<SubscriberRecord> {
+    const record: SubscriberRecord = {
+      eventId, sk: subscriberSortKey(sub), sub, email, subscribedAt: utcSeconds(this.now()),
+    };
+    await this.client.send(new PutCommand({ TableName: this.tableName, Item: record }));
+    return record;
+  }
+
+  /** Idempotent: removing a subscription that does not exist is not an error. */
+  async deleteSubscriber(eventId: string, sub: string): Promise<void> {
+    await this.client.send(new DeleteCommand({ TableName: this.tableName, Key: { eventId, sk: subscriberSortKey(sub) } }));
+  }
+
+  /** Every organizer of the event who opted in. */
+  async listSubscribers(eventId: string): Promise<SubscriberRecord[]> {
+    const records: SubscriberRecord[] = [];
+    let startKey: Record<string, unknown> | undefined;
+    do {
+      const page = await this.client.send(
+        new QueryCommand({
+          TableName: this.tableName,
+          KeyConditionExpression: "eventId = :eventId AND begins_with(sk, :prefix)",
+          ExpressionAttributeValues: { ":eventId": eventId, ":prefix": SUBSCRIBER_SORT_KEY_PREFIX },
+          ExclusiveStartKey: startKey,
+        }),
+      );
+      records.push(...((page.Items ?? []) as SubscriberRecord[]));
+      startKey = page.LastEvaluatedKey;
+    } while (startKey);
+    return records;
   }
 }
 

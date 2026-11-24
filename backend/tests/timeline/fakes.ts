@@ -3,7 +3,7 @@
 // version-checked updates, reminder rescheduling, and null for missing items.
 
 import { ApiError } from "../../expense-service/errors";
-import { REMINDER_PENDING, itemSortKey } from "../../timeline-service/tableDefinition";
+import { REMINDER_PENDING, itemSortKey, subscriberSortKey } from "../../timeline-service/tableDefinition";
 import { compareTimeline } from "../../timeline-service/services/timelineMapper";
 import type {
   NotificationResult,
@@ -11,7 +11,13 @@ import type {
   TimelineNotifier,
   TimelineStore,
 } from "../../timeline-service/services/timelineService";
-import type { NewTimelineItem, TimelineChanges, TimelineRecord, UpdateOutcome } from "../../timeline-service/types";
+import type {
+  NewTimelineItem,
+  SubscriberRecord,
+  TimelineChanges,
+  TimelineRecord,
+  UpdateOutcome,
+} from "../../timeline-service/types";
 
 export class MemoryTimelineStore implements TimelineStore {
   readonly records = new Map<string, TimelineRecord>();
@@ -91,6 +97,27 @@ export class MemoryTimelineStore implements TimelineStore {
     if (!stored) return null;
     this.records.delete(this.key(eventId, itemId));
     return { ...stored };
+  }
+
+  readonly subscribers = new Map<string, SubscriberRecord>();
+
+  async getSubscriber(eventId: string, sub: string) {
+    const record = this.subscribers.get(this.key(eventId, sub));
+    return record ? { ...record } : null;
+  }
+
+  async putSubscriber(eventId: string, sub: string, email: string) {
+    const record = { eventId, sk: subscriberSortKey(sub), sub, email, subscribedAt: this.clock() };
+    this.subscribers.set(this.key(eventId, sub), record);
+    return { ...record };
+  }
+
+  async deleteSubscriber(eventId: string, sub: string) {
+    this.subscribers.delete(this.key(eventId, sub));
+  }
+
+  async listSubscribers(eventId: string) {
+    return [...this.subscribers.values()].filter((r) => r.eventId === eventId).map((r) => ({ ...r }));
   }
 }
 

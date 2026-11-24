@@ -9,8 +9,12 @@ import {
   TimelineApiError,
   createTimelineItem,
   deleteTimelineItem,
+  getSubscription,
   getTimelineShareLink,
   listTimeline,
+  subscribe,
+  unsubscribe,
+  type Subscription,
   updateTimelineItem,
 } from "./timelineApi";
 import {
@@ -132,6 +136,7 @@ function TimelineBoard({ event, onToast }: { event: OrganizerEvent; onToast: Toa
     <>
       {header}
       {loadError && <div className="form-error-banner" role="alert"><Icon name="alert" /> {loadError}</div>}
+      {!guestView && <EmailOptIn eventId={eventId} onSessionExpired={expireSession} />}
       {guestView && (
         <div className="guest-view-banner">
           <Icon name="eye" /> You're previewing what guests see. Planning-team-only activities are hidden.
@@ -563,5 +568,65 @@ function ShareDialog({
         </div>
       )}
     </Modal>
+  );
+}
+
+// --- "Email me timeline updates" ------------------------------------------------------
+
+function EmailOptIn({ eventId, onSessionExpired }: { eventId: string; onSessionExpired: () => void }) {
+  const [subscription, setSubscription] = useState<Subscription | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    getSubscription(eventId, controller.signal)
+      .then(setSubscription)
+      .catch((caught: unknown) => {
+        if (controller.signal.aborted) return;
+        if (caught instanceof EventSessionError) return onSessionExpired();
+        setError("Couldn't load your email setting.");
+      });
+    return () => controller.abort();
+  }, [eventId, onSessionExpired]);
+
+  async function toggle(on: boolean) {
+    setSaving(true);
+    setError("");
+    try {
+      if (on) setSubscription(await subscribe(eventId));
+      else {
+        await unsubscribe(eventId);
+        setSubscription({ subscribed: false, email: null });
+      }
+    } catch (caught) {
+      if (caught instanceof EventSessionError) return onSessionExpired();
+      setError(caught instanceof Error ? caught.message : "Couldn't change your email setting.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const on = Boolean(subscription?.subscribed);
+  return (
+    <label className={`check-field tl-optin ${on ? "is-on" : ""}`}>
+      <input
+        type="checkbox"
+        checked={on}
+        disabled={!subscription || saving}
+        onChange={(e) => void toggle(e.target.checked)}
+      />
+      <div>
+        <b>Email me timeline updates</b>
+        <span>
+          {error
+            ? error
+            : on
+              ? `Reminders and changes for this event go to ${subscription?.email}.`
+              : "Get activity reminders and an email when someone changes this timeline."}
+        </span>
+      </div>
+      <Icon name="bell" />
+    </label>
   );
 }

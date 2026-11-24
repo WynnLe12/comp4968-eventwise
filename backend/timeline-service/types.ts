@@ -89,3 +89,18 @@ export type UpdateOutcome =
   | { status: "UPDATED"; record: TimelineRecord; previous: TimelineRecord }
   | { status: "NOT_FOUND" }
   | { status: "VERSION_CONFLICT" };
+
+/** An organizer who opted in to timeline emails (key: eventId + sk = "SUBSCRIBER#<sub>"). */
+export interface SubscriberRecord {
+  eventId: string;
+  sk: string;
+  sub: string;
+  /** Verified email from the organizer's Cognito ID token, lowercased. */
+  email: string;
+  subscribedAt: string;
+}
+
+export interface Subscription {
+  subscribed: boolean;
+  email: string | null;
+}

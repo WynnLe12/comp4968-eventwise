@@ -286,3 +286,20 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* --- "Email me timeline updates" --- */
+
+.check-field.tl-optin {
+  max-width: 820px;
+  margin: 0 0 14px;
+  align-items: center;
+  background: #fff;
+}
+
+.check-field.tl-optin > svg {
+  color: var(--muted);
+}
+
+.check-field.tl-optin.is-on > svg {
+  color: var(--purple);
+}

@@ -9,6 +9,7 @@
 //   PATCH  /events/{eventId}/timeline/{itemId}  update (version + optional notify)
 //   DELETE /events/{eventId}/timeline/{itemId}  delete (?notify=true)
 //   GET    /events/{eventId}/timeline/share     guest link for the event
+//   GET|PUT|DELETE /events/{eventId}/timeline/subscription  my timeline-email opt-in
 //
 // Public route (NO authorizer; access comes from the signed share token):
 //   GET    /guest-timeline/{share}              GUESTS activities + event name/date/venue
@@ -19,6 +20,8 @@ import {
   GuestTimelineService,
   TimelineConfigurationError,
 } from "../services/guestTimelineService";
+import { createIdTokenEmailVerifier } from "../services/idTokenEmail";
+import { SubscriptionService } from "../services/subscriptionService";
 import { TimelineService } from "../services/timelineService";
 
 /** The REST API proxy-v1 fields used here. */
@@ -44,6 +47,7 @@ export const LIST_RESOURCE = "/events/{eventId}/timeline";
 export const ITEM_RESOURCE = "/events/{eventId}/timeline/{itemId}";
 export const SHARE_RESOURCE = "/events/{eventId}/timeline/share";
 export const GUEST_RESOURCE = "/guest-timeline/{share}";
+export const SUBSCRIPTION_RESOURCE = "/events/{eventId}/timeline/subscription";
 
 /** Methods per resource, besides OPTIONS. Used for routing and for 405 Allow headers. */
 const RESOURCES: Record<string, readonly string[]> = {
@@ -51,6 +55,7 @@ const RESOURCES: Record<string, readonly string[]> = {
   [ITEM_RESOURCE]: ["PATCH", "DELETE"],
   [SHARE_RESOURCE]: ["GET"],
   [GUEST_RESOURCE]: ["GET"],
+  [SUBSCRIPTION_RESOURCE]: ["GET", "PUT", "DELETE"],
 };
 
 /** Resources reachable without signing in. Everything else requires authorizer claims. */
@@ -60,6 +65,7 @@ export const MAX_BODY_BYTES = 16 * 1024;
 
 type Service = Pick<TimelineService, "list" | "create" | "update" | "delete">;
 type GuestService = Pick<GuestTimelineService, "shareLink" | "guestTimeline">;
+type Subscriptions = Pick<SubscriptionService, "get" | "subscribe" | "unsubscribe">;
 
 /**
  * Same checks as vendor-service/lambda/vendors.ts. The claims are trusted ONLY because
@@ -113,6 +119,14 @@ export function createTimelineHandler(
     secret: env.TIMELINE_SHARE_SECRET,
     origin: env.GUEST_APP_ORIGIN,
   }),
+  subscriptions: Subscriptions = new SubscriptionService({
+    repository: new TimelineRepository(),
+    verifyIdTokenEmail: createIdTokenEmailVerifier({
+      userPoolId: env.COGNITO_USER_POOL_ID,
+      clientId: env.COGNITO_CLIENT_ID,
+      jwksFile: env.COGNITO_JWKS_FILE,
+    }),
+  }),
 ) {
   return async (event: TimelineProxyEvent): Promise<TimelineProxyResponse> => {
     const headers: Record<string, string> = {
@@ -121,7 +135,7 @@ export function createTimelineHandler(
     };
     if (env.TIMELINE_CORS_ORIGIN) {
       headers["Access-Control-Allow-Origin"] = env.TIMELINE_CORS_ORIGIN;
-      headers["Access-Control-Allow-Methods"] = "GET,POST,PATCH,DELETE,OPTIONS";
+      headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
       headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization";
       headers["Vary"] = "Origin";
     }
@@ -151,6 +165,12 @@ export function createTimelineHandler(
       const sub = verifiedSubject(event, env);
       if (event.resource === SHARE_RESOURCE) {
         return respond(200, await guest.shareLink(params.eventId, sub));
+      }
+      if (event.resource === SUBSCRIPTION_RESOURCE) {
+        if (event.httpMethod === "GET") return respond(200, await subscriptions.get(params.eventId, sub));
+        if (event.httpMethod === "PUT") return respond(200, await subscriptions.subscribe(params.eventId, sub, parseBody(event)));
+        await subscriptions.unsubscribe(params.eventId, sub);
+        return respond(204);
       }
 
       if (event.resource === LIST_RESOURCE && event.httpMethod === "GET") {

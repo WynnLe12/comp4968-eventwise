@@ -264,6 +264,7 @@ Same envelope as the other APIs:
 | `SES_FROM_ADDRESS` | sender | Verified SES identity |
 | `DB_SECRET_ARN`, `DB_HOST`, `DB_NAME`, `DB_PORT` | timeline | Same as the Events Lambda |
 | `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID` | timeline | Same as the Events Lambda |
+| `COGNITO_JWKS_FILE` | timeline | Optional. Defaults to the packaged `certs/cognito-jwks.json` (Cognito's public signing keys) |
 
 ## 10. Out of scope
 

@@ -24,6 +24,8 @@ try {
   for (const name of ['timeline-service', 'shared', 'certs']) {
     cpSync(join(root, 'dist', name), join(staging, name), { recursive: true });
   }
+  // Cognito's public signing keys, for verifying ID tokens offline (no internet in the VPC).
+  cpSync(join(root, 'certs', 'cognito-jwks.json'), join(staging, 'certs', 'cognito-jwks.json'));
   // ApiError lives in the expense service; nothing else from it is needed.
   mkdirSync(join(staging, 'expense-service'));
   cpSync(join(root, 'dist', 'expense-service', 'errors.js'), join(staging, 'expense-service', 'errors.js'));
@@ -64,6 +66,9 @@ try {
     const { handler } = require('./timeline-service/lambda/timeline.js');
     assert.equal(typeof handler, 'function');
     new X509Certificate(fs.readFileSync('./certs/rds-ca.pem'));
+    const { DEFAULT_JWKS_FILE } = require('./timeline-service/services/idTokenEmail.js');
+    assert.equal(path.relative(process.cwd(), DEFAULT_JWKS_FILE), path.join('certs', 'cognito-jwks.json'));
+    assert.ok(JSON.parse(fs.readFileSync(DEFAULT_JWKS_FILE, 'utf8')).keys.length > 0, 'Cognito JWKS has no keys');
     (async () => {
       const preflight = await handler({ httpMethod: 'OPTIONS', resource: '/events/{eventId}/timeline' });
       assert.equal(preflight.statusCode, 204);

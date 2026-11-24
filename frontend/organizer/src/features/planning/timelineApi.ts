@@ -30,6 +30,7 @@ const friendly: Record<string, string> = {
   VERSION_CONFLICT: "Someone else just changed this activity. The timeline has been refreshed; please make your change again.",
   TIMELINE_FULL: "This event already has 100 activities, the most a timeline can hold.",
   VALIDATION_ERROR: "Check the highlighted fields.",
+  EMAIL_NOT_VERIFIED: "Verify your email address in your account before turning on timeline emails.",
 };
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -143,4 +144,30 @@ export async function fetchGuestTimeline(share: string, signal?: AbortSignal): P
     throw new GuestTimelineError("The timeline is temporarily unavailable. Please try again soon.", false);
   }
   return body as GuestTimeline;
+}
+
+// --- Timeline emails for organizers ---------------------------------------------------
+
+export interface Subscription {
+  subscribed: boolean;
+  email: string | null;
+}
+
+export function getSubscription(eventId: string, signal?: AbortSignal): Promise<Subscription> {
+  return request(`${base(eventId)}/subscription`, { signal });
+}
+
+/**
+ * Turns on timeline emails. The API reads the verified email from the Cognito ID token
+ * (its Lambda can't look it up), so the ID token is sent once in the body.
+ */
+export async function subscribe(eventId: string): Promise<Subscription> {
+  const { session } = await authenticatedEventRequest();
+  const idToken = session.tokens?.idToken?.toString();
+  if (!idToken) throw new EventSessionError("Please sign in again.");
+  return request(`${base(eventId)}/subscription`, { method: "PUT", body: JSON.stringify({ idToken }) });
+}
+
+export async function unsubscribe(eventId: string): Promise<void> {
+  await request<void>(`${base(eventId)}/subscription`, { method: "DELETE" });
 }
