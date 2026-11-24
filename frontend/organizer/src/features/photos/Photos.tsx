@@ -145,7 +145,7 @@ function PhotoModeration({ eventId, onToast }: { eventId: string; onToast: (mess
     setNotice("");
     try {
       await navigator.clipboard.writeText(url);
-      setNotice("Gallery link copied.");
+      onToast("Gallery link copied.");
     } catch {
       setActionError("Unable to copy automatically. Open the guest gallery to copy its address.");
     }
