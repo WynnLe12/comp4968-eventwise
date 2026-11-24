@@ -65,6 +65,12 @@ function PhotoModeration({ eventId }: { eventId: string }) {
   const allSelected = Boolean(page?.items.length && selectedIds.length === page.items.length);
 
   useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(""), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  useEffect(() => {
     if (busy || actionError || photoToDelete) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") fetchPage();

@@ -1,4 +1,4 @@
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 import { Button } from "../../components/ui";
 import { guestPhotoPath, photoError, photoPageQuery, photoRequest, type PhotoPage } from "./photoApi";
@@ -15,17 +15,30 @@ function GuestPhotos({ share }: { share: string }) {
     photoRequest<PhotoPage>(`${path}${photoPageQuery(after)}`, { signal }), [path]);
   const { page, error, loading, fetchPage } = usePhotoPages(load);
   const [file, setFile] = useState<File>();
+  const [previewUrl, setPreviewUrl] = useState<string>();
   const [uploading, setUploading] = useState(false);
   const [downloading, setDownloading] = useState<string>();
   const [notice, setNotice] = useState("");
   const [actionError, setActionError] = useState("");
+  const validFile = Boolean(file && ["image/jpeg", "image/png", "image/webp"].includes(file.type) &&
+    file.size > 0 && file.size <= 10 * 1024 * 1024);
+
+  useEffect(() => {
+    if (!file || !validFile) {
+      setPreviewUrl(undefined);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file, validFile]);
 
   async function upload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!file || uploading) return;
     setNotice("");
     setActionError("");
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || !file.size || file.size > 10 * 1024 * 1024) {
+    if (!validFile) {
       setActionError("Choose a JPEG, PNG or WebP image up to 10 MB.");
       return;
     }
@@ -69,6 +82,7 @@ function GuestPhotos({ share }: { share: string }) {
         <input type="file" aria-label="Choose a JPEG, PNG or WebP image up to 10 MB"
           accept="image/jpeg,image/png,image/webp" disabled={uploading}
           onChange={event => setFile(event.target.files?.[0])} />
+        {previewUrl && <img className="gallery-upload-preview" src={previewUrl} alt="Selected photo preview" />}
         <Button type="submit" disabled={uploading || !file}>{uploading ? "Uploading…" : "Upload photo"}</Button>
       </form>
       {notice && <p role="status">{notice}</p>}
