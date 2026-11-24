@@ -3,14 +3,22 @@
 // every method except OPTIONS. Routes are chosen by event.resource, which matches the
 // API Gateway resource path exactly. Contract: docs/api/timeline.md.
 //
-// Organizer routes in this commit:
+// Organizer routes (Cognito authorizer):
 //   GET    /events/{eventId}/timeline           list
 //   POST   /events/{eventId}/timeline           create (201 + Location)
 //   PATCH  /events/{eventId}/timeline/{itemId}  update (version + optional notify)
 //   DELETE /events/{eventId}/timeline/{itemId}  delete (?notify=true)
+//   GET    /events/{eventId}/timeline/share     guest link for the event
+//
+// Public route (NO authorizer; access comes from the signed share token):
+//   GET    /guest-timeline/{share}              GUESTS activities + event name/date/venue
 
 import { ApiError } from "../../expense-service/errors";
 import { TimelineRepository } from "../repositories/timelineRepository";
+import {
+  GuestTimelineService,
+  TimelineConfigurationError,
+} from "../services/guestTimelineService";
 import { TimelineService } from "../services/timelineService";
 
 /** The REST API proxy-v1 fields used here. */
@@ -34,16 +42,24 @@ export interface TimelineProxyResponse {
 
 export const LIST_RESOURCE = "/events/{eventId}/timeline";
 export const ITEM_RESOURCE = "/events/{eventId}/timeline/{itemId}";
+export const SHARE_RESOURCE = "/events/{eventId}/timeline/share";
+export const GUEST_RESOURCE = "/guest-timeline/{share}";
 
 /** Methods per resource, besides OPTIONS. Used for routing and for 405 Allow headers. */
 const RESOURCES: Record<string, readonly string[]> = {
   [LIST_RESOURCE]: ["GET", "POST"],
   [ITEM_RESOURCE]: ["PATCH", "DELETE"],
+  [SHARE_RESOURCE]: ["GET"],
+  [GUEST_RESOURCE]: ["GET"],
 };
+
+/** Resources reachable without signing in. Everything else requires authorizer claims. */
+const PUBLIC_RESOURCES = new Set([GUEST_RESOURCE]);
 
 export const MAX_BODY_BYTES = 16 * 1024;
 
 type Service = Pick<TimelineService, "list" | "create" | "update" | "delete">;
+type GuestService = Pick<GuestTimelineService, "shareLink" | "guestTimeline">;
 
 /**
  * Same checks as vendor-service/lambda/vendors.ts. The claims are trusted ONLY because
@@ -92,6 +108,11 @@ function parseBody(event: TimelineProxyEvent): unknown {
 export function createTimelineHandler(
   service: Service = new TimelineService({ repository: new TimelineRepository() }),
   env: NodeJS.ProcessEnv = process.env,
+  guest: GuestService = new GuestTimelineService({
+    repository: new TimelineRepository(),
+    secret: env.TIMELINE_SHARE_SECRET,
+    origin: env.GUEST_APP_ORIGIN,
+  }),
 ) {
   return async (event: TimelineProxyEvent): Promise<TimelineProxyResponse> => {
     const headers: Record<string, string> = {
@@ -122,8 +143,15 @@ export function createTimelineHandler(
     }
 
     try {
-      const sub = verifiedSubject(event, env);
       const params = event.pathParameters ?? {};
+      if (PUBLIC_RESOURCES.has(event.resource)) {
+        return respond(200, await guest.guestTimeline(params.share));
+      }
+
+      const sub = verifiedSubject(event, env);
+      if (event.resource === SHARE_RESOURCE) {
+        return respond(200, await guest.shareLink(params.eventId, sub));
+      }
 
       if (event.resource === LIST_RESOURCE && event.httpMethod === "GET") {
         return respond(200, await service.list(params.eventId, sub));
@@ -144,6 +172,11 @@ export function createTimelineHandler(
       if (caught instanceof ApiError) {
         const { status, code, message, fields } = caught;
         return respond(status, { error: { code, message, ...(fields ? { fields } : {}) } });
+      }
+      if (caught instanceof TimelineConfigurationError) {
+        // Names the missing setting, never its value.
+        console.error(`${event.httpMethod} ${event.resource} failed: ${caught.message}`);
+        return error(500, "INTERNAL_ERROR", "Unable to complete the request.");
       }
       // Never log request bodies or error details: they may hold personal data.
       console.error(`${event.httpMethod} ${event.resource} failed`, caught instanceof Error ? caught.name : "unknown error");

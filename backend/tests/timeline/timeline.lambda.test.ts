@@ -3,13 +3,17 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { createEventShare } from "../../shared/auth/eventShare";
 import {
+  GUEST_RESOURCE,
   ITEM_RESOURCE,
   LIST_RESOURCE,
+  SHARE_RESOURCE,
   MAX_BODY_BYTES,
   createTimelineHandler,
   type TimelineProxyEvent,
 } from "../../timeline-service/lambda/timeline";
+import { GuestTimelineService } from "../../timeline-service/services/guestTimelineService";
 import { TimelineService } from "../../timeline-service/services/timelineService";
 import { MemoryTimelineStore, RecordingNotifier, memberships } from "./fakes";
 
@@ -18,22 +22,32 @@ const CLIENT = "testclient";
 const ISSUER = `https://cognito-idp.us-west-2.amazonaws.com/${POOL}`;
 const ENV = { COGNITO_USER_POOL_ID: POOL, COGNITO_CLIENT_ID: CLIENT } as NodeJS.ProcessEnv;
 const JSON_HEADERS = { "Content-Type": "application/json" };
+const SECRET = "timeline-secret-0123456789abcdef-xyz";
+const ORIGIN = "http://localhost:5173";
 
 function claims(sub = "sub-owner", overrides: Record<string, unknown> = {}) {
   return { sub, token_use: "access", client_id: CLIENT, iss: ISSUER, ...overrides };
 }
 
-function setup(env: NodeJS.ProcessEnv = ENV) {
+function setup(env: NodeJS.ProcessEnv = ENV, secret: string | undefined = SECRET) {
   const store = new MemoryTimelineStore();
   const notifier = new RecordingNotifier();
+  const requireMember = memberships([["42", "sub-owner"], ["42", "sub-planner"]]).check;
   const service = new TimelineService({
     repository: store,
-    requireMember: memberships([["42", "sub-owner"], ["42", "sub-planner"]]).check,
+    requireMember,
     notifier,
     now: () => new Date("2026-12-01T12:00:00Z"),
     logError: () => {},
   });
-  return { handler: createTimelineHandler(service, env), store, notifier };
+  const guest = new GuestTimelineService({
+    repository: store,
+    requireMember,
+    events: async () => ({ name: "Maya & Eli's Wedding", eventDate: "2026-12-05", venue: "The Willow House" }),
+    secret,
+    origin: ORIGIN,
+  });
+  return { handler: createTimelineHandler(service, env, guest), store, notifier };
 }
 
 function request(
@@ -243,4 +257,57 @@ test("concurrent warm invocations keep each caller's identity separate", async (
     handler(post({ ...ceremony, title: "Dinner" }, { requestContext: { authorizer: { claims: claims("sub-planner") } } })),
   ]);
   assert.deepEqual(responses.map((r) => r.statusCode), [201, 403, 201]);
+});
+
+// --- Share link and guest timeline -------------------------------------------------
+
+test("GET share returns the guest link to members only", async () => {
+  const { handler } = setup();
+  const response = await handler(request({ httpMethod: "GET", resource: SHARE_RESOURCE }));
+  assert.equal(response.statusCode, 200);
+  const share = createEventShare("42", "timeline", SECRET);
+  assert.deepEqual(json(response), { share, url: `${ORIGIN}/timeline/${share}` });
+  assert.equal((await handler(request({ httpMethod: "GET", resource: SHARE_RESOURCE }, claims("sub-stranger")))).statusCode, 403);
+  assert.equal((await handler(request({ httpMethod: "GET", resource: SHARE_RESOURCE }, null))).statusCode, 401);
+});
+
+test("the guest route needs no sign-in, hides TEAM activities and is never cached", async () => {
+  const { handler } = setup();
+  await handler(post(ceremony));
+  await handler(post({ title: "Vendor setup", startsAt: "2026-12-05T13:00:00-08:00", visibility: "TEAM" }));
+  const share = createEventShare("42", "timeline", SECRET);
+  const response = await handler({ httpMethod: "GET", resource: GUEST_RESOURCE, pathParameters: { share } });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.headers["Cache-Control"], "no-store");
+  const body = json(response);
+  assert.equal(body.event.name, "Maya & Eli's Wedding");
+  assert.deepEqual(body.items.map((i: { title: string }) => i.title), ["Ceremony begins"]);
+  assert.equal("visibility" in body.items[0], false);
+  assert.equal("version" in body.items[0], false);
+});
+
+test("a bad guest link is 404; the guest route only allows GET", async () => {
+  const { handler } = setup();
+  const bad = await handler({ httpMethod: "GET", resource: GUEST_RESOURCE, pathParameters: { share: "42-forged" } });
+  assert.equal(bad.statusCode, 404);
+  assert.equal(json(bad).error.code, "NOT_FOUND");
+  const write = await handler({ httpMethod: "POST", resource: GUEST_RESOURCE, pathParameters: { share: "x" } });
+  assert.equal(write.statusCode, 405);
+  assert.equal(write.headers.Allow, "GET, OPTIONS");
+  assert.equal((await handler({ httpMethod: "OPTIONS", resource: GUEST_RESOURCE })).statusCode, 204);
+});
+
+test("a missing share secret is a generic 500 whose log names the variable but no values", async () => {
+  const { handler } = setup(ENV, "");
+  const logged: unknown[][] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => { logged.push(args); };
+  try {
+    const response = await handler({ httpMethod: "GET", resource: GUEST_RESOURCE, pathParameters: { share: "42-x" } });
+    assert.equal(response.statusCode, 500);
+    assert.equal(json(response).error.code, "INTERNAL_ERROR");
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(logged, [["GET /guest-timeline/{share} failed: TIMELINE_SHARE_SECRET must be at least 32 bytes"]]);
 });
