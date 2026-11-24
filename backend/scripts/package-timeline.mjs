@@ -26,6 +26,10 @@ try {
   }
   // Cognito's public signing keys, for verifying ID tokens offline (no internet in the VPC).
   cpSync(join(root, 'certs', 'cognito-jwks.json'), join(staging, 'certs', 'cognito-jwks.json'));
+  // Change emails read guest addresses through the guest service's repository (read-only).
+  mkdirSync(join(staging, 'guest-service', 'repositories'), { recursive: true });
+  cpSync(join(root, 'dist', 'guest-service', 'repositories', 'guestRepository.js'),
+    join(staging, 'guest-service', 'repositories', 'guestRepository.js'));
   // ApiError lives in the expense service; nothing else from it is needed.
   mkdirSync(join(staging, 'expense-service'));
   cpSync(join(root, 'dist', 'expense-service', 'errors.js'), join(staging, 'expense-service', 'errors.js'));

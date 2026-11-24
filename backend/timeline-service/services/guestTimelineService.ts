@@ -17,10 +17,9 @@ import { requireEventId } from "./validation";
 
 export const SHARE_PURPOSE = "timeline";
 
-/** Missing or invalid deployment settings. The message names the variable, never its value. */
-export class TimelineConfigurationError extends Error {
-  override name = "TimelineConfigurationError";
-}
+import { TimelineConfigurationError } from "../errors";
+
+export { TimelineConfigurationError };
 
 export interface ShareLink {
   share: string;

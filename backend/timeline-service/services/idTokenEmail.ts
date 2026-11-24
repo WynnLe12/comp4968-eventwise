@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CognitoJwtVerifier } from "aws-jwt-verify";
 import { ApiError } from "../../expense-service/errors";
-import { TimelineConfigurationError } from "./guestTimelineService";
+import { TimelineConfigurationError } from "../errors";
 
 export type VerifyIdTokenEmail = (idToken: string, expectedSub: string) => Promise<string>;
 

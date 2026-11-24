@@ -15,6 +15,7 @@
 //   GET    /guest-timeline/{share}              GUESTS activities + event name/date/venue
 
 import { ApiError } from "../../expense-service/errors";
+import { createSqsTimelineNotifier } from "../notifications/sqsNotifier";
 import { TimelineRepository } from "../repositories/timelineRepository";
 import {
   GuestTimelineService,
@@ -112,7 +113,7 @@ function parseBody(event: TimelineProxyEvent): unknown {
 }
 
 export function createTimelineHandler(
-  service: Service = new TimelineService({ repository: new TimelineRepository() }),
+  service: Service = new TimelineService({ repository: new TimelineRepository(), notifier: createSqsTimelineNotifier() }),
   env: NodeJS.ProcessEnv = process.env,
   guest: GuestService = new GuestTimelineService({
     repository: new TimelineRepository(),

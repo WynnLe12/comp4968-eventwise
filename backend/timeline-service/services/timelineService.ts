@@ -6,6 +6,7 @@
 // Throws ApiError for every expected failure.
 
 import { ApiError } from "../../expense-service/errors";
+import { TimelineConfigurationError } from "../errors";
 import { requireMember as requireMemberInMySql } from "../../shared/auth/requireMember";
 import type { TimelineRepository } from "../repositories/timelineRepository";
 import type { TimelineFields, TimelineItem, TimelineRecord } from "../types";
@@ -112,7 +113,11 @@ export class TimelineService {
     this.requireMember = options.requireMember ?? requireMemberInMySql;
     this.notifier = options.notifier ?? notificationsNotConfigured;
     this.now = options.now ?? (() => new Date());
-    this.logError = options.logError ?? ((message) => console.error(message));
+    // A configuration problem names the missing setting; anything else logs only its type.
+    this.logError = options.logError ?? ((message, error) => console.error(
+      error instanceof TimelineConfigurationError ? `${message}: ${error.message}` : message,
+      error instanceof TimelineConfigurationError ? "" : error instanceof Error ? error.name : "unknown error",
+    ));
   }
 
   async list(rawEventId: unknown, sub: string): Promise<TimelineList> {

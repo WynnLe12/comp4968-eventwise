@@ -213,16 +213,21 @@ One message per recipient on `eventwise-timeline-emails`:
 {
   "type": "TIMELINE_CHANGED",
   "to": "guest@example.com",
+  "audience": "GUEST",
   "eventName": "Maya & Eli's Wedding",
   "change": "UPDATED",
   "changedFields": ["startsAt"],
   "item": { "title": "Ceremony begins", "place": "Garden ceremony",
             "startsAt": "2026-12-05T23:30:00Z", "endsAt": null },
+  "previous": { "title": "Ceremony begins", "place": "Garden ceremony",
+                "startsAt": "2026-12-05T23:00:00Z", "endsAt": null },
   "timelineUrl": "https://<app origin>/timeline/42-<signature>"
 }
 ```
 
-`type` is `TIMELINE_CHANGED` (with `change` = `UPDATED` or `DELETED`) or `TIMELINE_REMINDER` (no `change` fields). TEAM items link organizers to the app's Timeline page instead of the guest URL. The sender formats times in `America/Vancouver`.
+`type` is `TIMELINE_CHANGED` (with `change` = `UPDATED` or `DELETED`) or `TIMELINE_REMINDER` (no `change`, `changedFields` or `previous`). `previous` (UPDATED only) is the activity before the edit, so the email can say "moved from 3:00 PM to 3:30 PM". `audience` is `GUEST` or `ORGANIZER`: guests get the guest schedule link; organizers get `https://<app origin>/app/timeline`. Someone who is both gets one email, as an organizer. Events with more than 500 affected addresses are capped at 500 and the truncation is logged. The sender formats times in `America/Vancouver`.
+
+`notification.status` is `FAILED` if any message could not be queued; `recipients` then counts the messages that were queued. CloudWatch logs contain counts only, never addresses or message bodies.
 
 Message bodies contain email addresses and share links: keep them out of logs, enable queue encryption, and restrict queue access to the three timeline roles. Failed sends go to the DLQ after 3 receives.
 
