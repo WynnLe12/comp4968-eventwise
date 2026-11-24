@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 // Handlers (Node.js 22.x, x86_64), both from this one ZIP:
 //   eventwise-timeline            timeline-service/lambda/timeline.handler
 //   eventwise-timeline-reminders  timeline-service/lambda/reminders.handler
+//   eventwise-timeline-email-sender  timeline-service/lambda/emailSender.handler (outside the VPC)
 const root = realpathSync(fileURLToPath(new URL('../', import.meta.url)));
 const build = join(root, 'build');
 mkdirSync(build, { recursive: true });
@@ -73,6 +74,8 @@ try {
     assert.equal(typeof handler, 'function');
     // The reminders Lambda ships in the same ZIP with handler timeline-service/lambda/reminders.handler.
     assert.equal(typeof require('./timeline-service/lambda/reminders.js').handler, 'function');
+    // So does the email sender (handler timeline-service/lambda/emailSender.handler, outside the VPC).
+    const { createEmailSenderHandler } = require('./timeline-service/lambda/emailSender.js');
     new X509Certificate(fs.readFileSync('./certs/rds-ca.pem'));
     const { DEFAULT_JWKS_FILE } = require('./timeline-service/services/idTokenEmail.js');
     assert.equal(path.relative(process.cwd(), DEFAULT_JWKS_FILE), path.join('certs', 'cognito-jwks.json'));
@@ -94,6 +97,10 @@ try {
       const guest = await handler({ httpMethod: 'GET', resource: '/guest-timeline/{share}', pathParameters: { share: '42-x' } });
       console.error = original;
       assert.equal(guest.statusCode, 500);
+      // The sender retries everything when SES_FROM_ADDRESS is missing, without calling SES.
+      const senderCheck = await createEmailSenderHandler(async () => { throw new Error('SES must not be called'); }, {}, () => {})(
+        { Records: [{ messageId: 'm1', body: '{}' }] });
+      assert.deepEqual(senderCheck, { batchItemFailures: [{ itemIdentifier: 'm1' }] });
       console.log('Timeline package smoke checks passed');
     })().catch(error => { console.error(error); process.exitCode = 1; });
   `], { cwd: staging, stdio: 'inherit' });
@@ -106,7 +113,7 @@ try {
   // Replace the prior artifact only after installation, smoke checks and archiving succeed.
   renameSync(archive, output);
   console.log(`Created ${output}`);
-  console.log('Lambda handlers: timeline-service/lambda/timeline.handler (API), timeline-service/lambda/reminders.handler (reminders)');
+  console.log('Lambda handlers: timeline-service/lambda/timeline.handler (API), timeline-service/lambda/reminders.handler (reminders), timeline-service/lambda/emailSender.handler (email sender)');
 } finally {
   const target = realpathSync(staging);
   const inside = relative(realpathSync(build), target);

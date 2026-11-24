@@ -15,7 +15,7 @@ The organizer page, the guest page and the notification Lambdas all build agains
 | DynamoDB `EventWise_Timeline` | Timeline items and organizer notification subscriptions | — |
 | `eventwise-timeline-reminders` Lambda | Runs every 5 minutes from EventBridge Scheduler, finds due reminders, queues emails. Same ZIP, handler `timeline-service/lambda/reminders.handler` | In the RDS VPC like the API Lambda (needs MySQL for membership and event names; DynamoDB and SQS through the endpoints) |
 | SQS `eventwise-timeline-emails` (+ DLQ) | One message per email | — |
-| `eventwise-timeline-email-sender` Lambda | Reads the queue, sends through SES | Outside the VPC |
+| `eventwise-timeline-email-sender` Lambda | Reads the queue, sends through SES v2 with "Report batch item failures". Same ZIP, handler `timeline-service/lambda/emailSender.handler` | Outside the VPC (needs SES; loads no MySQL code) |
 
 The default VPC has no NAT gateway, so neither VPC Lambda calls SES or Cognito APIs directly; only the email sender, outside the VPC, talks to SES. Guests are read from the existing `EventWise_Guests` table; the guest API is not changed.
 
@@ -232,6 +232,8 @@ One message per recipient on `eventwise-timeline-emails`:
 Message bodies contain email addresses and share links: keep them out of logs, enable queue encryption, and restrict queue access to the three timeline roles. Failed sends go to the DLQ after 3 receives.
 
 SES is in sandbox: only verified addresses receive mail. Demo guests must use verified team addresses.
+
+The sender renders a subject, plain-text and HTML body per message (`notifications/emailContent.ts`), in Vancouver time. Messages that don't match this contract, and SES errors (including `MessageRejected` for unverified addresses in the sandbox), are returned as batch item failures: retried, then moved to the DLQ. Logs hold SQS message IDs and error types only.
 
 ## 8. Errors
 
