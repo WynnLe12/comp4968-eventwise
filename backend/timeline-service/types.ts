@@ -49,6 +49,8 @@ export interface TimelineRecord {
   /** "PENDING" only while a reminder is waiting; keeps ReminderIndex sparse. */
   reminderStatus?: string;
   reminderSentAt?: string;
+  /** Set instead of reminderSentAt when the activity had already started by the time the reminder ran. */
+  reminderSkippedAt?: string;
   version: number;
   createdBy: string;
   updatedBy: string;

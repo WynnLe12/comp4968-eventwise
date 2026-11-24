@@ -13,7 +13,7 @@ import { TimelineRepository } from "../../timeline-service/repositories/timeline
 
 const enabled = process.env.EVENTWISE_DYNAMODB_TEST === "1" && isLocalEndpoint(process.env.DYNAMODB_ENDPOINT);
 
-test("DynamoDB Local: create, list, versioned update, reminder reset, subscribers and delete", { skip: !enabled }, async () => {
+test("DynamoDB Local: create, list, versioned update, reminders, subscribers and delete", { skip: !enabled }, async () => {
   const client = createDocumentClient();
   const repo = new TimelineRepository({ client });
   const eventId = `test-${randomUUID()}`;
@@ -54,6 +54,18 @@ test("DynamoDB Local: create, list, versioned update, reminder reset, subscriber
     assert.equal(cancelled?.reminderStatus, undefined);
 
     assert.deepEqual((await repo.listItems(eventId)).map((r) => r.title), ["Dinner", "Ceremony"]);
+
+    // Reminders: the sparse index lists the due one, and only the first claim wins.
+    const reminder = await repo.createItem(eventId, {
+      title: "Reminder test", place: null, notes: null, startsAt: "2001-01-01T01:00:00Z", endsAt: null,
+      visibility: "TEAM", reminderMinutes: 60, reminderAt: "2001-01-01T00:00:00Z",
+    }, "sub-owner");
+    const due = (await repo.listDueReminders(new Date("2001-01-01T00:05:00Z"), 100)).filter((r) => r.eventId === eventId);
+    assert.deepEqual(due.map((r) => r.itemId), [reminder.itemId]);
+    assert.equal((await repo.claimReminder(due[0]!, "SENT", new Date("2001-01-01T00:05:00Z")))?.reminderSentAt, "2001-01-01T00:05:00Z");
+    assert.equal(await repo.claimReminder(due[0]!, "SENT", new Date("2001-01-01T00:05:00Z")), null);
+    assert.equal((await repo.getItem(eventId, reminder.itemId))?.reminderStatus, undefined);
+    await repo.deleteItem(eventId, reminder.itemId);
 
     // Subscribers share the partition but never appear in the activity list.
     await repo.putSubscriber(eventId, "sub-owner", "maya@example.com");

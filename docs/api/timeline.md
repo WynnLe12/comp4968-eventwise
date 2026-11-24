@@ -13,11 +13,11 @@ The organizer page, the guest page and the notification Lambdas all build agains
 | --- | --- | --- |
 | `eventwise-timeline` Lambda | Organizer routes, guest route, change notifications | In the RDS VPC (`eventwise-lambda-sg`): membership check in RDS, DynamoDB through the gateway endpoint, SQS through `eventwise-sqs-endpoint` |
 | DynamoDB `EventWise_Timeline` | Timeline items and organizer notification subscriptions | — |
-| `eventwise-timeline-reminders` Lambda | Runs every 5 minutes from EventBridge Scheduler, finds due reminders, queues emails | Outside the VPC |
+| `eventwise-timeline-reminders` Lambda | Runs every 5 minutes from EventBridge Scheduler, finds due reminders, queues emails. Same ZIP, handler `timeline-service/lambda/reminders.handler` | In the RDS VPC like the API Lambda (needs MySQL for membership and event names; DynamoDB and SQS through the endpoints) |
 | SQS `eventwise-timeline-emails` (+ DLQ) | One message per email | — |
 | `eventwise-timeline-email-sender` Lambda | Reads the queue, sends through SES | Outside the VPC |
 
-The default VPC has no NAT gateway, so the timeline Lambda never calls SES or Cognito APIs directly. Guests are read from the existing `EventWise_Guests` table; the guest API is not changed.
+The default VPC has no NAT gateway, so neither VPC Lambda calls SES or Cognito APIs directly; only the email sender, outside the VPC, talks to SES. Guests are read from the existing `EventWise_Guests` table; the guest API is not changed.
 
 ## 2. Authentication and event access
 
@@ -203,7 +203,7 @@ When a PATCH changes `visibility`, recipients are the union of the audiences bef
 
 A reminder is sent once per item. A PATCH that changes `startsAt` or `reminderMinutes` recalculates `reminderAt` and sets `reminderStatus` back to `PENDING`, so the moved activity gets a new reminder. Deleting an item removes its pending reminder.
 
-The reminder Lambda claims each due item with a conditional update that removes `reminderStatus` only if it is still `PENDING` with the same `reminderAt`. Overlapping runs therefore cannot send the same reminder twice. Reminders are accurate to about 5 minutes.
+The reminder Lambda claims each due item with a conditional update that removes `reminderStatus` only if it is still `PENDING` with the same `reminderAt`, before sending. Overlapping runs therefore cannot send the same reminder twice, and an SQS failure means a missed reminder rather than a duplicate (at most once). If the activity has already started when its reminder runs (for example, the schedule was paused), the reminder is marked `reminderSkippedAt` instead of being sent late. Each run handles at most 100 due reminders; the next run takes the rest. Reminders are accurate to about 5 minutes.
 
 ### SQS message
 

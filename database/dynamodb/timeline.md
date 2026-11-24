@@ -45,7 +45,8 @@ Optional attributes are left out of the item when empty, never stored as null.
 | `reminderMinutes` | N | yes | `0`, `15`, `60` or `1440` |
 | `reminderAt` | S | no | `startsAt − reminderMinutes`; absent when there is no future reminder |
 | `reminderStatus` | S | no | `PENDING` only while a reminder is waiting; removed when it is claimed. Keeps `ReminderIndex` sparse |
-| `reminderSentAt` | S | no | When the reminder was claimed |
+| `reminderSentAt` | S | no | When the reminder was claimed for sending |
+| `reminderSkippedAt` | S | no | When a reminder was dropped because the activity had already started |
 | `version` | N | yes | Starts at 1, +1 on every update; used for optimistic locking |
 | `createdBy` / `updatedBy` | S | yes | Cognito `sub`. Not returned by the API |
 | `createdAt` / `updatedAt` | S | yes | ISO 8601 UTC |

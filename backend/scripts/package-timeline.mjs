@@ -5,7 +5,9 @@ import { execFileSync } from 'node:child_process';
 
 // Builds backend/build/eventwise-timeline.zip for the eventwise-timeline Lambda (Feature 13).
 // Invoke via npm run package:timeline, which compiles TypeScript first.
-// Handler: timeline-service/lambda/timeline.handler (Node.js 22.x, x86_64).
+// Handlers (Node.js 22.x, x86_64), both from this one ZIP:
+//   eventwise-timeline            timeline-service/lambda/timeline.handler
+//   eventwise-timeline-reminders  timeline-service/lambda/reminders.handler
 const root = realpathSync(fileURLToPath(new URL('../', import.meta.url)));
 const build = join(root, 'build');
 mkdirSync(build, { recursive: true });
@@ -69,6 +71,8 @@ try {
     assert.equal(fs.existsSync('node_modules/sharp'), false, 'sharp should not be packaged');
     const { handler } = require('./timeline-service/lambda/timeline.js');
     assert.equal(typeof handler, 'function');
+    // The reminders Lambda ships in the same ZIP with handler timeline-service/lambda/reminders.handler.
+    assert.equal(typeof require('./timeline-service/lambda/reminders.js').handler, 'function');
     new X509Certificate(fs.readFileSync('./certs/rds-ca.pem'));
     const { DEFAULT_JWKS_FILE } = require('./timeline-service/services/idTokenEmail.js');
     assert.equal(path.relative(process.cwd(), DEFAULT_JWKS_FILE), path.join('certs', 'cognito-jwks.json'));
@@ -102,7 +106,7 @@ try {
   // Replace the prior artifact only after installation, smoke checks and archiving succeed.
   renameSync(archive, output);
   console.log(`Created ${output}`);
-  console.log('Lambda handler: timeline-service/lambda/timeline.handler');
+  console.log('Lambda handlers: timeline-service/lambda/timeline.handler (API), timeline-service/lambda/reminders.handler (reminders)');
 } finally {
   const target = realpathSync(staging);
   const inside = relative(realpathSync(build), target);

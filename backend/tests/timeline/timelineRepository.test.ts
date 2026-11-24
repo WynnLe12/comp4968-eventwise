@@ -201,7 +201,7 @@ test("updateItem with a new reminderAt makes the reminder PENDING again and clea
 
   const input = sent[0]!.input;
   assert.match(input.UpdateExpression, /#reminderAt = :reminderAt, #reminderStatus = :pending/);
-  assert.match(input.UpdateExpression, /REMOVE #reminderSentAt$/);
+  assert.match(input.UpdateExpression, /REMOVE #reminderSentAt, #reminderSkippedAt$/);
   assert.equal(input.ExpressionAttributeValues[":pending"], "PENDING");
   assert.equal(outcome.status, "UPDATED");
   if (outcome.status !== "UPDATED") return;
@@ -214,7 +214,7 @@ test("updateItem with reminderAt null cancels the reminder", async () => {
   const { repo, sent } = repository([() => ({ Attributes: stored() })]);
   const outcome = await repo.updateItem("42", ITEM_ID, 3, { reminderMinutes: 0, reminderAt: null }, "sub-owner");
 
-  assert.match(sent[0]!.input.UpdateExpression, /REMOVE #reminderAt, #reminderStatus, #reminderSentAt$/);
+  assert.match(sent[0]!.input.UpdateExpression, /REMOVE #reminderAt, #reminderStatus, #reminderSentAt, #reminderSkippedAt$/);
   assert.equal(outcome.status, "UPDATED");
   if (outcome.status !== "UPDATED") return;
   assert.equal(outcome.record.reminderMinutes, 0);

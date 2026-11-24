@@ -99,6 +99,25 @@ export class MemoryTimelineStore implements TimelineStore {
     return { ...stored };
   }
 
+  async listDueReminders(now: Date, limit: number) {
+    const at = now.toISOString().replace(/\.\d{3}Z$/, "Z");
+    return [...this.records.values()]
+      .filter((r) => r.reminderStatus === REMINDER_PENDING && r.reminderAt !== undefined && r.reminderAt <= at)
+      .sort((a, b) => (a.reminderAt! < b.reminderAt! ? -1 : 1))
+      .slice(0, limit)
+      .map((r) => ({ ...r }));
+  }
+
+  async claimReminder(record: Pick<TimelineRecord, "eventId" | "itemId" | "reminderAt">, outcome: "SENT" | "SKIPPED", now: Date) {
+    const stored = this.records.get(this.key(record.eventId, record.itemId));
+    if (!stored || stored.reminderStatus !== REMINDER_PENDING || stored.reminderAt !== record.reminderAt) return null;
+    const next: TimelineRecord = { ...stored };
+    delete next.reminderStatus;
+    next[outcome === "SENT" ? "reminderSentAt" : "reminderSkippedAt"] = now.toISOString().replace(/\.\d{3}Z$/, "Z");
+    this.records.set(this.key(record.eventId, record.itemId), next);
+    return { ...next };
+  }
+
   readonly subscribers = new Map<string, SubscriberRecord>();
 
   async getSubscriber(eventId: string, sub: string) {

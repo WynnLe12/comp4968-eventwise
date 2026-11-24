@@ -23,6 +23,7 @@ import { getDocumentClient } from "../../shared/db/dynamodb";
 import { compareTimeline } from "../services/timelineMapper";
 import {
   ITEM_SORT_KEY_PREFIX,
+  REMINDER_INDEX_NAME,
   REMINDER_PENDING,
   SUBSCRIBER_SORT_KEY_PREFIX,
   itemSortKey,
@@ -202,14 +203,15 @@ export class TimelineRepository {
         "#reminderAt": "reminderAt",
         "#reminderStatus": "reminderStatus",
         "#reminderSentAt": "reminderSentAt",
+        "#reminderSkippedAt": "reminderSkippedAt",
       });
       if (changes.reminderAt === null) {
-        removeParts.push("#reminderAt", "#reminderStatus", "#reminderSentAt");
+        removeParts.push("#reminderAt", "#reminderStatus", "#reminderSentAt", "#reminderSkippedAt");
       } else {
         values[":reminderAt"] = changes.reminderAt;
         values[":pending"] = REMINDER_PENDING;
         setParts.push("#reminderAt = :reminderAt", "#reminderStatus = :pending");
-        removeParts.push("#reminderSentAt");
+        removeParts.push("#reminderSentAt", "#reminderSkippedAt");
       }
     }
 
@@ -254,6 +256,66 @@ export class TimelineRepository {
         }),
       );
       return (result.Attributes as TimelineRecord | undefined) ?? null;
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) return null;
+      throw error;
+    }
+  }
+
+  // --- Reminders --------------------------------------------------------------------
+
+  /**
+   * Activities whose reminder is due: PENDING with reminderAt <= now, oldest first,
+   * across all events (sparse ReminderIndex). Index reads are eventually consistent;
+   * claimReminder re-checks each one before anything is sent.
+   */
+  async listDueReminders(now: Date, limit: number): Promise<TimelineRecord[]> {
+    const records: TimelineRecord[] = [];
+    let startKey: Record<string, unknown> | undefined;
+    do {
+      const page = await this.client.send(
+        new QueryCommand({
+          TableName: this.tableName,
+          IndexName: REMINDER_INDEX_NAME,
+          KeyConditionExpression: "reminderStatus = :pending AND reminderAt <= :now",
+          ExpressionAttributeValues: { ":pending": REMINDER_PENDING, ":now": utcSeconds(now) },
+          Limit: limit - records.length,
+          ExclusiveStartKey: startKey,
+        }),
+      );
+      records.push(...((page.Items ?? []) as TimelineRecord[]));
+      startKey = page.LastEvaluatedKey;
+    } while (startKey && records.length < limit);
+    return records;
+  }
+
+  /**
+   * Takes one reminder out of ReminderIndex so it is handled exactly once. Succeeds only while
+   * it is still PENDING at the reminderAt that was seen, so overlapping runs cannot both send,
+   * and an activity moved since it was listed is left for its new reminder time.
+   *
+   * outcome "SENT" records reminderSentAt; "SKIPPED" (the activity already started) records
+   * reminderSkippedAt instead. Returns the claimed activity, or null if someone else got it first.
+   */
+  async claimReminder(
+    record: Pick<TimelineRecord, "eventId" | "itemId" | "reminderAt">,
+    outcome: "SENT" | "SKIPPED",
+    now: Date,
+  ): Promise<TimelineRecord | null> {
+    const mark = outcome === "SENT" ? "reminderSentAt" : "reminderSkippedAt";
+    try {
+      const result = await this.client.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { eventId: record.eventId, sk: itemSortKey(record.itemId) },
+          UpdateExpression: "SET #mark = :now REMOVE #status",
+          ConditionExpression: "#status = :pending AND #reminderAt = :seen",
+          ExpressionAttributeNames: { "#mark": mark, "#status": "reminderStatus", "#reminderAt": "reminderAt" },
+          ExpressionAttributeValues: { ":now": utcSeconds(now), ":pending": REMINDER_PENDING, ":seen": record.reminderAt },
+          ReturnValues: "ALL_NEW",
+        }),
+      );
+      return result.Attributes as TimelineRecord;
     } catch (error) {
       if (error instanceof ConditionalCheckFailedException) return null;
       throw error;
@@ -322,6 +384,7 @@ function applyChanges(
   }
   if ("reminderAt" in changes && changes.reminderAt !== undefined) {
     delete next.reminderSentAt;
+    delete next.reminderSkippedAt;
     if (changes.reminderAt === null) {
       delete next.reminderAt;
       delete next.reminderStatus;
