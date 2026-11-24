@@ -1016,6 +1016,8 @@ test("event workspace renders loading, empty, retry, and unavailable states inst
   assert.match(render("guests"), /LIVE CONTENT/);
   assert.match(render("coplanners"), /LIVE CONTENT/);
   assert.match(render("tasks"), /not available for this event/);
+  // The timeline is connected to the Timeline API (Feature 13).
+  assert.match(render("timeline"), /LIVE CONTENT/);
   state = { ...state, status: "empty" };
   assert.match(render("coplanners"), /LIVE CONTENT/);
   state = { ...state, status: "ready" };
