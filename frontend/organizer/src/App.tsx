@@ -274,7 +274,7 @@ export default function App() {
           <Route path="guests" element={<Guests onToast={notify} />} />
           <Route path="templates" element={<Templates />} />
           <Route path="tasks" element={<Tasks />} />
-          <Route path="timeline" element={<Timeline />} />
+          <Route path="timeline" element={<Timeline onToast={notify} />} />
           <Route path="documents" element={<Documents />} />
           <Route path="invitations" element={<Invitations />} />
           <Route path="coplanners" element={<CoPlanners />} />

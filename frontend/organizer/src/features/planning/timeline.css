@@ -1,0 +1,95 @@
+/* Timeline page (Feature 13). Builds on the .timeline-* styles in styles/index.css. */
+
+.timeline-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Wider time column for ranges ("3:00 PM – 3:30 PM") and room for edit/delete buttons. */
+.timeline-item.tl-item {
+  grid-template-columns: 118px 24px 1fr auto;
+  gap: 0 4px;
+  padding: 8px 0;
+}
+
+.timeline-item.tl-item:after {
+  left: 133px;
+}
+
+.timeline-item.tl-item .timeline-dot {
+  justify-self: center;
+}
+
+.tl-item .timeline-detail b {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tl-item .timeline-detail span:empty {
+  display: none;
+}
+
+.tl-notes {
+  margin: 5px 0 0;
+  font-size: 9.5px;
+  color: var(--muted);
+  white-space: pre-line;
+  max-width: 460px;
+}
+
+.tl-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+}
+
+.tl-item:hover .tl-actions,
+.tl-actions:focus-within {
+  opacity: 1;
+}
+
+.tl-day {
+  margin: 18px 0 2px;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: var(--purple);
+}
+
+.tl-no-date {
+  border-left: none !important;
+  padding-left: 0 !important;
+  margin-left: 0 !important;
+}
+
+.tl-empty-preview,
+.tl-time-zone,
+.tl-delete-text {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.tl-empty-preview {
+  padding: 18px 0 4px;
+}
+
+.tl-delete-text b {
+  color: var(--ink);
+}
+
+@media (max-width: 640px) {
+  .timeline-item.tl-item {
+    grid-template-columns: 84px 20px 1fr auto;
+  }
+
+  .timeline-item.tl-item:after {
+    left: 97px;
+  }
+
+  .tl-actions {
+    opacity: 1;
+  }
+}
