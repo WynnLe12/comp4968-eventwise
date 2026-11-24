@@ -279,7 +279,7 @@ export default function App() {
           <Route path="invitations" element={<Invitations />} />
           <Route path="coplanners" element={<CoPlanners />} />
           <Route path="alerts" element={<Alerts />} />
-          <Route path="photos" element={<Photos />} />
+          <Route path="photos" element={<Photos onToast={notify} />} />
           <Route path="contracts" element={<Contracts />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

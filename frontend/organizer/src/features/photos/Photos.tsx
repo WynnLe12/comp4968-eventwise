@@ -26,10 +26,10 @@ async function collectPhotos(load: (query: string) => Promise<PhotoPage>): Promi
   return photos.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-export function Photos() {
+export function Photos({ onToast }: { onToast: (message: string) => void }) {
   const { selectedEvent } = useEvents();
   if (selectedEvent?.role === "OWNER") {
-    return <PhotoModeration key={selectedEvent.event_id} eventId={selectedEvent.event_id} />;
+    return <PhotoModeration key={selectedEvent.event_id} eventId={selectedEvent.event_id} onToast={onToast} />;
   }
   return <>
     <PageHeader page="photos" />
@@ -37,7 +37,7 @@ export function Photos() {
   </>;
 }
 
-function PhotoModeration({ eventId }: { eventId: string }) {
+function PhotoModeration({ eventId, onToast }: { eventId: string; onToast: (message: string) => void }) {
   const path = ownerPhotoPath(eventId);
   const load = useCallback(async (_after?: string, signal?: AbortSignal) => {
     const pending = collectPhotos(query => ownerRequest<PhotoPage>(`${path}/pending${query}`, { signal }));
@@ -99,7 +99,7 @@ function PhotoModeration({ eventId }: { eventId: string }) {
       setSelected(current => new Set([...current].filter(value => value !== id)));
       if (page?.items.length === 1 && page.items[0].id === id) setShowSelection(false);
       setPhotoToDelete(undefined);
-      setNotice("Photo deleted.");
+      onToast("Photo deleted.");
       fetchPage();
     } catch (error) {
       setDeleteError(photoError(error));
@@ -134,7 +134,7 @@ function PhotoModeration({ eventId }: { eventId: string }) {
     }
     if (approved) {
       if (approved === page?.items.length) setShowSelection(false);
-      setNotice(approved === 1 ? "Photo approved and visible in the guest gallery." : `${approved} photos approved.`);
+      onToast(approved === 1 ? "Photo approved." : `${approved} photos approved.`);
       fetchPage();
     }
     setApproving(false);
