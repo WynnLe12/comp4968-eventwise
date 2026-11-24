@@ -28,6 +28,7 @@
     "package:events": "npm run build && node scripts/package-events.mjs",
     "package:invitation-authorizer": "npm run build && node scripts/package-invitation-authorizer.mjs",
     "package:vendors": "npm run build && node scripts/package-vendors.mjs",
+    "package:photos": "npm run build && node scripts/package-photos.mjs",
     "package:expenses": "npm run build && node scripts/package-expenses.mjs"
   },
   "devDependencies": {
@@ -47,6 +48,7 @@
     "aws-jwt-verify": "^5.2.1",
     "dotenv": "^18.0.10",
     "mysql": "^2.18.1",
-    "mysql2": "^3.24.6"
+    "mysql2": "^3.24.6",
+    "sharp": "^0.35.5"
   }
 }

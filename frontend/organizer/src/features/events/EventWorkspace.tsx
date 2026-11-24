@@ -91,7 +91,8 @@ export function EventWorkspace({
     page !== "vendors" &&
     page !== "expenses" &&
     page !== "coplanners" &&
-    page !== "documents"
+    page !== "documents" &&
+    page !== "photos"
   )
     return (
       <>
