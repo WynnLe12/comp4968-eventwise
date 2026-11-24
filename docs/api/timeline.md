@@ -4,6 +4,7 @@ Status: proposed contract for team review. This commit adds documentation only; 
 Branch: `feature13-timeline` (based on `dev` at `66c6f63`).
 Scope: event timeline CRUD for organizers, a read-only guest timeline, change notifications and activity reminders.
 User stories: US40 build/edit the timeline, US41 guest view, US42 reminders before activities, US43 notify affected people when it changes.
+Deployment: [timeline-lambda.md](timeline-lambda.md).
 
 The organizer page, the guest page and the notification Lambdas all build against this document. After approval, message the team before changing it, then update this file in a pull request.
 
