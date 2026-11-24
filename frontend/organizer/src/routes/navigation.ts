@@ -52,3 +52,13 @@ export const pageTitles: Record<Page, [string, string]> = {
 };
 
 export const pagePath = (page: Page) => `/app/${page}`;
+
+/**
+ * Public guest pages opened from a shared link or QR code. They render without
+ * signing in, so App skips the organizer session check for them.
+ */
+export function isPublicGuestPage(pathname: string): boolean {
+  return /^\/(gallery|timeline)\/[^/]+\/?$/i.test(pathname);
+}
+
+export const guestTimelinePath = (share: string) => `/timeline/${encodeURIComponent(share)}`;

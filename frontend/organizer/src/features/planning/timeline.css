@@ -93,3 +93,196 @@
     opacity: 1;
   }
 }
+
+/* --- Share dialog --- */
+
+.tl-share {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+}
+
+.tl-share img {
+  width: 148px;
+  height: auto;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.tl-share p {
+  margin: 0 0 10px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.tl-share .tl-share-warning {
+  color: #9b6c17;
+}
+
+.tl-share-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.tl-share-actions a {
+  text-decoration: none;
+}
+
+@media (max-width: 640px) {
+  .tl-share {
+    flex-direction: column;
+    align-items: center;
+  }
+}
+
+/* --- Public guest page (/timeline/:share) --- */
+
+.guest-timeline {
+  width: min(100% - 32px, 680px);
+  margin: 40px auto 56px;
+  color: var(--ink);
+}
+
+.gt-header {
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 8px;
+}
+
+.gt-eyebrow {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--purple);
+}
+
+.gt-header h1 {
+  margin: 0;
+  font-size: clamp(26px, 5vw, 36px);
+  line-height: 1.15;
+}
+
+.gt-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 12px 0 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.gt-meta span,
+.gt-place {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.gt-day h2 {
+  margin: 26px 0 4px;
+  font-size: 15px;
+  color: var(--purple);
+}
+
+.gt-day ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.gt-day li {
+  display: grid;
+  grid-template-columns: minmax(92px, 150px) 1fr;
+  gap: 4px 18px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.gt-day li.gt-next {
+  background: linear-gradient(90deg, #fff0ed, transparent 70%);
+  border-radius: 10px;
+  padding-inline: 12px;
+  margin-inline: -12px;
+}
+
+.gt-day time {
+  font-size: 14px;
+  font-weight: 700;
+  padding-top: 2px;
+}
+
+.gt-day h3 {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  font-size: 17px;
+}
+
+.gt-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--coral);
+  color: #fff;
+}
+
+.gt-place {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.gt-notes {
+  margin: 8px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+.gt-message {
+  margin: 48px 0;
+  text-align: center;
+  color: var(--muted);
+}
+
+.gt-message > svg {
+  display: block;
+  margin: 0 auto 10px;
+  width: 28px;
+  height: 28px;
+  color: var(--purple);
+}
+
+.gt-message h1 {
+  color: var(--ink);
+  font-size: 24px;
+}
+
+.gt-stale {
+  font-size: 13px;
+  color: #9b6c17;
+  background: #fff8e8;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.gt-footer {
+  margin-top: 28px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+@media (max-width: 520px) {
+  .gt-day li {
+    grid-template-columns: 1fr;
+  }
+}

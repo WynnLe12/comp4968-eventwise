@@ -90,3 +90,57 @@ export function updateTimelineItem(
 export async function deleteTimelineItem(eventId: string, itemId: string, notify: boolean): Promise<void> {
   await request<void>(`${base(eventId)}/${encodeURIComponent(itemId)}${notify ? "?notify=true" : ""}`, { method: "DELETE" });
 }
+
+// --- Guest sharing ------------------------------------------------------------------
+
+export interface ShareLink {
+  share: string;
+  url: string;
+}
+
+/** The event's guest timeline link (members only). */
+export function getTimelineShareLink(eventId: string, signal?: AbortSignal): Promise<ShareLink> {
+  return request(`${base(eventId)}/share`, { signal });
+}
+
+export interface GuestTimelineItem {
+  itemId: string;
+  title: string;
+  place: string | null;
+  notes: string | null;
+  startsAt: string;
+  endsAt: string | null;
+}
+
+export interface GuestTimeline {
+  event: { name: string; eventDate: string | null; venue: string | null };
+  items: GuestTimelineItem[];
+}
+
+export class GuestTimelineError extends Error {
+  constructor(message: string, readonly notFound: boolean) {
+    super(message);
+    this.name = "GuestTimelineError";
+  }
+}
+
+/** Public: no sign-in. The share token in the URL is the only credential, so never send a referrer. */
+export async function fetchGuestTimeline(share: string, signal?: AbortSignal): Promise<GuestTimeline> {
+  let response: Response;
+  try {
+    response = await fetch(apiUrl(`/guest-timeline/${encodeURIComponent(share)}`), {
+      signal, referrerPolicy: "no-referrer", cache: "no-store",
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new GuestTimelineError("We couldn't reach the server. Check your connection and try again.", false);
+  }
+  if (response.status === 404) {
+    throw new GuestTimelineError("This timeline link isn't valid. Ask the hosts for a new one.", true);
+  }
+  const body = await response.json().catch(() => null);
+  if (!response.ok || !body?.event || !Array.isArray(body.items)) {
+    throw new GuestTimelineError("The timeline is temporarily unavailable. Please try again soon.", false);
+  }
+  return body as GuestTimeline;
+}

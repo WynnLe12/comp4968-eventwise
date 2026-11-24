@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import QRCode from "qrcode";
 import { Badge, Button, Card, Field, Icon, Modal, SelectField, TextAreaField } from "../../components/ui";
 import { EmptyState, ErrorState, LoadingState, PageHeader } from "../../components/page";
 import { useEvents } from "../events/EventsContext";
 import { EventSessionError, type OrganizerEvent } from "../events/services/eventApi";
+import { guestTimelinePath } from "../../routes/navigation";
 import {
   TimelineApiError,
   createTimelineItem,
   deleteTimelineItem,
+  getTimelineShareLink,
   listTimeline,
   updateTimelineItem,
 } from "./timelineApi";
@@ -60,6 +63,7 @@ function TimelineBoard({ event, onToast }: { event: OrganizerEvent; onToast: Toa
   const [guestView, setGuestView] = useState(false);
   const [editing, setEditing] = useState<TimelineItem | "new" | null>(null);
   const [deleting, setDeleting] = useState<TimelineItem | null>(null);
+  const [sharing, setSharing] = useState(false);
   const eventId = event.event_id;
 
   const reload = useCallback(() => setReloadCount((count) => count + 1), []);
@@ -109,6 +113,7 @@ function TimelineBoard({ event, onToast }: { event: OrganizerEvent; onToast: Toa
             <Button variant="secondary" onClick={() => setGuestView(!guestView)} icon="eye">
               {guestView ? "Planner view" : "Guest view"}
             </Button>
+            <Button variant="secondary" onClick={() => setSharing(true)} icon="link">Share with guests</Button>
             {!guestView && <Button icon="plus" onClick={() => setEditing("new")}>Add activity</Button>}
           </>
         ) : undefined
@@ -220,6 +225,17 @@ function TimelineBoard({ event, onToast }: { event: OrganizerEvent; onToast: Toa
             }
             return false;
           }}
+        />
+      )}
+
+      {sharing && (
+        <ShareDialog
+          eventId={eventId}
+          eventName={event.name}
+          hasGuestItems={(items ?? []).some((item) => item.visibility === "GUESTS")}
+          onClose={() => setSharing(false)}
+          onToast={onToast}
+          onSessionExpired={expireSession}
         />
       )}
 
@@ -469,6 +485,83 @@ function DeleteActivityDialog({
           </span>
         </div>
       </label>
+    </Modal>
+  );
+}
+
+// --- Share with guests ----------------------------------------------------------------
+
+function ShareDialog({
+  eventId,
+  eventName,
+  hasGuestItems,
+  onClose,
+  onToast,
+  onSessionExpired,
+}: {
+  eventId: string;
+  eventName: string;
+  hasGuestItems: boolean;
+  onClose: () => void;
+  onToast: Toast;
+  onSessionExpired: () => void;
+}) {
+  const [link, setLink] = useState<{ url: string; qr: string } | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    getTimelineShareLink(eventId, controller.signal)
+      .then(async ({ share }) => {
+        // Built from this page's origin (like the photo gallery link), so it works locally and on Amplify.
+        const url = new URL(guestTimelinePath(share), window.location.origin).href;
+        const qr = await QRCode.toDataURL(url, { width: 320, margin: 4 });
+        if (!controller.signal.aborted) setLink({ url, qr });
+      })
+      .catch((caught: unknown) => {
+        if (controller.signal.aborted) return;
+        if (caught instanceof EventSessionError) return onSessionExpired();
+        setError(caught instanceof Error ? caught.message : "We couldn't create the guest link.");
+      });
+    return () => controller.abort();
+  }, [eventId, onSessionExpired]);
+
+  async function copy() {
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link.url);
+      onToast("Guest link copied.");
+    } catch {
+      onToast("Couldn't copy automatically. Select the link and copy it.", "error");
+    }
+  }
+
+  return (
+    <Modal title="Share the schedule with guests" onClose={onClose} footer={<Button onClick={onClose}>Done</Button>}>
+      {error && <div className="form-error-banner" role="alert"><Icon name="alert" /> {error}</div>}
+      {!link && !error && <p className="tl-time-zone" role="status">Creating the guest link…</p>}
+      {link && (
+        <div className="tl-share">
+          <img src={link.qr} alt={`QR code for the ${eventName} schedule`} />
+          <div>
+            <p>
+              Anyone with this link can see the activities marked <b>Guests and planning team</b>, without signing in.
+              Team-only activities stay private.
+            </p>
+            {!hasGuestItems && <p className="tl-share-warning">No activities are visible to guests yet.</p>}
+            <label className="field">
+              <span>Guest link</span>
+              <input readOnly value={link.url} onFocus={(e) => e.currentTarget.select()} />
+            </label>
+            <div className="tl-share-actions">
+              <Button icon="link" onClick={() => void copy()}>Copy link</Button>
+              <a className="btn btn-secondary" href={link.url} target="_blank" rel="noopener noreferrer">
+                <Icon name="eye" size={16} /> Open guest page
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }

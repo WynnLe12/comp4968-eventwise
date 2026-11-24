@@ -81,6 +81,19 @@ test("items group by Vancouver day, so a late-night activity stays on its local 
   assert.equal(groups[0].label, "Saturday, December 5, 2026");
 });
 
+test("grouping and 'up next' don't depend on the order items arrive in", () => {
+  const shuffled = [
+    item({ itemId: "late", startsAt: utc("2026-12-05", "20:00") }),
+    item({ itemId: "other-day", startsAt: utc("2026-12-04", "18:00") }),
+    item({ itemId: "early", startsAt: utc("2026-12-05", "15:00") }),
+  ];
+  assert.deepEqual(t.groupByDay(shuffled).map((g) => [g.date, g.items.map((i) => i.itemId)]), [
+    ["2026-12-04", ["other-day"]],
+    ["2026-12-05", ["early", "late"]],
+  ]);
+  assert.equal(t.nextUpItemId(shuffled, new Date(utc("2026-12-05", "12:00"))), "early");
+});
+
 test("the next activity is the first one that hasn't started", () => {
   const items = [item({ itemId: "a", startsAt: "2026-12-05T22:00:00Z" }), item({ itemId: "b", startsAt: "2026-12-05T23:00:00Z" })];
   assert.equal(t.nextUpItemId(items, new Date("2026-12-05T22:30:00Z")), "b");
@@ -140,4 +153,17 @@ test("save messages explain what happened to the update emails", () => {
   assert.equal(t.savedMessage("Deleted", { status: "QUEUED", recipients: 14 }), "Deleted. Emailing 14 people about the change.");
   assert.match(t.savedMessage("Saved", { status: "FAILED", recipients: 0 }), /couldn't be sent/);
   assert.match(t.savedMessage("Saved", { status: "NO_CHANGE", recipients: 0 }), /no email/);
+});
+
+const nav = loadModule("../src/routes/navigation.ts");
+
+test("guest gallery and guest timeline links skip the organizer session check; app pages don't", () => {
+  for (const path of ["/gallery/42-abc", "/timeline/42-abc_-", "/timeline/42-abc/", "/Timeline/42-abc"]) {
+    assert.equal(nav.isPublicGuestPage(path), true, path);
+  }
+  for (const path of ["/app/timeline", "/timeline", "/timeline/", "/timeline/42/extra", "/login", "/"]) {
+    assert.equal(nav.isPublicGuestPage(path), false, path);
+  }
+  assert.equal(nav.guestTimelinePath("42-a_b"), "/timeline/42-a_b");
+  assert.equal(nav.guestTimelinePath("x/y"), "/timeline/x%2Fy");
 });

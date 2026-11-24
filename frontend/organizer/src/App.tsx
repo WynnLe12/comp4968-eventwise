@@ -9,7 +9,7 @@ import { PublicApp } from "./features/auth/PublicPage";
 import { EventsProvider, useEvents } from "./features/events/EventsContext";
 import { EventWorkspace } from "./features/events/EventWorkspace";
 import { AcceptInvitation, invitationAcceptancePath } from "./features/collaboration/AcceptInvitation";
-import { pagePath } from "./routes/navigation";
+import { isPublicGuestPage, pagePath } from "./routes/navigation";
 import type { Page, PublicPage } from "./types";
 
 type ToastTone = "success" | "error";
@@ -32,6 +32,7 @@ const Documents = named(() => import("./features/documents/Documents"), "Documen
 const CoPlanners = named(() => import("./features/collaboration/CoPlanners"), "CoPlanners");
 const Alerts = named(() => import("./features/alerts/Alerts"), "Alerts");
 const GuestGallery = named(() => import("./features/photos/GuestGallery"), "GuestGallery");
+const GuestTimeline = named(() => import("./features/planning/GuestTimeline"), "GuestTimeline");
 const Photos = named(() => import("./features/photos/Photos"), "Photos");
 
 const publicPaths: Record<PublicPage, string> = {
@@ -119,7 +120,8 @@ export default function App() {
   const toastTimer = useRef<number | undefined>(undefined);
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const guestGallery = /^\/gallery\/[^/]+\/?$/i.test(pathname);
+  // Guest gallery and guest timeline links work without signing in.
+  const publicGuestPage = isPublicGuestPage(pathname);
   const go = (page: Page) => navigate(pagePath(page));
 
   const onEventSessionExpired = useCallback(async () => {
@@ -171,7 +173,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (guestGallery) return;
+    if (publicGuestPage) return;
     void refreshSession();
     const refresh = () => { void refreshSession(); };
     const unsubscribe = Hub.listen("auth", ({ payload }) => {
@@ -192,7 +194,7 @@ export default function App() {
       window.removeEventListener("focus", refresh);
       window.clearInterval(timer);
     };
-  }, [guestGallery, refreshSession]);
+  }, [publicGuestPage, refreshSession]);
 
   useEffect(() => {
     if (!authenticated) setModal(null);
@@ -236,7 +238,7 @@ export default function App() {
     }
   };
 
-  if ((checkingSession || signingOut) && !guestGallery && pathname !== invitationAcceptancePath) {
+  if ((checkingSession || signingOut) && !publicGuestPage && pathname !== invitationAcceptancePath) {
     return <LoadingState label={signingOut ? "Signing out?" : "Checking your session?"} />;
   }
 
@@ -245,6 +247,9 @@ export default function App() {
       <Routes>
         <Route path="/gallery/:share" element={
           <Suspense fallback={<LoadingState label="Loading gallery…" />}><GuestGallery /></Suspense>
+        } />
+        <Route path="/timeline/:share" element={
+          <Suspense fallback={<LoadingState label="Loading the schedule…" />}><GuestTimeline /></Suspense>
         } />
         <Route path={invitationAcceptancePath} element={<AcceptInvitation
           authenticated={authenticated} checkingSession={checkingSession || signingOut}

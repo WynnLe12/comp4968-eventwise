@@ -160,10 +160,12 @@ export function formatRange(item: Pick<TimelineItem, "startsAt" | "endsAt">): st
 
 export interface DayGroup<T> { date: string; label: string; items: T[] }
 
-/** Items (already in time order from the API) grouped by their Vancouver calendar day. */
+/** Items grouped by their Vancouver calendar day, in time order whatever order they arrive in. */
 export function groupByDay<T extends Pick<TimelineItem, "startsAt">>(items: T[]): DayGroup<T>[] {
   const groups: DayGroup<T>[] = [];
-  for (const item of items) {
+  // Stable sort: equal start times keep the API's tie order (title, then ID).
+  const ordered = [...items].sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
+  for (const item of ordered) {
     const { date } = instantToLocal(item.startsAt);
     let group = groups.at(-1);
     if (!group || group.date !== date) {
@@ -175,9 +177,14 @@ export function groupByDay<T extends Pick<TimelineItem, "startsAt">>(items: T[])
   return groups;
 }
 
-/** The first activity that has not started yet, for the highlighted dot. */
+/** The soonest activity that has not started yet, for the highlighted dot. Order-independent. */
 export function nextUpItemId(items: Pick<TimelineItem, "itemId" | "startsAt">[], now: Date): string | null {
-  return items.find((item) => Date.parse(item.startsAt) >= now.getTime())?.itemId ?? null;
+  let next: { itemId: string; at: number } | null = null;
+  for (const item of items) {
+    const at = Date.parse(item.startsAt);
+    if (at >= now.getTime() && (!next || at < next.at)) next = { itemId: item.itemId, at };
+  }
+  return next?.itemId ?? null;
 }
 
 export function reminderLabel(minutes: ReminderMinutes): string {
