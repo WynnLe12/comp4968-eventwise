@@ -24,6 +24,7 @@
     "ddb:down": "docker compose -f ../docker-compose.dynamodb.yml down",
     "ddb:reset": "docker compose -f ../docker-compose.dynamodb.yml down -v",
     "ddb:create-table": "tsx guest-service/scripts/createLocalTable.ts",
+    "ddb:create-timeline-table": "tsx timeline-service/scripts/createLocalTable.ts",
     "package:templates": "npm run build && node scripts/package-templates.mjs",
     "package:events": "npm run build && node scripts/package-events.mjs",
     "package:invitation-authorizer": "npm run build && node scripts/package-invitation-authorizer.mjs",
