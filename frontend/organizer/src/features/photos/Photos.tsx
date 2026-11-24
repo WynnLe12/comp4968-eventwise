@@ -71,12 +71,12 @@ function PhotoModeration({ eventId, onToast }: { eventId: string; onToast: (mess
   }, [notice]);
 
   useEffect(() => {
-    if (busy || actionError || photoToDelete) return;
+    if (busy || photoToDelete) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") fetchPage();
-    }, 15_000);
+    }, 5_000);
     return () => window.clearInterval(timer);
-  }, [busy, actionError, photoToDelete, fetchPage]);
+  }, [busy, photoToDelete, fetchPage]);
 
   function openDeleteDialog(id: string) {
     setDeleteError("");

@@ -13,7 +13,7 @@ function GuestPhotos({ share }: { share: string }) {
   const path = guestPhotoPath(share);
   const load = useCallback((after?: string, signal?: AbortSignal) =>
     photoRequest<PhotoPage>(`${path}${photoPageQuery(after)}`, { signal }), [path]);
-  const { page, error, loading, fetchPage } = usePhotoPages(load);
+  const { page, error, loading, fetchPage } = usePhotoPages(load, 10_000);
   const [file, setFile] = useState<File>();
   const [previewUrl, setPreviewUrl] = useState<string>();
   const [uploading, setUploading] = useState(false);
@@ -90,7 +90,7 @@ function GuestPhotos({ share }: { share: string }) {
       <div className="gallery-head">
         <h2>Approved photos</h2>
       </div>
-      {!loading && !page.items.length && !page.next && <p>There are no approved photos yet.</p>}
+      {!page.items.length && !page.next && <p>There are no approved photos yet.</p>}
       <div className="photo-grid">
         {page.items.map((photo, index) => <figure className="gallery-photo" key={photo.id}>
           <img src={photo.thumbnailUrl} referrerPolicy="no-referrer" alt={`Event photo ${index + 1}`} loading="lazy" />
@@ -101,6 +101,6 @@ function GuestPhotos({ share }: { share: string }) {
       </div>
       {page.next && <Button variant="secondary" disabled={loading} onClick={() => fetchPage(page.next)}>Load more</Button>}
     </>}
-    {loading && <p role="status">Loading photos…</p>}
+    {loading && !page && <p role="status">Loading photos…</p>}
   </main>;
 }
