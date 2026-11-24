@@ -4641,16 +4641,35 @@ h3,
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
+  align-items: stretch;
   gap: 6px;
 }
 
+.moderation-photo figcaption .btn {
+  flex: 1;
+}
+
 .moderation-photo .moderation-delete {
-  background: #fff;
-  color: #a72d42;
+  background: #ffffff38;
+  color: #fff;
 }
 
 .moderation-photo .moderation-delete:hover:not(:disabled) {
-  background: #fff0f2;
+  background: #ffffff60;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .moderation-photo figcaption {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 160ms ease;
+  }
+
+  .moderation-photo:hover figcaption,
+  .moderation-photo:focus-within figcaption {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .moderation-select,

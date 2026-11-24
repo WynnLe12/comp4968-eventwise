@@ -52,6 +52,7 @@ function PhotoModeration({ eventId }: { eventId: string }) {
   }, [path]);
   const { page, loading, error, fetchPage } = usePhotoPages(load);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [showSelection, setShowSelection] = useState(false);
   const [notice, setNotice] = useState("");
   const [actionError, setActionError] = useState("");
   const [approving, setApproving] = useState(false);
@@ -90,6 +91,7 @@ function PhotoModeration({ eventId }: { eventId: string }) {
     try {
       await ownerRequest<void>(`${path}/photos/${id}`, { method: "DELETE" });
       setSelected(current => new Set([...current].filter(value => value !== id)));
+      if (page?.items.length === 1 && page.items[0].id === id) setShowSelection(false);
       setPhotoToDelete(undefined);
       setNotice("Photo deleted.");
       fetchPage();
@@ -125,6 +127,7 @@ function PhotoModeration({ eventId }: { eventId: string }) {
       }
     }
     if (approved) {
+      if (approved === page?.items.length) setShowSelection(false);
       setNotice(approved === 1 ? "Photo approved and visible in the guest gallery." : `${approved} photos approved.`);
       fetchPage();
     }
@@ -191,9 +194,10 @@ function PhotoModeration({ eventId }: { eventId: string }) {
         {page && <p>{page.items.length === 1 ? "1 guest upload needs your review" : `${page.items.length} guest uploads need your review`}</p>}
       </div>
       <div className="gallery-controls">
-        {Boolean(page?.items.length) && <Button variant="ghost" disabled={busy} onClick={() => {
+        <Button variant="ghost" disabled={busy} onClick={() => {
+          setShowSelection(!allSelected);
           setSelected(new Set(allSelected ? [] : page?.items.map(photo => photo.id)));
-        }}>{allSelected ? "Deselect all" : "Select all"}</Button>}
+        }}>{allSelected ? "Deselect all" : "Select all"}</Button>
         {!!selectedIds.length && <Button disabled={busy} onClick={() => void approve(selectedIds)}>
           {approving ? "Approving…" : `Approve selected (${selectedIds.length})`}
         </Button>}
@@ -206,14 +210,14 @@ function PhotoModeration({ eventId }: { eventId: string }) {
     <div className="photo-grid">
       {page?.items.map((photo, index) => <figure className="gallery-photo moderation-photo" key={photo.id}>
         <img src={photo.thumbnailUrl} referrerPolicy="no-referrer" alt={`Pending photo ${index + 1}`} loading="lazy" />
-        <label className="moderation-select">
+        {showSelection && <label className="moderation-select">
           <input type="checkbox" aria-label={`Select pending photo ${index + 1}`}
             checked={selected.has(photo.id)} disabled={busy} onChange={() => toggle(photo.id)} />
-        </label>
+        </label>}
         <figcaption>
+          <Button variant="secondary" disabled={busy} onClick={() => void approve([photo.id])}>Approve</Button>
           <button type="button" className="icon-btn moderation-delete" aria-label={`Delete pending photo ${index + 1}`}
             disabled={busy} onClick={() => openDeleteDialog(photo.id)}><Icon name="trash" size={18} /></button>
-          <Button disabled={busy} onClick={() => void approve([photo.id])}>Approve</Button>
         </figcaption>
       </figure>)}
     </div>
