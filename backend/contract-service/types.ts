@@ -54,3 +54,12 @@ export interface DraftReader {
   list(eventId: string, sub: string, query: DraftQuery): Promise<DraftPage>;
   get(eventId: string, draftId: string, sub: string): Promise<Draft | null>;
 }
+
+export interface DraftCreation {
+  draftId: string;
+  created: boolean;
+}
+
+export interface DraftCreator {
+  create(eventId: string, documentId: string, sub: string): Promise<DraftCreation>;
+}
