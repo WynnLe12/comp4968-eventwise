@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ApiError } from "../../expense-service/errors";
-import { prepareNewExpense } from "../../contract-service/services/confirmationValidation";
+import { prepareExistingExpense, prepareNewExpense } from "../../contract-service/services/confirmationValidation";
 import type { DraftFields } from "../../contract-service/types";
 
 const reviewed: DraftFields = {
@@ -43,4 +43,14 @@ test("new-expense confirmation never treats an update selection as a request for
   assert.throws(() => prepareNewExpense({ ...reviewed, saveAction: "UPDATE_EXPENSE", targetExpenseId: "10" }),
     error => error instanceof ApiError && error.code === "SAVE_ACTION_UNAVAILABLE");
   assert.throws(() => prepareNewExpense({ ...reviewed, targetExpenseId: "10" }), invalid("targetExpenseId"));
+});
+
+test("existing-expense confirmation requires an explicit update action and exact target ID", () => {
+  const update = { ...reviewed, saveAction: "UPDATE_EXPENSE" as const, targetExpenseId: "9007199254740995" };
+  assert.deepEqual(prepareExistingExpense(update), prepareNewExpense(reviewed));
+  for (const targetExpenseId of [null, "0", "01"]) {
+    assert.throws(() => prepareExistingExpense({ ...update, targetExpenseId }), invalid("targetExpenseId"));
+  }
+  assert.throws(() => prepareExistingExpense(reviewed), invalid("saveAction"));
+  assert.throws(() => prepareExistingExpense({ ...update, totalAmount: null }), invalid("totalAmount"));
 });

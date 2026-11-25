@@ -1,5 +1,6 @@
-import { invalid } from "../../expense-service/errors";
-import { parseId, validDate } from "../../expense-service/services/validation";
+import { ApiError, invalid } from "../../expense-service/errors";
+import { parseExpenseBody, parseId, validDate } from "../../expense-service/services/validation";
+import type { ExpenseInput } from "../../expense-service/types";
 import { DRAFT_STATUSES, SAVE_ACTIONS, type DraftPatch, type DraftQuery } from "../types";
 
 const editable = [
@@ -26,6 +27,27 @@ export function parseCreateDraft(value: unknown): { documentId: string } {
 export function parseDraftVersion(value: unknown): { version: string } {
   const body = object(value, ["version"]);
   return { version: parseId(body.version, "version") };
+}
+
+export function parseDraftConfirmation(value: unknown): { version: string; expectedExpense?: ExpenseInput } {
+  const body = object(value, ["version", "expectedExpense"]);
+  const result: { version: string; expectedExpense?: ExpenseInput } = { version: parseId(body.version, "version") };
+  if (Object.hasOwn(body, "expectedExpense")) {
+    const snapshot = body.expectedExpense;
+    if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) ||
+        ["categoryId", "vendorId", "description", "committedAmount", "dueDate"].some(key => !Object.hasOwn(snapshot, key))) {
+      invalid("expectedExpense", "Reload and review the selected expense before confirming.");
+    }
+    try {
+      result.expectedExpense = parseExpenseBody(snapshot, false) as ExpenseInput;
+      // Keep the exact displayed description when comparing a legacy stored value.
+      result.expectedExpense.description = (snapshot as ExpenseInput).description;
+    } catch (error) {
+      if (error instanceof ApiError) invalid("expectedExpense", "Reload and review the selected expense before confirming.");
+      throw error;
+    }
+  }
+  return result;
 }
 
 function text(value: unknown, field: string, max: number): string | null {

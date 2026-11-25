@@ -1,5 +1,5 @@
 import { ApiError, invalid } from "../../expense-service/errors";
-import { cents, parseExpenseBody } from "../../expense-service/services/validation";
+import { cents, parseExpenseBody, parseId } from "../../expense-service/services/validation";
 import type { ExpenseInput } from "../../expense-service/types";
 import type { DraftFields } from "../types";
 
@@ -9,6 +9,16 @@ export function prepareNewExpense(draft: DraftFields): ExpenseInput {
     throw new ApiError(409, "SAVE_ACTION_UNAVAILABLE", "Updating an existing expense is not available yet.");
   }
   if (draft.targetExpenseId !== null) invalid("targetExpenseId", "Clear the existing expense selection before creating a new expense.");
+  return prepareExpenseValues(draft);
+}
+
+export function prepareExistingExpense(draft: DraftFields): ExpenseInput {
+  if (draft.saveAction !== "UPDATE_EXPENSE") invalid("saveAction", "Choose Update existing expense.");
+  parseId(draft.targetExpenseId, "targetExpenseId");
+  return prepareExpenseValues(draft);
+}
+
+function prepareExpenseValues(draft: DraftFields): ExpenseInput {
   if (draft.currencyCode !== "USD") invalid("currencyCode", "Confirm the amount in USD before saving to expenses.");
   if (draft.vendorId === null && draft.vendorName !== null) {
     invalid("vendorId", "Choose an existing vendor, or clear the vendor name to save without a vendor.");

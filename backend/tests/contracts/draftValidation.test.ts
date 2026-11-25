@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ApiError } from "../../expense-service/errors";
-import { parseCreateDraft, parseDraftPatch, parseDraftQuery, parseDraftVersion } from "../../contract-service/services/draftValidation";
+import { parseCreateDraft, parseDraftConfirmation, parseDraftPatch, parseDraftQuery, parseDraftVersion } from "../../contract-service/services/draftValidation";
 
 function invalid(field?: string) {
   return (error: unknown) => error instanceof ApiError && error.status === 422 &&
@@ -75,4 +75,18 @@ test("draft listings use bounded pagination and reject repeated or unsupported f
   for (const query of ["limit=0", "limit=101", "offset=-1", "offset=1000001", "offset=1e3", "status=ready", "limit=1&limit=2", "status=DRAFT&status=DRAFT", "eventId=2"]) {
     assert.throws(() => parseDraftQuery(new URLSearchParams(query)), invalid());
   }
+});
+
+test("confirmation requests preserve exact reviewed expense snapshots and reject incomplete or forged baselines", () => {
+  const expectedExpense = { categoryId: "9007199254740993", vendorId: "4",
+    description: "Existing expense", committedAmount: "500.10", dueDate: null };
+  assert.deepEqual(parseDraftConfirmation({ version: "1" }), { version: "1" });
+  assert.deepEqual(parseDraftConfirmation({ version: "2", expectedExpense }), { version: "2", expectedExpense });
+  for (const snapshot of [null, [], {}, { ...expectedExpense, committedAmount: 500.1 },
+    { ...expectedExpense, eventId: "13" }, { ...expectedExpense, paidTotal: "0.00" },
+    { categoryId: "1", description: "Missing optional-looking keys", committedAmount: "1.00" }]) {
+    assert.throws(() => parseDraftConfirmation({ version: "1", expectedExpense: snapshot }), invalid("expectedExpense"));
+  }
+  assert.throws(() => parseDraftConfirmation({ version: "1", status: "CONFIRMED" }), invalid("status"));
+  assert.throws(() => parseDraftConfirmation({ version: 1 }), invalid("version"));
 });
