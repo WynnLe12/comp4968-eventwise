@@ -1,74 +1,463 @@
-import { useState } from "react";
-import { Badge, Button, Card, Icon } from "../../components/ui";
-import { PageHeader } from "../../components/page";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { EmptyState, ErrorState, LoadingState, PageHeader } from "../../components/page";
+import { Badge, Button, Card, Icon, Modal } from "../../components/ui";
+import { useResource } from "../../hooks/useResource";
+import {
+  createTask,
+  deleteTask,
+  generateTasksFromTemplate,
+  listTasks,
+  setTaskCompleted,
+  TaskServiceError,
+  TaskValidationError,
+  updateTask,
+} from "../../services/taskService";
+import type { Task, TaskList } from "../../types";
+import { formatCalendarDate } from "../../utils/dateFormat";
+import { listEventMembers, type EventMember } from "../collaboration/collaborationApi";
+import { useEvents } from "../events/EventsContext";
+import { TaskForm, type AssigneeOption, type TaskFormSubmitError } from "./TaskForm";
+import {
+  changedFields,
+  filterTasks,
+  initials,
+  inputOf,
+  isDueThisWeek,
+  isOverdue,
+  localToday,
+  progressOf,
+  replaceTask,
+  type AssigneeFilter,
+  type TaskDraft,
+  type TaskTab,
+} from "./taskRules";
+import "./tasks.css";
 
-const tasks = [
-  { title: "Book ceremony musicians", tag: "Vendors", due: "Jun 02", owner: "EC" },
-  { title: "Finalize venue contract", tag: "Venue", due: "Completed", owner: "MB" },
-  { title: "Send invitation reminder", tag: "Guests", due: "Jun 05", owner: "MB" },
-  { title: "Confirm floral mockup", tag: "Decor", due: "Jun 08", owner: "EC" },
-  { title: "Create wedding website", tag: "Invitations", due: "Completed", owner: "MB" },
-  { title: "Choose signature cocktails", tag: "Catering", due: "Jun 12", owner: "MB" },
+type ToastTone = "success" | "error";
+type Toast = (message: string, tone?: ToastTone) => void;
+
+const TASK_FORM_ID = "task-form";
+const TABS: { id: TaskTab; label: string }[] = [
+  { id: "all", label: "All tasks" },
+  { id: "open", label: "To do" },
+  { id: "done", label: "Completed" },
 ];
 
-export function Tasks() {
-  const [done, setDone] = useState<number[]>([1, 4]);
-  const toggle = (i: number) =>
-    setDone(done.includes(i) ? done.filter((x) => x !== i) : [...done, i]);
+function errorMessage(reason: unknown, fallback: string) {
+  return reason instanceof Error && reason.message ? reason.message : fallback;
+}
+
+const isNotFound = (reason: unknown) => reason instanceof TaskServiceError && reason.status === 404;
+
+function memberLabel(m: EventMember): string {
+  const name = m.displayName ?? (m.role === "OWNER" ? "Event owner" : "Co-planner");
+  return m.is_self ? `${name} (you)` : name;
+}
+
+function momentum(open: number, dueThisWeek: number, overdue: number): string {
+  if (open === 0) return "Everything is done. Nice work.";
+  const parts = [];
+  if (overdue) parts.push(`${overdue} overdue`);
+  parts.push(dueThisWeek === 1 ? "1 task due this week" : `${dueThisWeek} tasks due this week`);
+  return `${parts.join(" · ")}.`;
+}
+
+/** Edit / Complete or Reopen / Delete. Closes on Escape and outside clicks. */
+function TaskMenu({
+  task, canDelete, onEdit, onToggle, onDelete,
+}: {
+  task: Task;
+  canDelete: boolean;
+  onEdit: () => void;
+  onToggle: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: MouseEvent) => {
+      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", outside);
+    wrapRef.current?.querySelector<HTMLButtonElement>("[role=menuitem]")?.focus();
+    return () => document.removeEventListener("mousedown", outside);
+  }, [open]);
+
+  const choose = (action: () => void) => () => {
+    setOpen(false);
+    action();
+  };
+
+  return (
+    <div
+      className="task-menu-wrap"
+      ref={wrapRef}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && open) {
+          event.stopPropagation();
+          setOpen(false);
+          triggerRef.current?.focus();
+        }
+      }}
+    >
+      <button
+        ref={triggerRef}
+        className={`icon-btn${open ? " open" : ""}`}
+        aria-label={`More options for ${task.title}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Icon name="more" />
+      </button>
+      {open && (
+        <div className="task-menu" role="menu">
+          <button role="menuitem" onClick={choose(onEdit)}><Icon name="edit" size={15} /> Edit</button>
+          <button role="menuitem" onClick={choose(onToggle)}>
+            <Icon name="check" size={15} /> {task.isCompleted ? "Reopen" : "Mark complete"}
+          </button>
+          {canDelete && (
+            <button role="menuitem" className="danger" onClick={choose(onDelete)}>
+              <Icon name="trash" size={15} /> Delete
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function Tasks({ onToast = () => {} }: { onToast?: Toast }) {
+  const { selectedEvent, userId } = useEvents();
+  // Remount per account and event so no state leaks from one event to the next.
+  return <EventTasks key={JSON.stringify([userId, selectedEvent?.event_id ?? null])} onToast={onToast} />;
+}
+
+function EventTasks({ onToast }: { onToast: Toast }) {
+  const { selectedEvent, userId, status: eventsStatus } = useEvents();
+  const eventId = selectedEvent?.event_id ?? null;
+  const isOwner = selectedEvent?.role === "OWNER";
+  const hasTemplate = Boolean(selectedEvent?.template_id);
+
+  const loadTasks = useCallback(
+    () => (eventId ? listTasks(eventId) : Promise.resolve<TaskList>({ tasks: [], progress: progressOf([]) })),
+    [eventId],
+  );
+  const { data, loading, error, reload, update } = useResource(loadTasks);
+  const tasks = useMemo(() => data?.tasks ?? [], [data]);
+
+  // The assignee list and filter. If it fails, tasks still work, just without names to pick.
+  const loadMembers = useCallback(
+    () => (eventId && userId ? listEventMembers(eventId, userId) : Promise.resolve<EventMember[]>([])),
+    [eventId, userId],
+  );
+  const { data: members } = useResource(loadMembers);
+  const assignees: AssigneeOption[] = useMemo(
+    () => (members ?? []).map((m) => ({ memberId: m.member_id, label: memberLabel(m) })),
+    [members],
+  );
+  const myMemberId = members?.find((m) => m.is_self)?.member_id ?? null;
+
+  const [tab, setTab] = useState<TaskTab>("all");
+  const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>("all");
+  /** undefined = closed, null = adding, Task = editing. */
+  const [editing, setEditing] = useState<Task | null | undefined>(undefined);
+  const [deleting, setDeleting] = useState<Task | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [toggling, setToggling] = useState<ReadonlySet<string>>(new Set());
+  const [generating, setGenerating] = useState(false);
+
+  const today = localToday();
+  const progress = useMemo(() => progressOf(tasks), [tasks]);
+  const dueThisWeek = useMemo(() => tasks.filter((t) => isDueThisWeek(t, today)).length, [tasks, today]);
+  const overdue = useMemo(() => tasks.filter((t) => isOverdue(t, today)).length, [tasks, today]);
+  const visible = useMemo(
+    () => filterTasks(tasks, tab, assigneeFilter, myMemberId),
+    [tasks, tab, assigneeFilter, myMemberId],
+  );
+
+  // ---- List updates ------------------------------------------------------
+
+  const setTasks = (change: (current: Task[]) => Task[]) =>
+    update((current) => {
+      const next = change(current.tasks);
+      return { tasks: next, progress: progressOf(next) };
+    });
+  const put = (task: Task) => setTasks((current) => replaceTask(current, task));
+  const drop = (taskId: string) => setTasks((current) => current.filter((t) => t.id !== taskId));
+
+  // ---- Actions -----------------------------------------------------------
+
+  const toggle = async (task: Task) => {
+    if (!eventId || toggling.has(task.id)) return;
+    const done = !task.isCompleted;
+    setToggling((s) => new Set(s).add(task.id));
+    put({ ...task, isCompleted: done, completedAt: done ? task.completedAt : null }); // optimistic
+    try {
+      put(await setTaskCompleted(eventId, task.id, done));
+    } catch (reason) {
+      if (isNotFound(reason)) drop(task.id);
+      else put(task); // put the checkbox back
+      onToast(errorMessage(reason, "We couldn't update that task."), "error");
+    } finally {
+      setToggling((s) => {
+        const next = new Set(s);
+        next.delete(task.id);
+        return next;
+      });
+    }
+  };
+
+  const save = async (draft: TaskDraft): Promise<TaskFormSubmitError | null> => {
+    if (!eventId) return { message: "Select an event first." };
+    const target = editing;
+    setSaving(true);
+    try {
+      if (target) {
+        const changes = changedFields(target, draft);
+        if (Object.keys(changes).length) put(await updateTask(eventId, target.id, changes));
+        onToast("Task updated");
+      } else {
+        put(await createTask(eventId, inputOf(draft)));
+        onToast("Task added");
+      }
+      setEditing(undefined);
+      return null;
+    } catch (reason) {
+      if (reason instanceof TaskValidationError) return { message: reason.message, fields: reason.fields };
+      if (target && isNotFound(reason)) {
+        drop(target.id);
+        setEditing(undefined);
+        onToast("This task was deleted by someone else.", "error");
+        return null;
+      }
+      return { message: errorMessage(reason, "We couldn't save this task.") };
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!eventId || !deleting) return;
+    const target = deleting;
+    setSaving(true);
+    try {
+      await deleteTask(eventId, target.id);
+      drop(target.id);
+      onToast("Task deleted");
+    } catch (reason) {
+      if (isNotFound(reason)) drop(target.id);
+      else onToast(errorMessage(reason, "We couldn't delete this task."), "error");
+    } finally {
+      setSaving(false);
+      setDeleting(null);
+    }
+  };
+
+  const generate = async () => {
+    if (!eventId) return;
+    setGenerating(true);
+    try {
+      const result = await generateTasksFromTemplate(eventId);
+      update(() => ({ tasks: result.tasks, progress: progressOf(result.tasks) }));
+      onToast(result.created ? `Added ${result.created} suggested tasks` : "The suggested checklist is already added");
+    } catch (reason) {
+      onToast(errorMessage(reason, "We couldn't add the suggested checklist."), "error");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  // ---- Pieces ------------------------------------------------------------
+
+  const addButton = <Button icon="plus" onClick={() => setEditing(null)}>Add task</Button>;
+
+  const formModal = editing !== undefined && (
+    <Modal
+      title={editing ? "Edit task" : "Add a task"}
+      onClose={() => setEditing(undefined)}
+      footer={
+        <>
+          <Button variant="secondary" onClick={() => setEditing(undefined)}>Cancel</Button>
+          <Button type="submit" form={TASK_FORM_ID} disabled={saving}>
+            {saving ? "Saving..." : editing ? "Save changes" : "Save task"}
+          </Button>
+        </>
+      }
+    >
+      <TaskForm key={editing?.id ?? "new"} formId={TASK_FORM_ID} task={editing} assignees={assignees} onSubmit={save} />
+    </Modal>
+  );
+
+  const deleteModal = deleting && (
+    <Modal
+      title="Delete this task?"
+      onClose={() => setDeleting(null)}
+      footer={
+        <>
+          <Button variant="secondary" onClick={() => setDeleting(null)}>Cancel</Button>
+          <Button variant="danger" onClick={confirmDelete} disabled={saving}>
+            {saving ? "Deleting..." : "Delete task"}
+          </Button>
+        </>
+      }
+    >
+      <p>"{deleting.title}" will be removed for everyone on the planning team. This can't be undone.</p>
+    </Modal>
+  );
+
+  const generateButton = hasTemplate && (
+    <Button variant="secondary" icon="check" onClick={generate} disabled={generating}>
+      {generating ? "Adding..." : "Add the suggested checklist"}
+    </Button>
+  );
+
+  // ---- States ------------------------------------------------------------
+
+  if (!eventId) {
+    return (
+      <>
+        <PageHeader page="tasks" />
+        {eventsStatus === "loading" ? (
+          <LoadingState label="Loading your events..." />
+        ) : (
+          <EmptyState icon="calendar" title="Select an event" message="Choose an event in the sidebar to see its tasks." />
+        )}
+      </>
+    );
+  }
+
+  if (loading) {
+    return (
+      <>
+        <PageHeader page="tasks" />
+        <LoadingState label="Loading tasks..." />
+      </>
+    );
+  }
+
+  if (error) {
+    const forbidden = error instanceof TaskServiceError && error.status === 403;
+    return (
+      <>
+        <PageHeader page="tasks" />
+        {forbidden ? (
+          <EmptyState
+            icon="lock"
+            title="You don't have access to this event"
+            message="Ask the event owner to add you as a co-planner, or switch to another event."
+          />
+        ) : (
+          <ErrorState message={errorMessage(error, "We couldn't load your tasks.")} onRetry={reload} />
+        )}
+      </>
+    );
+  }
+
+  if (!tasks.length) {
+    return (
+      <>
+        <PageHeader page="tasks" />
+        <EmptyState
+          icon="check"
+          title="No tasks yet"
+          message={hasTemplate
+            ? "Start from the suggested checklist for this type of event, or add your own tasks."
+            : "Add the first task to start a shared checklist for your planning team."}
+          action={<div className="task-empty-actions">{generateButton}{addButton}</div>}
+        />
+        {formModal}
+      </>
+    );
+  }
 
   return (
     <>
-      <PageHeader page="tasks" action={<Button icon="plus">Add task</Button>} />
+      <PageHeader page="tasks" action={addButton} />
       <div className="task-progress-card">
         <div>
-          <strong>24 of 36</strong>
+          <strong>{progress.completed} of {progress.total}</strong>
           <span>tasks complete</span>
         </div>
-        <div className="wide-progress">
-          <i style={{ width: "67%" }} />
+        <div
+          className="wide-progress"
+          role="progressbar"
+          aria-label="Tasks complete"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progress.percentComplete}
+        >
+          <i style={{ width: `${progress.percentComplete}%` }} />
         </div>
-        <b>67%</b>
-        <span>Great momentum. Four tasks are due this week.</span>
+        <b>{progress.percentComplete}%</b>
+        <span>{momentum(progress.open, dueThisWeek, overdue)}</span>
       </div>
       <Card>
         <div className="table-toolbar">
-          <div className="tabs">
-            <button className="active">All tasks</button>
-            <button>To do</button>
-            <button>Completed</button>
+          <div className="tabs" role="tablist" aria-label="Filter tasks by status">
+            {TABS.map((t) => (
+              <button key={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? "active" : ""} onClick={() => setTab(t.id)}>
+                {t.label}
+              </button>
+            ))}
           </div>
           <div className="toolbar-actions">
-            <button className="filter-btn">
-              All assignees <Icon name="down" size={14} />
-            </button>
-            <Button variant="ghost" icon="more">
-              Sort
-            </Button>
+            <label className="task-filter">
+              <span className="sr-only">Assignee</span>
+              <select value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}>
+                <option value="all">All assignees</option>
+                {myMemberId && <option value="me">Assigned to me</option>}
+                <option value="none">Unassigned</option>
+                {assignees.map((a) => <option key={a.memberId} value={a.memberId}>{a.label}</option>)}
+              </select>
+            </label>
+            {generateButton}
           </div>
         </div>
         <div className="checklist">
-          {tasks.map((t, i) => (
-            <div className={`checklist-row ${done.includes(i) ? "done" : ""}`} key={t.title}>
-              <button
-                className="task-check"
-                onClick={() => toggle(i)}
-                aria-label={`Mark ${t.title} ${done.includes(i) ? "incomplete" : "complete"}`}
-              >
-                {done.includes(i) && "✓"}
-              </button>
-              <div>
-                <b>{t.title}</b>
-                <Badge>{t.tag}</Badge>
+          {visible.length === 0 && <p className="task-none">No tasks match these filters.</p>}
+          {visible.map((t) => {
+            const late = isOverdue(t, today);
+            const name = t.assignee?.displayName ?? (t.assignee ? (t.assignee.role === "OWNER" ? "Event owner" : "Co-planner") : null);
+            return (
+              <div className={`checklist-row${t.isCompleted ? " done" : ""}`} key={t.id}>
+                <button
+                  className="task-check"
+                  onClick={() => toggle(t)}
+                  disabled={toggling.has(t.id)}
+                  aria-pressed={t.isCompleted}
+                  aria-label={`Mark ${t.title} ${t.isCompleted ? "incomplete" : "complete"}`}
+                >
+                  {t.isCompleted && "✓"}
+                </button>
+                <div className="task-main">
+                  <b>{t.title}</b>
+                  {late && <Badge tone="danger">Overdue</Badge>}
+                  {t.description && <small>{t.description}</small>}
+                </div>
+                <span className={`assignee${t.assignee ? "" : " none"}`} title={name ?? "Unassigned"} aria-label={name ? `Assigned to ${name}` : "Unassigned"}>
+                  {t.assignee ? initials(name) : "–"}
+                </span>
+                <span className={late ? "task-due late" : "task-due"}>
+                  {t.isCompleted ? "Completed" : formatCalendarDate(t.dueDate, "No due date")}
+                </span>
+                <TaskMenu
+                  task={t}
+                  canDelete={isOwner}
+                  onEdit={() => setEditing(t)}
+                  onToggle={() => toggle(t)}
+                  onDelete={() => setDeleting(t)}
+                />
               </div>
-              <span className="assignee">{t.owner}</span>
-              <span>{t.due}</span>
-              <button className="icon-btn" aria-label="More options">
-                <Icon name="more" />
-              </button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </Card>
+      {formModal}
+      {deleteModal}
     </>
   );
 }

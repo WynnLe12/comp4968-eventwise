@@ -1,0 +1,113 @@
+/* Tasks page (Feature 12). Builds on .task-progress-card and .checklist in styles/index.css. */
+
+.checklist-row > .task-main {
+  flex-wrap: wrap;
+  min-width: 0;
+  row-gap: 2px;
+}
+
+.task-main small {
+  flex-basis: 100%;
+  font-size: 9px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.checklist-row.done .task-main small {
+  color: #bbb;
+}
+
+.task-check:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.assignee.none {
+  background: transparent;
+  color: var(--muted);
+}
+
+.task-due.late {
+  color: #c2410c;
+  font-weight: 600;
+}
+
+.task-filter select {
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 11px;
+  padding: 0 8px;
+}
+
+.task-none {
+  padding: 22px 0;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.task-empty-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.task-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Row menu: Edit / Complete or Reopen / Delete */
+.checklist-row > .task-menu-wrap {
+  position: relative;
+  display: block;
+}
+
+.task-menu-wrap .icon-btn.open {
+  background: #f3f0f9;
+  color: var(--purple);
+}
+
+.task-menu {
+  position: absolute;
+  z-index: 15;
+  top: 36px;
+  right: 0;
+  width: 180px;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 14px 38px #352a4930;
+}
+
+.task-menu > button {
+  width: 100%;
+  min-height: 34px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  padding: 7px 9px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  font-size: 11px;
+}
+
+.task-menu > button:hover,
+.task-menu > button:focus-visible {
+  background: #f6f4fa;
+}
+
+.task-menu > button.danger {
+  color: #b42318;
+}
