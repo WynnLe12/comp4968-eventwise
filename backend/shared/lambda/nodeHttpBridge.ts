@@ -79,6 +79,12 @@ export async function invokeNodeHttpHandler(
                 "Content-Type":
                     String(response.getHeader("content-type") ??
                         "application/json; charset=utf-8"),
+                ...Object.fromEntries(Object.entries(response.getHeaders())
+                    .filter(([, value]) => value !== undefined)
+                    .map(([name, value]) => [
+                        name.split("-").map(part => part[0].toUpperCase() + part.slice(1)).join("-"),
+                        Array.isArray(value) ? value.join(",") : String(value),
+                    ])),
             },
             body: Buffer.concat(chunks).toString("utf8"),
         };
