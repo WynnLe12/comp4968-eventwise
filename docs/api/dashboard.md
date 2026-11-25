@@ -67,7 +67,7 @@ guest RSVP counts and headcount, and task progress (proposal Feature 10).
     "records": 12,
     "plusOnes": 4,
     "expectedHeadcount": 16,
-    "rsvp": { "UNINVITED": 2, "PENDING": 5, "ACCEPTED": 4, "REJECTED": 1 }
+    "rsvp": { "UNINVITED": 2, "PENDING": 7, "ACCEPTED": 5, "REJECTED": 2 }
   },
   "tasks": {
     "total": 10,
@@ -104,7 +104,10 @@ payment that triggers an alert email is the same one shown as upcoming here.
 **Guests** come from DynamoDB `EventWise_Guests` (all items with this `eventId`):
 `records` = guest entries, `plusOnes` = entries with `plusOneAllowed: true`,
 `expectedHeadcount` = records + plusOnes (planned headcount, independent of RSVP,
-same as the Guests page total). `rsvp` counts entries per stored status.
+same as the Guests page total). `rsvp` counts **people** per stored status: a guest with
+a plus-one counts as 2, so the four counts always add up to `expectedHeadcount`. The
+plus-one is assumed to follow the guest's answer until Feature 8 records whether the
+plus-one is coming. The Dashboard shows `rsvp.ACCEPTED / expectedHeadcount`.
 
 **Tasks** come from RDS `tasks` (Feature 12): `overdue` = not completed and `dueDate`
 before `asOfDate`; `percentComplete` = round(completed / total × 100), `0` when there
@@ -137,6 +140,8 @@ Same style as the other Events Lambda routes: `{ "error": "message" }`.
   Planning Team page. A task whose assignee was removed has `assigneeName: null`.
 - RSVP counts use the statuses stored by the guest API: `UNINVITED`, `PENDING`,
   `ACCEPTED`, `REJECTED`. Feature 8 tells Khai before changing them.
+- RSVP counts are in **people** (plus-ones included), the same rule as the Guests page
+  cards, so every count adds up to the total. Agreed with Hei.
 
 ## Code
 
