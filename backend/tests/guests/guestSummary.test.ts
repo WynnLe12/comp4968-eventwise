@@ -9,7 +9,7 @@ test("an event without guests has all counts at zero", () => {
   assert.deepEqual(summarizeGuests([]), { records: 0, plusOnes: 0, expectedHeadcount: 0, rsvp: none });
 });
 
-test("guests are counted per RSVP status, and plus-ones are added to the headcount", () => {
+test("people are counted per RSVP status: a guest with a plus-one counts as 2", () => {
   const summary = summarizeGuests([
     { plusOneAllowed: true, rsvpStatus: "ACCEPTED" },
     { plusOneAllowed: false, rsvpStatus: "ACCEPTED" },
@@ -21,7 +21,32 @@ test("guests are counted per RSVP status, and plus-ones are added to the headcou
     records: 5,
     plusOnes: 2,
     expectedHeadcount: 7,
-    rsvp: { UNINVITED: 1, PENDING: 1, ACCEPTED: 2, REJECTED: 1 },
+    rsvp: { UNINVITED: 1, PENDING: 2, ACCEPTED: 3, REJECTED: 1 },
+  });
+});
+
+test("the RSVP counts add up to the expected headcount", () => {
+  const summary = summarizeGuests([
+    { plusOneAllowed: true, rsvpStatus: "REJECTED" },
+    { plusOneAllowed: true, rsvpStatus: "UNINVITED" },
+    { plusOneAllowed: false, rsvpStatus: "PENDING" },
+    { plusOneAllowed: true },
+  ]);
+  const total = Object.values(summary.rsvp).reduce((sum, count) => sum + count, 0);
+  assert.equal(total, summary.expectedHeadcount);
+  assert.deepEqual(summary.rsvp, { UNINVITED: 4, PENDING: 1, ACCEPTED: 0, REJECTED: 2 });
+});
+
+test("the reported guest list: 2 accepted guests, one with a plus-one, is 3 people accepted", () => {
+  const summary = summarizeGuests([
+    { plusOneAllowed: false, rsvpStatus: "UNINVITED" }, // John Snow
+    { plusOneAllowed: false, rsvpStatus: "ACCEPTED" }, // Katnis Everdie
+    { plusOneAllowed: false, rsvpStatus: "UNINVITED" }, // BCIT PARTY
+    { plusOneAllowed: true, rsvpStatus: "ACCEPTED" }, // Peta Pit + plus-one
+  ]);
+  assert.deepEqual(summary, {
+    records: 4, plusOnes: 1, expectedHeadcount: 5,
+    rsvp: { UNINVITED: 2, PENDING: 0, ACCEPTED: 3, REJECTED: 0 },
   });
 });
 
@@ -49,6 +74,7 @@ test("only a real true counts as a plus-one", () => {
   ]);
   assert.equal(summary.plusOnes, 1);
   assert.equal(summary.expectedHeadcount, 4);
+  assert.equal(summary.rsvp.PENDING, 4);
 });
 
 test("loadGuestSummary reads the event's guests from the repository", async () => {
@@ -65,7 +91,7 @@ test("loadGuestSummary reads the event's guests from the repository", async () =
     records: 2,
     plusOnes: 1,
     expectedHeadcount: 3,
-    rsvp: { ...none, ACCEPTED: 1, UNINVITED: 1 },
+    rsvp: { ...none, ACCEPTED: 2, UNINVITED: 1 },
   });
 });
 
