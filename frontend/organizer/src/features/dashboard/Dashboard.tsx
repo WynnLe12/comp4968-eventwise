@@ -14,7 +14,7 @@ const percent = (part: string, whole: string) =>
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
 function BudgetSnapshot({ budget }: { budget: EventDashboard["budget"] }) {
-  if (!budget.categories.length) return <p>No budget categories yet.</p>;
+  if (!budget.categories.length) return <p className="dashboard-empty">No budget categories yet.</p>;
   return (
     <div className="task-list">
       {budget.categories.map((category) => (
@@ -40,7 +40,7 @@ function BudgetSnapshot({ budget }: { budget: EventDashboard["budget"] }) {
 
 function UpcomingTasks({ tasks }: { tasks: EventDashboard["tasks"] }) {
   if (!tasks.nextDue.length) {
-    return <p>{tasks.total ? "No open tasks with a due date." : "No tasks yet."}</p>;
+    return <p className="dashboard-empty">{tasks.total ? "No open tasks with a due date." : "No tasks yet."}</p>;
   }
   return (
     <div className="task-list">
@@ -57,7 +57,7 @@ function UpcomingTasks({ tasks }: { tasks: EventDashboard["tasks"] }) {
 }
 
 function UpcomingPayments({ payments }: { payments: EventDashboard["payments"] }) {
-  if (!payments.items.length) return <p>No payments due in the next {payments.windowDays} days.</p>;
+  if (!payments.items.length) return <p className="dashboard-empty">No payments due in the next {payments.windowDays} days.</p>;
   return (
     <div className="task-list">
       {payments.items.map((payment) => (

@@ -121,9 +121,9 @@ test("empty lists explain why they are empty", () => {
     tasks: { total: 0, completed: 0, overdue: 0, percentComplete: 0, nextDue: [] },
   };
   const html = render({ data: empty });
-  assert.match(html, /No budget categories yet/);
-  assert.match(html, /No tasks yet/);
-  assert.match(html, /No payments due in the next 7 days/);
+  assert.match(html, /<p class="dashboard-empty">No budget categories yet\.<\/p>/);
+  assert.match(html, /<p class="dashboard-empty">No tasks yet\.<\/p>/);
+  assert.match(html, /<p class="dashboard-empty">No payments due in the next 7 days\.<\/p>/);
   assert.match(html, /Tasks complete\|0%\|0 of 0 tasks/);
 });
 
