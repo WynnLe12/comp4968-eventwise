@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AddressInfo } from "node:net";
 import { ApiError } from "../../expense-service/errors";
-import type { Draft, DraftCreator, DraftReader } from "../../contract-service/types";
+import type { Draft, DraftCreator, DraftReader, DraftUpdater } from "../../contract-service/types";
 import { createAppServer } from "../../server";
+import { parseDraftPatch } from "../../contract-service/services/draftValidation";
 
 const draft: Draft = {
   draftId: "9007199254740993", eventId: "12", documentId: "23",
@@ -17,6 +18,7 @@ const draft: Draft = {
 };
 async function withServer(run: (url: string, calls: unknown[][]) => Promise<void>, failure?: Error) {
   const calls: unknown[][] = [];
+  let saved = structuredClone(draft);
   function authorize(eventId: string, sub: string) {
     if (failure) throw failure;
     if (eventId !== "12" || !["owner", "planner"].includes(sub)) throw new ApiError(403, "FORBIDDEN", "You do not have access to this event.");
@@ -24,11 +26,11 @@ async function withServer(run: (url: string, calls: unknown[][]) => Promise<void
   const reader: DraftReader = {
     async list(eventId, sub, query) {
       calls.push(["list", eventId, sub, query]); authorize(eventId, sub);
-      return { data: [draft], total: 1, limit: query.limit, offset: query.offset };
+      return { data: [saved], total: 1, limit: query.limit, offset: query.offset };
     },
     async get(eventId, id, sub) {
       calls.push(["get", eventId, id, sub]); authorize(eventId, sub);
-      return id === draft.draftId ? draft : null;
+      return id === draft.draftId ? saved : null;
     },
   };
   let created = false;
@@ -40,7 +42,17 @@ async function withServer(run: (url: string, calls: unknown[][]) => Promise<void
       created = true; return result;
     },
   };
-  const server = createAppServer({ contractDrafts: reader, contractDraftCreator: creator, authenticate: async header => {
+  const updater: DraftUpdater = {
+    async update(eventId, draftId, sub, body) {
+      calls.push(["update", eventId, draftId, sub, body]); authorize(eventId, sub);
+      if (draftId !== saved.draftId) throw new ApiError(404, "NOT_FOUND", "Contract draft not found.");
+      const input = parseDraftPatch(body);
+      if (input.version !== saved.version) throw new ApiError(409, "DRAFT_CHANGED", "Reload this draft.");
+      saved = { ...saved, ...input.changes, version: String(BigInt(saved.version) + 1n) };
+      return saved;
+    },
+  };
+  const server = createAppServer({ contractDrafts: reader, contractDraftCreator: creator, contractDraftUpdater: updater, authenticate: async header => {
     if (!header || !/^Bearer (owner|planner|outsider)$/.test(header)) throw new ApiError(401, "UNAUTHENTICATED", "Sign in to continue.");
     return header.slice(7);
   } });
@@ -143,7 +155,7 @@ test("contract POST rejects invalid JSON, oversized bodies, forged fields and qu
     }
     assert.equal((await post(url + "?eventId=13", { documentId: "23" })).status, 422);
     const item = await post(url + "/" + draft.draftId, { documentId: "23" });
-    assert.equal(item.status, 405); assert.equal(item.headers.get("Allow"), "GET, OPTIONS");
+    assert.equal(item.status, 405); assert.equal(item.headers.get("Allow"), "GET, PATCH, OPTIONS");
     assert.equal(calls.length, 0);
   });
 });
@@ -177,6 +189,71 @@ test("contract POST returns a safe failure when creation fails unexpectedly", as
     const response = await post(base + "/12/contract-drafts", { documentId: "23" });
     assert.equal(response.status, 500);
     assert.deepEqual(await response.json(), { error: { code: "INTERNAL_ERROR", message: "Unable to create the contract draft." } });
+    assert.ok(!JSON.stringify(logged.mock.calls).includes("private.sql"));
+  }, new Error("private.sql: document and credential details"));
+});
+
+const patch = (url: string, body: unknown, user = "owner") => fetch(url, {
+  method: "PATCH", headers: { authorization: "Bearer " + user, "content-type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+test("contract PATCH saves draft fields with the verified identity and returns the new version", async () => {
+  await withServer(async (base, calls) => {
+    const url = base + "/12/contract-drafts/" + draft.draftId;
+    const body = { version: "1", description: "  Reviewed contract  ", totalAmount: "5500.10" };
+    const response = await patch(url, body, "planner");
+    assert.equal(response.status, 200); assert.equal(response.headers.get("Cache-Control"), "no-store");
+    const updated = (await response.json()).data;
+    assert.equal(updated.description, "Reviewed contract"); assert.equal(updated.totalAmount, "5500.10");
+    assert.equal(updated.version, "2"); assert.equal(updated.status, "DRAFT");
+    assert.deepEqual(calls[0], ["update", "12", draft.draftId, "planner", body]);
+    assert.deepEqual((await (await get(url)).json()).data, updated);
+    const stale = await patch(url, { version: "1", description: "Stale edit" });
+    assert.equal(stale.status, 409); assert.equal((await stale.json()).error.code, "DRAFT_CHANGED");
+    assert.equal((await (await get(url)).json()).data.description, "Reviewed contract");
+  });
+});
+
+test("contract PATCH rejects malformed requests, readonly fields and query overrides", async () => {
+  await withServer(async (base, calls) => {
+    const url = base + "/12/contract-drafts/" + draft.draftId;
+    const headers = { authorization: "Bearer owner", "content-type": "application/json" };
+    assert.equal((await fetch(url, { method: "PATCH", headers, body: "{" })).status, 400);
+    assert.equal((await fetch(url, { method: "PATCH", headers: { authorization: "Bearer owner" }, body: "{}" })).status, 415);
+    assert.equal((await fetch(url, { method: "PATCH", headers, body: JSON.stringify({ version: "1", description: "x".repeat(65536) }) })).status, 413);
+    assert.equal((await patch(url + "?eventId=13", { version: "1", description: "Edit" })).status, 422);
+    assert.equal(calls.length, 0);
+    for (const body of [{ description: "Edit" }, { version: 1, description: "Edit" },
+      { version: "1", status: "CONFIRMED" }, { version: "1", contentSha256: "a".repeat(64) }]) {
+      assert.equal((await patch(url, body)).status, 422);
+    }
+    assert.equal((await patch(base + "/12/contract-drafts", { version: "1", description: "Edit" })).status, 405);
+  });
+});
+
+test("contract PATCH requires authentication, respects event access, and preserves edit conflicts", async () => {
+  await withServer(async base => {
+    const url = base + "/12/contract-drafts/" + draft.draftId;
+    const body = { version: "1", description: "Edit" };
+    assert.equal((await fetch(url, { method: "PATCH" })).status, 401);
+    assert.equal((await patch(url, body, "forged")).status, 401);
+    assert.equal((await patch(url, body, "outsider")).status, 403);
+    assert.equal((await patch(base + "/13/contract-drafts/" + draft.draftId, body)).status, 403);
+    assert.equal((await patch(base + "/12/contract-drafts/999", body)).status, 404);
+  });
+  await withServer(async base => {
+    const response = await patch(base + "/12/contract-drafts/" + draft.draftId, { version: "1", description: "Edit" });
+    assert.equal(response.status, 409); assert.equal((await response.json()).error.code, "DRAFT_NOT_EDITABLE");
+  }, new ApiError(409, "DRAFT_NOT_EDITABLE", "Only an open draft can be edited."));
+});
+
+test("contract PATCH never exposes private errors when saving fails", async t => {
+  const logged = t.mock.method(console, "error", () => {});
+  await withServer(async base => {
+    const response = await patch(base + "/12/contract-drafts/" + draft.draftId, { version: "1", description: "Edit" });
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), { error: { code: "INTERNAL_ERROR", message: "Unable to save the contract draft." } });
     assert.ok(!JSON.stringify(logged.mock.calls).includes("private.sql"));
   }, new Error("private.sql: document and credential details"));
 });
