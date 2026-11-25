@@ -4,12 +4,14 @@ import { MySqlExpenseRepository } from "./expense-service/repositories/mysql-exp
 import { expenseHttpHandler } from "./expense-service/handlers/http";
 import { createCognitoAuthenticator, type Authenticate } from "./shared/auth/cognito";
 
-import type { DraftReader } from "./contract-service/types";
+import type { DraftCreator, DraftReader } from "./contract-service/types";
 import { MySqlDraftReader } from "./contract-service/repositories/draftReader";
+import { MySqlDraftCreator } from "./contract-service/repositories/draftCreator";
 import { contractDraftHttpHandler } from "./contract-service/handlers/draftHttp";
 
 export interface AppDependencies {
   contractDrafts?: DraftReader;
+  contractDraftCreator?: DraftCreator;
   expenses?: ExpenseService;
   authenticate?: Authenticate;
 }
@@ -69,6 +71,7 @@ export function createAppServer(
   const contractDrafts = contractDraftHttpHandler(
     eventDependencies.contractDrafts ?? new MySqlDraftReader(),
     eventDependencies.authenticate ?? createCognitoAuthenticator(),
+    eventDependencies.contractDraftCreator ?? new MySqlDraftCreator(),
   );
 
   return createServer((request, response) => {
