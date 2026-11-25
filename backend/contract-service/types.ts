@@ -71,3 +71,12 @@ export interface DraftUpdater {
 export interface DraftDiscarder {
   discard(eventId: string, draftId: string, sub: string, body: unknown): Promise<Draft>;
 }
+
+export interface DraftConfirmation {
+  draft: Draft;
+  created: boolean;
+}
+
+export interface DraftConfirmer {
+  confirm(eventId: string, draftId: string, sub: string, body: unknown): Promise<DraftConfirmation>;
+}
