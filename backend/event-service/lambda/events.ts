@@ -7,8 +7,10 @@ import { removeEventMemberHandler } from "../handlers/removeEventMemberHandler";
 import { getEventHandler } from "../handlers/getEventHandler";
 import { updateEventHandler } from "../handlers/updateEventHandler";
 import { deleteEventHandler } from "../handlers/deleteEventHandler";
+import { dashboardHandler } from "../handlers/dashboardHandler";
 import { acceptInvitationHandler, eventInvitationHandler, type InvitationOperations } from "../handlers/eventInvitationHandler";
 import { EventService } from "../services/eventService";
+import { DashboardService } from "../services/dashboardService";
 import { normalizeProfileDisplayName } from "../../shared/auth/profileDisplayName";
 import { InvitationService } from "../services/invitationService";
 import {
@@ -47,6 +49,7 @@ export interface EventsLambdaDependencies {
   service?: EventsService;
   invitations?: InvitationOperations;
   acceptance?: Pick<InvitationService, "accept">;
+  dashboard?: Pick<DashboardService, "get">;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -125,6 +128,7 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
   const invitationService = new InvitationService(undefined, env);
   const invitations = dependencies.invitations ?? invitationService;
   const acceptance = dependencies.acceptance ?? invitationService;
+  const dashboard = dependencies.dashboard ?? new DashboardService();
   const acceptanceRoute = invitationAcceptanceRoute(env.EVENTS_INVITATION_ACCEPTANCE_METHOD_ARN);
   const creationRoute = eventCreationRoute(env.EVENTS_CREATE_METHOD_ARN);
   return async (event: EventsProxyEvent): Promise<EventsProxyResponse> => {
@@ -145,7 +149,8 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
     const memberId = membersMatch?.[2];
     const invitationsMatch = /^\/events\/([^/]+)\/invitations(?:\/([^/]+))?$/.exec(event.path);
     const invitationId = invitationsMatch?.[2];
-    const match = membersMatch ?? invitationsMatch ?? /^\/events\/([^/]+)$/.exec(event.path);
+    const dashboardMatch = /^\/events\/([^/]+)\/dashboard$/.exec(event.path);
+    const match = membersMatch ?? invitationsMatch ?? dashboardMatch ?? /^\/events\/([^/]+)$/.exec(event.path);
     const collection = event.path === "/events";
     const accepting = event.path === invitationAcceptancePath;
     let expectedResource = collection ? "/events" : "/events/{eventId}";
@@ -160,13 +165,17 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
     } else if (invitationsMatch) {
       expectedResource += invitationId === undefined ? "/invitations" : "/invitations/{invitationId}";
       supported = invitationId === undefined ? ["GET", "POST"] : ["DELETE"];
+    } else if (dashboardMatch) {
+      expectedResource += "/dashboard";
+      supported = ["GET"];
     }
     const parameterId = event.pathParameters?.eventId;
     if ((!accepting && !collection && !match) ||
         (event.resource !== undefined && event.resource !== expectedResource) ||
         (accepting && event.pathParameters != null && Object.keys(event.pathParameters).length > 0) ||
         (match && parameterId !== undefined && parameterId !== match[1]) ||
-        ((membersMatch || invitationsMatch) && event.pathParameters != null && parameterId === undefined) ||
+        ((membersMatch || invitationsMatch || dashboardMatch) && event.pathParameters != null && parameterId === undefined) ||
+        (dashboardMatch && event.pathParameters != null && Object.keys(event.pathParameters).length !== 1) ||
         (memberId !== undefined && event.pathParameters != null &&
           (event.pathParameters.memberId !== memberId || Object.keys(event.pathParameters).length !== 2)) ||
         (invitationsMatch && event.pathParameters != null &&
@@ -198,7 +207,8 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
       };
       // Require secret mode for the deployed service; never fall back to .env credentials.
       // Injected services are used by isolated tests and need no database configuration.
-      const injected = accepting ? dependencies.acceptance : invitationsMatch ? dependencies.invitations : dependencies.service;
+      const injected = accepting ? dependencies.acceptance : invitationsMatch ? dependencies.invitations
+        : dashboardMatch ? dependencies.dashboard : dependencies.service;
       if (!injected) {
         if (!accepting && !creator) {
           try { verifiedSubject(event, env); } catch { return json(401, "Invalid or expired authentication token"); }
@@ -213,6 +223,7 @@ export function createEventsHandler(dependencies: EventsLambdaDependencies = {})
       const output = response as unknown as ServerResponse;
       if (identity) await acceptInvitationHandler(acceptance)(request, output, identity);
       else if (invitationsMatch) await eventInvitationHandler({ ...options, invitations })(request, output, invitationsMatch[1], invitationId);
+      else if (dashboardMatch) await dashboardHandler({ ...options, service: dashboard })(request, output, dashboardMatch[1]);
       else if (collection && event.httpMethod === "GET") await listEventsHandler(options)(request, output);
       else if (collection) await createEventHandler({ ...options, ownerDisplayName: creator?.displayName })(request, output);
       else if (membersMatch && memberId !== undefined) await removeEventMemberHandler(options)(request, output, membersMatch[1], memberId);
