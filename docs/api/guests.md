@@ -96,7 +96,12 @@ optional field clears it; `firstName` and `plusOneAllowed` cannot be cleared.
 | `expectedTotal` | `invited + plusOnes` |
 
 The headcount is the **planned** headcount. It does not depend on RSVP answers, as required
-by Feature 7. RSVP counts (attending/declined/awaiting) come with Feature 8.
+by Feature 7.
+
+RSVP counts on the Guests page and the Dashboard are in **people**: a guest with a plus-one
+counts as 2 in its status (Accepted, Rejected, Pending or Uninvited), so the counts always
+add up to the total. Until Feature 8 records whether a plus-one is actually coming, the
+plus-one follows the guest's answer.
 
 ## 4. Errors
 

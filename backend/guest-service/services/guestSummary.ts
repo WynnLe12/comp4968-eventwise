@@ -12,7 +12,10 @@ export interface GuestSummary {
   plusOnes: number;
   /** records + plusOnes, same rule as the Guests page total. */
   expectedHeadcount: number;
-  /** Entries per stored RSVP status. */
+  /**
+   * People per stored RSVP status: a guest with a plus-one counts as 2, so the four
+   * counts add up to expectedHeadcount. Same rule as the Guests page cards.
+   */
   rsvp: Record<RsvpStatus, number>;
 }
 
@@ -23,7 +26,9 @@ const isRsvpStatus = (value: unknown): value is RsvpStatus =>
   typeof value === "string" && (RSVP_STATUSES as readonly string[]).includes(value);
 
 /**
- * Counts guests by RSVP status and computes the planned headcount.
+ * Counts people by RSVP status and computes the planned headcount.
+ * A guest with a plus-one counts as 2 people in its status: the plus-one is assumed to
+ * follow the guest's answer until Feature 8 records whether the plus-one is coming.
  * An item without a status has not been invited yet, so it counts as UNINVITED.
  * An unknown status is left out of `rsvp` (but still counts in `records`), so a new
  * Feature 8 status never shows up as the wrong answer.
@@ -31,8 +36,9 @@ const isRsvpStatus = (value: unknown): value is RsvpStatus =>
 export function summarizeGuests(guests: readonly CountableGuest[]): GuestSummary {
   const rsvp = Object.fromEntries(RSVP_STATUSES.map((status) => [status, 0])) as Record<RsvpStatus, number>;
   for (const guest of guests) {
-    if (guest.rsvpStatus === undefined || guest.rsvpStatus === null) rsvp.UNINVITED += 1;
-    else if (isRsvpStatus(guest.rsvpStatus)) rsvp[guest.rsvpStatus] += 1;
+    const people = guest.plusOneAllowed === true ? 2 : 1;
+    if (guest.rsvpStatus === undefined || guest.rsvpStatus === null) rsvp.UNINVITED += people;
+    else if (isRsvpStatus(guest.rsvpStatus)) rsvp[guest.rsvpStatus] += people;
   }
   const headcount = calculateHeadcount(guests.map((guest) => ({ plusOneAllowed: guest.plusOneAllowed === true })));
   return {

@@ -11,7 +11,7 @@ import {
   type GuestRecord,
   type RsvpStatus,
 } from "./services/guestApi";
-import { partySize, totalHeadcount } from "./guestHeadcount";
+import { partySize, peopleByStatus, totalHeadcount } from "./guestHeadcount";
 import { AddGuestModal } from "./AddGuestModal";
 import { EditGuestModal } from "./EditGuestModal";
 import "./guests.css";
@@ -80,14 +80,9 @@ export function Guests({
       />
     ) : null;
 
-  const counts = useMemo(() => {
-    const byStatus = Object.fromEntries(RSVP_STATUSES.map((status) => [status, 0])) as Record<
-      RsvpStatus,
-      number
-    >;
-    for (const guest of guests) byStatus[guest.rsvpStatus] += 1;
-    return byStatus;
-  }, [guests]);
+  // People per RSVP status (a guest with a plus-one counts as 2), so the cards add up
+  // to the total.
+  const counts = useMemo(() => peopleByStatus(guests, RSVP_STATUSES), [guests]);
 
   if (!eventId)
     return (
@@ -174,8 +169,12 @@ export function Guests({
           <i className="gray" />
         </div>
         <div>
+          <b>{counts.UNINVITED}</b>
+          <span>Uninvited</span>
+        </div>
+        <div>
           <b>{totalHeadcount(guests)}</b>
-          <span>Total guests</span>
+          <span>Total people</span>
         </div>
       </div>
       <Card>
