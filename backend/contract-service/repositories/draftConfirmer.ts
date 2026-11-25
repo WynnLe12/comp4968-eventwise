@@ -2,7 +2,7 @@ import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/prom
 import { ApiError, invalid } from "../../expense-service/errors";
 import { cents, parseId } from "../../expense-service/services/validation";
 import { getDatabasePool } from "../../shared/db/pool";
-import { prepareExistingExpense, prepareNewExpense } from "../services/confirmationValidation";
+import { prepareExistingExpense, prepareNewExpense, prepareNewVendor } from "../services/confirmationValidation";
 import { parseDraftConfirmation } from "../services/draftValidation";
 import type { ExpenseInput } from "../../expense-service/types";
 import type { Draft, DraftConfirmation, DraftConfirmer } from "../types";
@@ -20,7 +20,7 @@ export class MySqlDraftConfirmer implements DraftConfirmer {
     if (typeof sub !== "string" || !sub || sub.trim() !== sub || sub.length > 128) {
       throw new ApiError(401, "UNAUTHENTICATED", "Sign in to continue.");
     }
-    const { version, expectedExpense } = parseDraftConfirmation(body);
+    const { version, expectedExpense, createVendor = false } = parseDraftConfirmation(body);
     // Serialize confirmations with other contract mutations before taking any child locks.
     return withContractEvent(this.connect, eventId, sub, true, async connection => {
       const load = async () => {
@@ -42,7 +42,7 @@ export class MySqlDraftConfirmer implements DraftConfirmer {
       editable(before);
       if (before.confirmedExpenseId) throw new ApiError(409, "CONFIRMATION_UNAVAILABLE", "Review this draft's existing expense history before continuing.");
       const updating = before.saveAction === "UPDATE_EXPENSE";
-      const input = updating ? prepareExistingExpense(before) : prepareNewExpense(before);
+      const input = updating ? prepareExistingExpense(before, createVendor) : prepareNewExpense(before, createVendor);
       if (updating && !expectedExpense) invalid("expectedExpense", "Reload and review the selected expense before confirming.");
       if (!updating && expectedExpense) invalid("expectedExpense", "An expense snapshot is only used when updating an existing expense.");
       if (updating) {
@@ -83,7 +83,7 @@ export class MySqlDraftConfirmer implements DraftConfirmer {
         if (!vendors.length) invalid("vendorId", "Choose a vendor from this event.");
       }
       const [categories] = await connection.execute<RowDataPacket[]>(
-        "SELECT category_id FROM budget_categories WHERE event_id = ? AND category_id = ? FOR SHARE", [eventId, input.categoryId]);
+        "SELECT category_id, name FROM budget_categories WHERE event_id = ? AND category_id = ? FOR SHARE", [eventId, input.categoryId]);
       if (!categories.length) invalid("categoryId", "Choose a category from this event.");
       const [locked] = await connection.execute<(RowDataPacket & Pick<Draft, "status" | "version" | "documentId" | "categoryId" | "vendorId" | "targetExpenseId"> & { fingerprint: string | null })[]>(
         "SELECT status, CAST(version AS CHAR) AS version, CAST(document_id AS CHAR) AS documentId, " +
@@ -98,6 +98,23 @@ export class MySqlDraftConfirmer implements DraftConfirmer {
       }
       if (current.fingerprint !== fingerprint) throw documentUnavailable();
       if (version === "18446744073709551615") throw new ApiError(409, "DRAFT_VERSION_LIMIT", "This draft cannot be changed further.");
+
+      if (createVendor) {
+        const vendor = prepareNewVendor(before, String(categories[0].name));
+        // Match case/spacing using the existing vendor-name database collation.
+        // The event lock serializes these checks across contract confirmations.
+        const [existing] = await connection.execute<RowDataPacket[]>(
+          "SELECT vendor_id FROM vendors WHERE event_id = ? AND TRIM(name) = ? LIMIT 1", [eventId, vendor.name]);
+        if (existing.length) {
+          throw new ApiError(409, "VENDOR_ALREADY_EXISTS", "A vendor with this business name already exists in this event. Select that vendor instead.",
+            { vendorName: "Select the existing vendor instead of creating another." });
+        }
+        await connection.execute(
+          "INSERT INTO vendors (event_id, name, category, booking_status, contract_status) VALUES (?, ?, ?, ?, ?)",
+          [eventId, vendor.name, vendor.category, vendor.bookingStatus, vendor.contractStatus]);
+        const [[ids]] = await connection.query<RowDataPacket[]>("SELECT CAST(LAST_INSERT_ID() AS CHAR) AS id");
+        input.vendorId = String(ids.id);
+      }
 
       let expenseId: string;
       if (updating) {
@@ -115,10 +132,10 @@ export class MySqlDraftConfirmer implements DraftConfirmer {
         expenseId = String(ids.id);
       }
       const [saved] = await connection.execute<ResultSetHeader>(
-        "UPDATE draft_budget_items SET status = 'CONFIRMED', confirmed_expense_id = ?, reviewed_by_sub = ?, " +
+        "UPDATE draft_budget_items SET status = 'CONFIRMED', vendor_id = ?, confirmed_expense_id = ?, reviewed_by_sub = ?, " +
         "updated_by_sub = ?, confirmed_at = UTC_TIMESTAMP(6), version = version + 1 " +
         "WHERE event_id = ? AND draft_id = ? AND status = 'DRAFT' AND version = ?",
-        [expenseId, sub, sub, eventId, draftId, version]);
+        [input.vendorId, expenseId, sub, sub, eventId, draftId, version]);
       if (saved.affectedRows !== 1) throw changed();
       // Manual confirmation supersedes any pending extraction; no payment is inserted.
       await connection.execute(

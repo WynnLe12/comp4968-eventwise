@@ -149,14 +149,15 @@ test("MySQL confirmation rejects unverified callers, wrong events, revoked acces
 });
 
 test("MySQL failed confirmation rolls back new or updated expenses, review audit and extraction cancellation together", integration, async () => {
-  for (const mode of ["create", "update"]) for (const failure of ["review", "cancel", "readback"]) await fixture(async f => {
-    const body = mode === "update" ? await reviewExisting(f) : { version: "1" };
+  for (const mode of ["create", "update", "newVendor"]) for (const failure of ["expense", "review", "cancel", "readback"]) await fixture(async f => {
+    const body = mode === "update" ? await reviewExisting(f) : mode === "newVendor" ? await reviewNewVendor(f) : { version: "1" };
     let reads = 0;
     const connect = async () => {
       const connection = await getDatabasePool().getConnection();
       return new Proxy(connection, { get(target, property) {
         if (property === "execute") return async (sql: string, values?: unknown[]) => {
-          if ((failure === "review" && sql.includes("UPDATE draft_budget_items SET status = 'CONFIRMED'")) ||
+          if ((failure === "expense" && (sql.includes("INSERT INTO expenses") || sql.includes("UPDATE expenses SET"))) ||
+              (failure === "review" && sql.includes("UPDATE draft_budget_items SET status = 'CONFIRMED'")) ||
               (failure === "cancel" && sql.includes("UPDATE contract_extraction_jobs")) ||
               (failure === "readback" && sql.includes("LEFT JOIN event_documents") && ++reads === 2)) {
             throw new Error("Injected confirmation failure");
@@ -345,5 +346,129 @@ test("MySQL concurrent payment and contract reduction cannot leave net paid abov
     const saved = await expenses.get(f.a, f.expense, f.owner);
     assert.ok(cents(saved.paidTotal) <= cents(saved.committedAmount));
     assert.equal((await expenses.list(f.a, f.owner, { limit: 10, offset: 0 })).total, 1);
+  });
+});
+
+async function reviewNewVendor(f: Fixture, vendorName = "New DJ") {
+  const reviewed = await updater.update(f.a, f.draft, f.owner, { version: "1", vendorId: null, vendorName });
+  return { version: reviewed.version, createVendor: true };
+}
+
+test("MySQL confirmation creates one vendor and linked expense using event categories and safe vendor defaults", integration, async () => {
+  await fixture(async f => {
+    const body = await reviewNewVendor(f, "  New DJ  ");
+    const history = await records(["expense_payments", "event_documents"]);
+    const result = await confirmer.confirm(f.a, f.draft, f.planner, body);
+    const vendorId = result.draft.vendorId!;
+    assert.ok(vendorId); assert.notEqual(vendorId, f.vendor); assert.equal(result.created, true);
+    const [[vendor]] = await getDatabasePool().execute<RowDataPacket[]>("SELECT * FROM vendors WHERE event_id = ? AND vendor_id = ?", [f.a, vendorId]);
+    assert.equal(vendor.name, "New DJ"); assert.equal(vendor.category, "Entertainment");
+    assert.equal(vendor.booking_status, "RESEARCHING"); assert.equal(vendor.contract_status, "NOT_STARTED");
+    assert.equal(vendor.contract_total, null); assert.equal(vendor.quote_amount, null);
+    const saved = await expenses.get(f.a, result.draft.confirmedExpenseId!, f.owner);
+    assert.equal(saved.vendorId, vendorId); assert.equal(saved.vendorName, "New DJ");
+    assert.equal(saved.categoryId, f.category); assert.equal(saved.committedAmount, "600.10");
+    assert.equal(saved.paidTotal, "0.00"); assert.equal(result.draft.depositAmount, "100.05");
+    assert.deepEqual(await records(["expense_payments", "event_documents"]), history);
+    assert.equal((await reader.get(f.a, f.draft, f.owner))?.vendorId, vendorId);
+  });
+});
+
+test("MySQL repeated new-vendor confirmation creates only one vendor and never overwrites later vendor edits", integration, async () => {
+  await fixture(async f => {
+    const body = await reviewNewVendor(f);
+    const results = await Promise.all(Array.from({ length: 6 }, (_, i) =>
+      confirmer.confirm(f.a, f.draft, i % 2 ? f.owner : f.planner, body)));
+    assert.equal(results.filter(result => result.created).length, 1);
+    assert.equal(new Set(results.map(result => result.draft.vendorId)).size, 1);
+    const vendorId = results[0].draft.vendorId!;
+    const [[count]] = await getDatabasePool().execute<RowDataPacket[]>("SELECT COUNT(*) AS total FROM vendors WHERE event_id = ?", [f.a]);
+    assert.equal(Number(count.total), 2);
+    await getDatabasePool().execute("UPDATE vendors SET name = 'Later vendor edit', booking_status = 'QUOTED', quote_amount = '700.00' WHERE vendor_id = ?", [vendorId]);
+    const before = await records(["vendors", "expenses", "expense_payments", "draft_budget_items"]);
+    assert.equal((await confirmer.confirm(f.a, f.draft, f.owner, body)).created, false);
+    assert.deepEqual(await records(["vendors", "expenses", "expense_payments", "draft_budget_items"]), before);
+  });
+});
+
+test("MySQL new-vendor confirmation requires explicit intent and cannot replace an existing vendor selection", integration, async () => {
+  await fixture(async f => {
+    await assert.rejects(confirmer.confirm(f.a, f.draft, f.owner, { version: "1", createVendor: true }), status(422));
+    const body = await reviewNewVendor(f);
+    for (const createVendor of [undefined, false]) {
+      await assert.rejects(confirmer.confirm(f.a, f.draft, f.owner, { version: body.version, ...(createVendor === undefined ? {} : { createVendor }) }), status(422));
+    }
+    const before = await records(["vendors", "expenses", "draft_budget_items"]);
+    await assert.rejects(confirmer.confirm(f.a, f.draft, f.owner, { ...body, version: "1" }), status(409));
+    await assert.rejects(confirmer.confirm(f.a, f.draft, "outsider", body), status(403));
+    await assert.rejects(confirmer.confirm(f.b, f.draft, f.owner, body), status(404));
+    assert.deepEqual(await records(["vendors", "expenses", "draft_budget_items"]), before);
+  });
+});
+
+test("MySQL duplicate vendor names prompt selection of the existing event vendor without merging or adding records", integration, async () => {
+  await fixture(async f => {
+    const body = await reviewNewVendor(f, " reviewed dj ");
+    const before = await records(["vendors", "expenses", "draft_budget_items", "contract_extraction_jobs"]);
+    await assert.rejects(confirmer.confirm(f.a, f.draft, f.owner, body), error =>
+      error instanceof ApiError && error.code === "VENDOR_ALREADY_EXISTS" && Boolean(error.fields?.vendorName));
+    assert.deepEqual(await records(["vendors", "expenses", "draft_budget_items", "contract_extraction_jobs"]), before);
+  });
+  await fixture(async f => {
+    await insert("INSERT INTO vendors (event_id, name) VALUES (?, 'New DJ')", [f.b]);
+    const body = await reviewNewVendor(f);
+    const result = await confirmer.confirm(f.a, f.draft, f.owner, body);
+    assert.ok(result.draft.vendorId); assert.equal(result.created, true);
+  });
+});
+
+test("MySQL two different contracts creating the same event vendor name cannot create duplicate vendors", integration, async () => {
+  await fixture(async f => {
+    const body = await reviewNewVendor(f);
+    const document = await insert("INSERT INTO event_documents (event_id, uploaded_by_sub, s3_object_key, original_filename, content_type, size_bytes, content_sha256) VALUES (?, ?, ?, 'second.pdf', 'application/pdf', 100, ?)",
+      [f.a, f.owner, "events/" + f.a + "/documents/" + randomUUID(), "b".repeat(64)]);
+    const second = await insert("INSERT INTO draft_budget_items (event_id, document_id, content_sha256, description, category_id, vendor_name, total_amount, currency_code) VALUES (?, ?, ?, 'Second contract', ?, 'new dj', '700.00', 'USD')",
+      [f.a, document, "b".repeat(64), f.category]);
+    const results = await Promise.allSettled([
+      confirmer.confirm(f.a, f.draft, f.owner, body),
+      confirmer.confirm(f.a, second, f.planner, { version: "1", createVendor: true }),
+    ]);
+    assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+    const rejected = results.find(result => result.status === "rejected");
+    assert.ok(rejected?.status === "rejected" && rejected.reason instanceof ApiError && rejected.reason.code === "VENDOR_ALREADY_EXISTS");
+    const [[count]] = await getDatabasePool().execute<RowDataPacket[]>("SELECT COUNT(*) AS total FROM vendors WHERE event_id = ?", [f.a]);
+    assert.equal(Number(count.total), 2);
+    assert.equal((await expenses.list(f.a, f.owner, { limit: 10, offset: 0 })).total, 2);
+  });
+});
+
+test("MySQL new vendor can be linked to an unassigned existing expense without losing payment history", integration, async () => {
+  await fixture(async f => {
+    await expenses.update(f.a, f.expense, f.owner, { vendorId: null });
+    const body = { ...await reviewExisting(f, { vendorId: null, vendorName: "New DJ" }), createVendor: true };
+    const history = await records(["expense_payments"]);
+    const result = await confirmer.confirm(f.a, f.draft, f.owner, body);
+    assert.equal(result.created, false); assert.equal(result.draft.confirmedExpenseId, f.expense);
+    assert.ok(result.draft.vendorId);
+    const saved = await expenses.get(f.a, f.expense, f.owner);
+    assert.equal(saved.vendorId, result.draft.vendorId); assert.equal(saved.paidTotal, "100.00");
+    assert.deepEqual(await records(["expense_payments"]), history);
+    assert.equal((await expenses.list(f.a, f.owner, { limit: 10, offset: 0 })).total, 1);
+  });
+  await fixture(async f => {
+    const body = { ...await reviewExisting(f, { vendorId: null, vendorName: "New DJ" }), createVendor: true };
+    const before = await records(["vendors", "expenses", "expense_payments", "draft_budget_items"]);
+    await assert.rejects(confirmer.confirm(f.a, f.draft, f.owner, body), status(422));
+    assert.deepEqual(await records(["vendors", "expenses", "expense_payments", "draft_budget_items"]), before);
+  });
+});
+
+test("MySQL new-vendor confirmation preserves exact vendor IDs beyond JavaScript's safe integer range", integration, async () => {
+  await fixture(async f => {
+    const body = await reviewNewVendor(f);
+    await getDatabasePool().query("ALTER TABLE vendors AUTO_INCREMENT = 9007199254740993");
+    const result = await confirmer.confirm(f.a, f.draft, f.owner, body);
+    assert.equal(result.draft.vendorId, "9007199254740993");
+    assert.equal((await expenses.get(f.a, result.draft.confirmedExpenseId!, f.owner)).vendorId, result.draft.vendorId);
   });
 });
