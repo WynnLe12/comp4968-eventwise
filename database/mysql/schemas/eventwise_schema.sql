@@ -1,6 +1,8 @@
 -- EventWise MySQL 8.0+ schema. Review policies with team before production.
 -- Vendor changes (Feature 5): added category, contract_total, booking_status, updated_at
 -- and status CHECKs; removed payment_due_date; added the vendor_payment_totals view.
+-- Task changes (Feature 12): added the template_tasks table. Added completed_at, template_task_id,
+-- updated_at, uq_task_template, idx_task_event_open and chk_task_completed_at to tasks.
 CREATE DATABASE IF NOT EXISTS eventwise CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 USE eventwise;
 
@@ -163,6 +165,18 @@ CREATE TABLE event_invitations (
  KEY idx_invite_event (event_id),
  CONSTRAINT fk_invite_event FOREIGN KEY (event_id) REFERENCES events(event_id) ON DELETE CASCADE
 );
+CREATE TABLE template_tasks (
+ template_task_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ template_id BIGINT UNSIGNED NOT NULL,
+ title VARCHAR(200) NOT NULL,
+ description TEXT NULL,
+ -- Due date = event_date minus this many days. NULL = no due date.
+ days_before_event INT NULL,
+ sort_order INT NOT NULL DEFAULT 0,
+ UNIQUE KEY uq_template_task_title (template_id, title),
+ CONSTRAINT fk_tt_template FOREIGN KEY (template_id) REFERENCES event_templates(template_id) ON DELETE CASCADE,
+ CONSTRAINT chk_tt_days CHECK (days_before_event IS NULL OR days_before_event BETWEEN 0 AND 730)
+);
 CREATE TABLE tasks (
  task_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
  event_id BIGINT UNSIGNED NOT NULL,
@@ -170,11 +184,24 @@ CREATE TABLE tasks (
  description TEXT NULL,
  due_date DATE NULL,
  is_completed BOOLEAN NOT NULL DEFAULT FALSE,
+ completed_at DATETIME NULL,
+ -- Must be a member of this event. The task service checks it (a composite FK can't use
+ -- ON DELETE SET NULL here, because it would also try to null event_id).
  assigned_member_id BIGINT UNSIGNED NULL,
+ -- The template task this came from. NULL for tasks added by hand.
+ template_task_id BIGINT UNSIGNED NULL,
  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
  KEY idx_task_event (event_id),
+ KEY idx_task_event_open (event_id, is_completed, due_date),
+ -- Generating from a template twice can't duplicate a task (NULLs don't collide).
+ UNIQUE KEY uq_task_template (event_id, template_task_id),
  CONSTRAINT fk_task_event FOREIGN KEY (event_id) REFERENCES events(event_id) ON DELETE CASCADE,
- CONSTRAINT fk_task_assignee FOREIGN KEY (assigned_member_id) REFERENCES event_members(member_id) ON DELETE SET NULL
+ CONSTRAINT fk_task_assignee FOREIGN KEY (assigned_member_id) REFERENCES event_members(member_id) ON DELETE SET NULL,
+ CONSTRAINT fk_task_template FOREIGN KEY (template_task_id) REFERENCES template_tasks(template_task_id) ON DELETE SET NULL,
+ CONSTRAINT chk_task_completed_at CHECK (
+   (is_completed = FALSE AND completed_at IS NULL) OR (is_completed = TRUE AND completed_at IS NOT NULL)
+ )
 );
 CREATE TABLE event_documents (
  document_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

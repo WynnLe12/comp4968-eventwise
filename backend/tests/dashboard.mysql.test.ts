@@ -70,7 +70,9 @@ async function fixture() {
     await expense(other, otherCategory, null, "Other event", "999.00", "2026-06-08"); // other event: never listed
 
     const task = (eventId: string, title: string, due: string | null, done: boolean, member: string | null) =>
-      insert("INSERT INTO tasks (event_id, title, due_date, is_completed, assigned_member_id) VALUES (?, ?, ?, ?, ?)", [eventId, title, due, done ? 1 : 0, member]);
+      // chk_task_completed_at (Feature 12): a completed task needs completed_at.
+      insert(`INSERT INTO tasks (event_id, title, due_date, is_completed, completed_at, assigned_member_id)
+              VALUES (?, ?, ?, ?, ${done ? "UTC_TIMESTAMP()" : "NULL"}, ?)`, [eventId, title, due, done ? 1 : 0, member]);
     await task(main, "Book venue", "2026-06-01", true, ownerMember);
     await task(main, "Send invites", "2026-06-05", false, coMember); // overdue
     await task(main, "Confirm florist", "2026-06-12", false, ownerMember);

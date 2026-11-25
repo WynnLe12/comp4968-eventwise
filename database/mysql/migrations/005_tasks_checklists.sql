@@ -1,0 +1,64 @@
+-- Feature 12: checklists and tasks.
+-- Run once on RDS (CloudShell) and locally. Safe on an empty or populated tasks table.
+-- MySQL >= 8.0.16 is required for enforced CHECK constraints.
+--
+-- 1. template_tasks: the default checklist for each event type.
+-- 2. tasks: completed_at, updated_at and a link to the template task it came from.
+-- 3. PROVISIONAL default checklists for wedding and birthday, subject to team confirmation.
+--    The same rows are in seeds/05_template_tasks_seed.sql for local databases.
+
+CREATE TABLE template_tasks (
+ template_task_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ template_id BIGINT UNSIGNED NOT NULL,
+ title VARCHAR(200) NOT NULL,
+ description TEXT NULL,
+ -- Due date = event_date minus this many days. NULL = no due date.
+ days_before_event INT NULL,
+ sort_order INT NOT NULL DEFAULT 0,
+ UNIQUE KEY uq_template_task_title (template_id, title),
+ CONSTRAINT fk_tt_template FOREIGN KEY (template_id) REFERENCES event_templates(template_id) ON DELETE CASCADE,
+ CONSTRAINT chk_tt_days CHECK (days_before_event IS NULL OR days_before_event BETWEEN 0 AND 730)
+);
+
+ALTER TABLE tasks
+ ADD COLUMN completed_at DATETIME NULL AFTER is_completed,
+ ADD COLUMN template_task_id BIGINT UNSIGNED NULL AFTER assigned_member_id,
+ ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER created_at,
+ -- Generating from a template twice can't duplicate a task (NULLs don't collide).
+ ADD UNIQUE KEY uq_task_template (event_id, template_task_id),
+ ADD KEY idx_task_event_open (event_id, is_completed, due_date),
+ ADD CONSTRAINT fk_task_template FOREIGN KEY (template_task_id) REFERENCES template_tasks(template_task_id) ON DELETE SET NULL;
+
+-- Backfill before adding the CHECK, in case rows were marked complete without a time.
+UPDATE tasks SET completed_at = created_at WHERE is_completed = TRUE AND completed_at IS NULL;
+UPDATE tasks SET completed_at = NULL WHERE is_completed = FALSE;
+
+ALTER TABLE tasks
+ ADD CONSTRAINT chk_task_completed_at CHECK (
+   (is_completed = FALSE AND completed_at IS NULL) OR (is_completed = TRUE AND completed_at IS NOT NULL)
+ );
+
+-- PROVISIONAL default checklists. Rerunning updates these rows and keeps their IDs.
+INSERT INTO template_tasks (template_id, title, description, days_before_event, sort_order)
+SELECT et.template_id, d.title, d.description, d.days_before_event, d.sort_order
+FROM event_templates et
+JOIN (
+  SELECT 'wedding' AS template_key, 'Set the overall budget' AS title, 'Agree on a total and how it splits across categories.' AS description, 365 AS days_before_event, 1 AS sort_order
+  UNION ALL SELECT 'wedding', 'Book the venue', NULL, 330, 2
+  UNION ALL SELECT 'wedding', 'Book the photographer', NULL, 300, 3
+  UNION ALL SELECT 'wedding', 'Book the caterer', NULL, 270, 4
+  UNION ALL SELECT 'wedding', 'Send save-the-dates', NULL, 240, 5
+  UNION ALL SELECT 'wedding', 'Book ceremony musicians', NULL, 180, 6
+  UNION ALL SELECT 'wedding', 'Order wedding attire', 'Leave time for fittings and alterations.', 180, 7
+  UNION ALL SELECT 'wedding', 'Send invitations', NULL, 90, 8
+  UNION ALL SELECT 'wedding', 'Finalize the guest list', NULL, 60, 9
+  UNION ALL SELECT 'wedding', 'Confirm the final headcount with the caterer', NULL, 14, 10
+  UNION ALL SELECT 'wedding', 'Confirm vendor arrival times', NULL, 7, 11
+  UNION ALL SELECT 'birthday', 'Pick a venue', NULL, 60, 1
+  UNION ALL SELECT 'birthday', 'Send invitations', NULL, 30, 2
+  UNION ALL SELECT 'birthday', 'Plan food and drinks', NULL, 14, 3
+  UNION ALL SELECT 'birthday', 'Order the cake', NULL, 14, 4
+  UNION ALL SELECT 'birthday', 'Buy decorations', NULL, 7, 5
+  UNION ALL SELECT 'birthday', 'Confirm RSVPs', NULL, 3, 6
+) d ON d.template_key = et.template_key
+ON DUPLICATE KEY UPDATE description = d.description, days_before_event = d.days_before_event, sort_order = d.sort_order;
