@@ -20,6 +20,7 @@
     "test:db": "npm run build && node dist/verification/expenses-mysql.js",
     "test:payments:db": "npm run build && node dist/verification/payments-mysql.js",
     "test:summary:db": "npm run build && node dist/verification/summary-mysql.js",
+    "test:tasks:db": "npm run build && node dist/verification/tasks-mysql.js",
     "ddb:up": "docker compose -f ../docker-compose.dynamodb.yml up -d",
     "ddb:down": "docker compose -f ../docker-compose.dynamodb.yml down",
     "ddb:reset": "docker compose -f ../docker-compose.dynamodb.yml down -v",
@@ -31,7 +32,8 @@
     "package:vendors": "npm run build && node scripts/package-vendors.mjs",
     "package:photos": "npm run build && node scripts/package-photos.mjs",
     "package:expenses": "npm run build && node scripts/package-expenses.mjs",
-    "package:timeline": "npm run build && node scripts/package-timeline.mjs"
+    "package:timeline": "npm run build && node scripts/package-timeline.mjs",
+    "package:tasks": "npm run build && node scripts/package-tasks.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
