@@ -20,7 +20,6 @@
     "test:db": "npm run build && node dist/verification/expenses-mysql.js",
     "test:payments:db": "npm run build && node dist/verification/payments-mysql.js",
     "test:summary:db": "npm run build && node dist/verification/summary-mysql.js",
-    "test:tasks:db": "npm run build && node dist/verification/tasks-mysql.js",
     "ddb:up": "docker compose -f ../docker-compose.dynamodb.yml up -d",
     "ddb:down": "docker compose -f ../docker-compose.dynamodb.yml down",
     "ddb:reset": "docker compose -f ../docker-compose.dynamodb.yml down -v",
