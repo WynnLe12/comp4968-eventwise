@@ -288,6 +288,9 @@ export class DocumentService {
             );
         }
 
+        // Hash verified bytes on the backend; browser metadata is never trusted.
+        const contentSha256 = createHash("sha256").update(fileBytes).digest("hex");
+
         // Conditional PUT makes finalized objects immutable: no browser POST
         // can write this key, and another finalization cannot overwrite it.
         try {
@@ -331,8 +334,7 @@ export class DocumentService {
                 throw new ApiError(409, "UPLOAD_CONFLICT", "Final document does not match this upload.");
             }
             const actual = await finalObject.Body.transformToByteArray();
-            const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
-            if (digest(actual) !== digest(fileBytes)) {
+            if (createHash("sha256").update(actual).digest("hex") !== contentSha256) {
                 throw new ApiError(409, "UPLOAD_CONFLICT", "Final document contents do not match this upload.");
             }
         }
@@ -346,6 +348,7 @@ export class DocumentService {
                 originalFilename: upload.filename,
                 contentType: upload.contentType,
                 sizeBytes: upload.sizeBytes,
+                contentSha256,
             });
         } catch (error) {
             // The finalized object must not be deleted automatically: a
