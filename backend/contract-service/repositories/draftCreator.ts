@@ -5,6 +5,8 @@ import { getDatabasePool } from "../../shared/db/pool";
 import type { DraftCreation, DraftCreator } from "../types";
 import { createDocumentFingerprint, type DocumentFingerprint, type DraftDocument } from "../services/documentFingerprint";
 
+import { withContractEvent } from "./eventTransaction";
+
 interface Claim extends RowDataPacket { draftId: string; contentSha256: string | null }
 const changed = () => new ApiError(409, "DOCUMENT_CHANGED", "The document changed. Please reopen it and try again.");
 
@@ -16,25 +18,7 @@ export class MySqlDraftCreator implements DraftCreator {
 
   private async authorized<T>(eventId: string, sub: string, exclusive: boolean,
     work: (connection: PoolConnection) => Promise<T>): Promise<T> {
-    const connection = await this.connect();
-    try {
-      await connection.beginTransaction();
-      // Same parent-first order as event deletion. Only the short save phase is exclusive.
-      const [events] = await connection.execute<RowDataPacket[]>(
-        "SELECT event_id FROM events WHERE event_id = ? " + (exclusive ? "FOR UPDATE" : "FOR SHARE"), [eventId]);
-      if (!events.length) throw new ApiError(403, "FORBIDDEN", "You do not have access to this event.");
-      const [members] = await connection.execute<RowDataPacket[]>(`
-        SELECT role FROM event_members WHERE event_id = ?
-          AND cognito_sub COLLATE utf8mb4_bin = ? AND role IN ('OWNER','CO_PLANNER') FOR SHARE
-      `, [eventId, sub]);
-      if (!members.length) throw new ApiError(403, "FORBIDDEN", "You do not have access to this event.");
-      const result = await work(connection);
-      await connection.commit();
-      return result;
-    } catch (error) {
-      await connection.rollback();
-      throw error;
-    } finally { connection.release(); }
+    return withContractEvent(this.connect, eventId, sub, exclusive, work);
   }
 
   private async document(connection: PoolConnection, eventId: string, documentId: string, exclusive: boolean) {

@@ -63,3 +63,7 @@ export interface DraftCreation {
 export interface DraftCreator {
   create(eventId: string, documentId: string, sub: string): Promise<DraftCreation>;
 }
+
+export interface DraftUpdater {
+  update(eventId: string, draftId: string, sub: string, body: unknown): Promise<Draft>;
+}

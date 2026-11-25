@@ -5,7 +5,7 @@ import { getDatabasePool } from "../../shared/db/pool";
 import type { Draft, DraftPage, DraftQuery, DraftReader } from "../types";
 
 // Explicit public fields: never return S3 keys, fingerprints, identities or raw OCR.
-const selectDraft = `
+export const selectDraft = `
   SELECT CAST(d.draft_id AS CHAR) AS draftId, CAST(d.event_id AS CHAR) AS eventId,
     CAST(doc.document_id AS CHAR) AS documentId,
     doc.original_filename AS documentFilename, doc.content_type AS documentContentType,
