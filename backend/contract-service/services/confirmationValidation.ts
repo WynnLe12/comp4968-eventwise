@@ -13,10 +13,18 @@ export function prepareNewExpense(draft: DraftFields): ExpenseInput {
   if (draft.vendorId === null && draft.vendorName !== null) {
     invalid("vendorId", "Choose an existing vendor, or clear the vendor name to save without a vendor.");
   }
-  const expense = parseExpenseBody({
-    categoryId: draft.categoryId, vendorId: draft.vendorId, description: draft.description,
-    committedAmount: draft.totalAmount, dueDate: draft.dueDate,
-  }, false) as ExpenseInput;
+  let expense: ExpenseInput;
+  try {
+    expense = parseExpenseBody({
+      categoryId: draft.categoryId, vendorId: draft.vendorId, description: draft.description,
+      committedAmount: draft.totalAmount, dueDate: draft.dueDate,
+    }, false) as ExpenseInput;
+  } catch (error) {
+    if (error instanceof ApiError && error.fields?.committedAmount) {
+      invalid("totalAmount", "Enter the contract total as an amount of 0 or more, with 2 decimal places.");
+    }
+    throw error;
+  }
   if (draft.depositAmount !== null && cents(draft.depositAmount) > cents(expense.committedAmount)) {
     invalid("depositAmount", "The deposit cannot exceed the contract total.");
   }

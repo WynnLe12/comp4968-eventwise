@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AddressInfo } from "node:net";
 import { ApiError } from "../../expense-service/errors";
-import type { Draft, DraftCreator, DraftDiscarder, DraftReader, DraftUpdater } from "../../contract-service/types";
+import type { Draft, DraftConfirmer, DraftCreator, DraftDiscarder, DraftReader, DraftUpdater } from "../../contract-service/types";
 import { createAppServer } from "../../server";
+import { prepareNewExpense } from "../../contract-service/services/confirmationValidation";
 import { parseDraftPatch, parseDraftVersion } from "../../contract-service/services/draftValidation";
 
 const draft: Draft = {
@@ -58,6 +59,7 @@ async function withServer(run: (url: string, calls: unknown[][]) => Promise<void
       calls.push(["discard", eventId, draftId, sub, body]); authorize(eventId, sub);
       if (draftId !== saved.draftId) throw new ApiError(404, "NOT_FOUND", "Contract draft not found.");
       const { version } = parseDraftVersion(body);
+      if (saved.status === "CONFIRMED") throw new ApiError(409, "DRAFT_NOT_EDITABLE", "A confirmed draft cannot be discarded.");
       if (saved.status !== "REJECTED") {
         if (version !== saved.version) throw new ApiError(409, "DRAFT_CHANGED", "Reload this draft.");
         saved = { ...saved, status: "REJECTED", version: String(BigInt(saved.version) + 1n) };
@@ -65,8 +67,22 @@ async function withServer(run: (url: string, calls: unknown[][]) => Promise<void
       return saved;
     },
   };
+  const confirmer: DraftConfirmer = {
+    async confirm(eventId, draftId, sub, body) {
+      calls.push(["confirm", eventId, draftId, sub, body]); authorize(eventId, sub);
+      if (draftId !== saved.draftId) throw new ApiError(404, "NOT_FOUND", "Contract draft not found.");
+      const { version } = parseDraftVersion(body);
+      if (saved.status === "CONFIRMED") return { draft: saved, created: false };
+      if (saved.status !== "DRAFT") throw new ApiError(409, "DRAFT_NOT_EDITABLE", "Only an open draft can be confirmed.");
+      if (version !== saved.version) throw new ApiError(409, "DRAFT_CHANGED", "Reload this draft.");
+      prepareNewExpense(saved);
+      saved = { ...saved, status: "CONFIRMED", confirmedExpenseId: "9007199254740995",
+        confirmedAt: "2026-11-25 12:01:00", version: String(BigInt(saved.version) + 1n) };
+      return { draft: saved, created: true };
+    },
+  };
   const server = createAppServer({ contractDrafts: reader, contractDraftCreator: creator, contractDraftUpdater: updater,
-    contractDraftDiscarder: discarder, authenticate: async header => {
+    contractDraftDiscarder: discarder, contractDraftConfirmer: confirmer, authenticate: async header => {
     if (!header || !/^Bearer (owner|planner|outsider)$/.test(header)) throw new ApiError(401, "UNAUTHENTICATED", "Sign in to continue.");
     return header.slice(7);
   } });
@@ -344,4 +360,114 @@ test("contract discard preserves confirmed-state errors and hides unexpected sto
     assert.deepEqual(await response.json(), { error: { code: "INTERNAL_ERROR", message: "Unable to discard the contract draft." } });
     assert.ok(!JSON.stringify(logged.mock.calls).includes("private.sql"));
   }, new Error("private.sql: document and credential details"));
+});
+
+const readyFields = { description: "Reviewed DJ contract", categoryId: "4", vendorId: "5",
+  totalAmount: "600.10", currencyCode: "USD", depositAmount: "100.05", dueDate: "2026-12-20" };
+
+test("contract confirmation returns one expense link and retries the saved confirmation without duplicating it", async () => {
+  await withServer(async (base, calls) => {
+    const item = base + "/12/contract-drafts/" + draft.draftId;
+    assert.equal((await patch(item, { version: "1", ...readyFields })).status, 200);
+    const response = await post(item + "/confirm", { version: "2" }, "planner");
+    assert.equal(response.status, 201); assert.equal(response.headers.get("Cache-Control"), "no-store");
+    assert.equal(response.headers.get("Allow"), "POST, OPTIONS");
+    assert.equal(response.headers.get("Location"), "/events/12/expenses/9007199254740995");
+    const confirmed = await response.json();
+    assert.equal(confirmed.created, true); assert.equal(confirmed.data.status, "CONFIRMED");
+    assert.equal(confirmed.data.confirmedExpenseId, "9007199254740995"); assert.equal(confirmed.data.version, "3");
+    assert.equal(confirmed.data.depositAmount, "100.05");
+    assert.deepEqual(calls.find(call => call[0] === "confirm"), ["confirm", "12", draft.draftId, "planner", { version: "2" }]);
+    const repeat = await post(item + "/confirm", { version: "2" });
+    assert.equal(repeat.status, 200); assert.equal(repeat.headers.get("Location"), response.headers.get("Location"));
+    assert.deepEqual(await repeat.json(), { data: confirmed.data, created: false });
+    assert.deepEqual(await (await get(item)).json(), { data: confirmed.data });
+    assert.equal((await patch(item, { version: "3", description: "Late edit" })).status, 409);
+    assert.equal((await post(item + "/discard", { version: "3" })).status, 409);
+  });
+});
+
+test("contract confirmation requires a complete reviewed draft and returns errors for the draft's field names", async () => {
+  await withServer(async base => {
+    const item = base + "/12/contract-drafts/" + draft.draftId;
+    const incomplete = await post(item + "/confirm", { version: "1" });
+    assert.equal(incomplete.status, 422); assert.ok((await incomplete.json()).error.fields.currencyCode);
+    await patch(item, { version: "1", ...readyFields, totalAmount: null });
+    const noAmount = await post(item + "/confirm", { version: "2" });
+    assert.equal(noAmount.status, 422);
+    const error = (await noAmount.json()).error;
+    assert.ok(error.fields.totalAmount); assert.equal(error.fields.committedAmount, undefined);
+    assert.equal((await (await get(item)).json()).data.status, "DRAFT");
+    await patch(item, { version: "2", totalAmount: "600.10", saveAction: "UPDATE_EXPENSE", targetExpenseId: "10" });
+    const update = await post(item + "/confirm", { version: "3" });
+    assert.equal(update.status, 409); assert.equal((await update.json()).error.code, "SAVE_ACTION_UNAVAILABLE");
+  });
+});
+
+test("contract confirmation rejects malformed JSON, forged fields, query overrides and unsupported methods", async () => {
+  await withServer(async (base, calls) => {
+    const url = base + "/12/contract-drafts/" + draft.draftId + "/confirm";
+    const headers = { authorization: "Bearer owner", "content-type": "application/json" };
+    assert.equal((await fetch(url, { method: "POST", headers, body: "{" })).status, 400);
+    assert.equal((await fetch(url, { method: "POST", headers: { authorization: "Bearer owner" }, body: "{}" })).status, 415);
+    assert.equal((await post(url, { version: "1", padding: "x".repeat(65536) })).status, 413);
+    assert.equal((await post(url + "?eventId=13", { version: "1" })).status, 422);
+    for (const method of ["GET", "PATCH", "DELETE"]) {
+      const response = await fetch(url, { method, headers: { authorization: "Bearer owner" } });
+      assert.equal(response.status, 405); assert.equal(response.headers.get("Allow"), "POST, OPTIONS");
+    }
+    const preflight = await fetch(url, { method: "OPTIONS" });
+    assert.equal(preflight.status, 204); assert.equal(preflight.headers.get("Allow"), "POST, OPTIONS");
+    assert.equal(await preflight.text(), ""); assert.equal(calls.length, 0);
+    for (const body of [{}, { version: 1 }, { version: "1", totalAmount: "100.00" },
+      { version: "1", confirmedExpenseId: "100" }, { version: "1", reviewedBySub: "owner" }]) {
+      assert.equal((await post(url, body)).status, 422);
+    }
+    assert.equal((await get(url + "/extra")).status, 404);
+  });
+});
+
+test("contract confirmation requires verified identity and preserves event, document and validation errors", async () => {
+  await withServer(async (base, calls) => {
+    const suffix = "/contract-drafts/" + draft.draftId + "/confirm";
+    assert.equal((await fetch(base + "/12" + suffix, { method: "POST" })).status, 401);
+    assert.equal((await post(base + "/12" + suffix, { version: "1" }, "forged")).status, 401);
+    assert.equal(calls.length, 0);
+    assert.equal((await post(base + "/12" + suffix, { version: "1" }, "outsider")).status, 403);
+    assert.equal((await post(base + "/13" + suffix, { version: "1" })).status, 403);
+    assert.equal((await post(base + "/12/contract-drafts/999/confirm", { version: "1" })).status, 404);
+  });
+  for (const failure of [
+    new ApiError(409, "DOCUMENT_UNVERIFIED", "Reopen the document."),
+    new ApiError(422, "VALIDATION_ERROR", "Choose a category.", { categoryId: "Choose a category from this event." }),
+    new ApiError(503, "SERVICE_UNAVAILABLE", "Database temporarily unavailable."),
+  ]) await withServer(async base => {
+    const response = await post(base + "/12/contract-drafts/" + draft.draftId + "/confirm", { version: "1" });
+    assert.equal(response.status, failure.status);
+    const body = await response.json(); assert.equal(body.error.code, failure.code);
+    if (failure.fields) assert.deepEqual(body.error.fields, failure.fields);
+  }, failure);
+});
+
+test("contract confirmation cannot use a stale version or confirm a discarded draft", async () => {
+  await withServer(async base => {
+    const item = base + "/12/contract-drafts/" + draft.draftId;
+    await patch(item, { version: "1", ...readyFields });
+    const stale = await post(item + "/confirm", { version: "1" });
+    assert.equal(stale.status, 409); assert.equal((await stale.json()).error.code, "DRAFT_CHANGED");
+    assert.equal((await (await get(item)).json()).data.confirmedExpenseId, null);
+    await post(item + "/discard", { version: "2" });
+    const rejected = await post(item + "/confirm", { version: "3" });
+    assert.equal(rejected.status, 409); assert.equal((await rejected.json()).error.code, "DRAFT_NOT_EDITABLE");
+  });
+});
+
+test("contract confirmation never exposes private details when the transaction fails", async t => {
+  const logged = t.mock.method(console, "error", () => {});
+  await withServer(async base => {
+    const response = await post(base + "/12/contract-drafts/" + draft.draftId + "/confirm", { version: "1" });
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), { error: { code: "INTERNAL_ERROR", message: "Unable to confirm the contract draft." } });
+    assert.ok(!JSON.stringify(logged.mock.calls).includes("private.sql"));
+  }, new Error("private.sql: financial and document details"));
 });

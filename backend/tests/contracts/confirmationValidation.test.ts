@@ -27,7 +27,7 @@ test("confirmation requires complete reviewed fields and a real calendar date", 
     ["description", [null, "", " ", "x".repeat(256)]], ["categoryId", [null, "0", "01"]],
     ["totalAmount", [null, "-1.00", "0.001", "10000000000.00"]], ["dueDate", ["2026-02-29"]],
   ] as const) {
-    for (const value of values) assert.throws(() => prepareNewExpense({ ...reviewed, [field]: value }), invalid(field === "totalAmount" ? "committedAmount" : field));
+    for (const value of values) assert.throws(() => prepareNewExpense({ ...reviewed, [field]: value }), invalid(field));
   }
   assert.throws(() => prepareNewExpense({ ...reviewed, depositAmount: "600.11" }), invalid("depositAmount"));
 });
