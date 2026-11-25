@@ -1,5 +1,4 @@
 -- Feature 12: checklists and tasks.
--- Run once on RDS (CloudShell) and locally. Safe on an empty or populated tasks table.
 -- MySQL >= 8.0.16 is required for enforced CHECK constraints.
 --
 -- 1. template_tasks: the default checklist for each event type.
