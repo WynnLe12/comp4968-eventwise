@@ -127,8 +127,10 @@ export function Dashboard({ go }: { go: (p: Page) => void }) {
             />
             <StatCard
               label="Guest responses"
-              value={guests ? `${guests.rsvp.ACCEPTED} / ${guests.records}` : "--"}
-              detail={guests ? `Accepted · expected headcount ${guests.expectedHeadcount}` : loadingText || "Guest information unavailable"}
+              value={guests ? `${guests.rsvp.ACCEPTED} / ${guests.expectedHeadcount}` : "--"}
+              detail={guests
+                ? `People accepted · ${plural(guests.records, "guest")} + ${plural(guests.plusOnes, "plus-one")}`
+                : loadingText || "Guest information unavailable"}
               icon="users"
               tone="coral"
               onClick={() => go("guests")}

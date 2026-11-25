@@ -40,7 +40,8 @@ const dashboard = {
       { expenseId: "2", description: "Album", vendorName: null, categoryName: "Photography", dueDate: "2026-06-15", outstandingAmount: "400.00", isOverdue: false },
     ],
   },
-  guests: { records: 3, plusOnes: 1, expectedHeadcount: 4, rsvp: { UNINVITED: 0, PENDING: 1, ACCEPTED: 1, REJECTED: 1 } },
+  // 3 guests, one accepted with a plus-one: RSVP counts are people and add up to 4.
+  guests: { records: 3, plusOnes: 1, expectedHeadcount: 4, rsvp: { UNINVITED: 0, PENDING: 1, ACCEPTED: 2, REJECTED: 1 } },
   tasks: {
     total: 3, completed: 1, overdue: 1, percentComplete: 33,
     nextDue: [
@@ -83,7 +84,7 @@ const render = (next) => {
 test("stat cards show real budget, guest, task and payment numbers", () => {
   const html = render({ data: dashboard });
   assert.match(html, /Total budget\|\$5,000.00\|\$3,400.00 committed · \$1,200.00 paid/);
-  assert.match(html, /Guest responses\|1 \/ 3\|Accepted · expected headcount 4/);
+  assert.match(html, /Guest responses\|2 \/ 4\|People accepted · 3 guests \+ 1 plus-one/);
   assert.match(html, /Tasks complete\|33%\|1 of 3 tasks · 1 overdue/);
   // Overdue 800.00 + upcoming 400.00
   assert.match(html, /Upcoming payments\|\$1,200.00\|1 payment in 7 days · 1 overdue/);
