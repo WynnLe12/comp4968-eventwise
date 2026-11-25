@@ -8,7 +8,7 @@ import { EventRepository } from "../event-service/repositories/eventRepository";
 import { EventService } from "../event-service/services/eventService";
 import type { DeleteEventDependencies } from "../event-service/handlers/deleteEventHandler";
 
-function fixture(options: { role?: "OWNER" | "CO_PLANNER" | null; missing?: boolean; payments?: boolean; crossTask?: boolean; crossDraft?: boolean; failure?: "expenses" | "event" | "commit"; guestFailure?: boolean } = {}) {
+function fixture(options: { role?: "OWNER" | "CO_PLANNER" | null; missing?: boolean; payments?: boolean; crossTask?: boolean; crossDraft?: boolean; failure?: "drafts" | "expenses" | "event" | "commit"; guestFailure?: boolean } = {}) {
   const calls: string[] = [], queries: { sql: string; values?: unknown[] }[] = [];
   const connection = {
     beginTransaction: async () => { calls.push("begin"); },
@@ -19,6 +19,7 @@ function fixture(options: { role?: "OWNER" | "CO_PLANNER" | null; missing?: bool
       if (sql.includes("FROM tasks t")) return [options.crossTask ? [{ task_id: "1" }] : []];
       if (sql.includes("FROM draft_budget_items b")) return [options.crossDraft ? [{ draft_id: "1" }] : []];
       if (sql.startsWith("SELECT")) return [[]];
+      if (sql.startsWith("DELETE FROM draft_budget_items")) { calls.push("drafts"); if (options.failure === "drafts") throw new Error("private SQL"); return [{ affectedRows: 1 }]; }
       if (sql.startsWith("DELETE FROM expenses")) { calls.push("expenses"); if (options.failure === "expenses") throw new Error("private SQL"); return [{ affectedRows: 1 }]; }
       if (sql.startsWith("DELETE FROM events")) { calls.push("event"); if (options.failure === "event") throw new Error("private SQL"); return [{ affectedRows: 1 }]; }
       assert.fail(`Unexpected query: ${sql}`);
@@ -51,14 +52,14 @@ test("DELETE requires a verified access token and never accepts caller-supplied 
   });
 });
 
-test("OWNER deletion uses bound exact BIGINT IDs and removes expenses before cascading the event", async () => {
+test("OWNER deletion uses bound exact BIGINT IDs and removes drafts/jobs and expenses before cascading the event", async () => {
   const f = fixture();
   await withServer({ service: f.service, verifyToken: async () => "owner" }, async (url) => {
     const response = await remove(`${url}/18446744073709551615`);
     assert.equal(response.status, 204); assert.equal(await response.text(), "");
     for (const id of ["0", "-1", "1.5", "18446744073709551616", "1%20OR%201=1"]) assert.equal((await remove(`${url}/${id}`)).status, 400);
   });
-  assert.deepEqual(f.calls, ["begin", "expenses", "event", "commit", "release", "guests:18446744073709551615"]);
+  assert.deepEqual(f.calls, ["begin", "drafts", "expenses", "event", "commit", "release", "guests:18446744073709551615"]);
   assert.match(f.queries[0].sql, /FOR UPDATE$/);
   for (const query of f.queries) assert.ok(query.values?.includes("18446744073709551615"));
   assert.ok(!f.queries.some(({ sql }) => /DELETE FROM (event_templates|template_budget_categories)/.test(sql)));
@@ -88,8 +89,8 @@ test("payment history and cross-event task/document references return safe 409 w
   }
 });
 
-test("expense deletion, event deletion, and commit failures roll back and return generic 500", async () => {
-  for (const failure of ["expenses", "event", "commit"] as const) {
+test("draft deletion, expense deletion, event deletion, and commit failures roll back and return generic 500", async () => {
+  for (const failure of ["drafts", "expenses", "event", "commit"] as const) {
     const f = fixture({ failure });
     await withServer({ service: f.service, verifyToken: async () => "owner" }, async (url) => {
       const response = await remove(`${url}/1`);
@@ -106,6 +107,6 @@ test("guest cleanup failure after the MySQL commit is logged and still returns 2
   await withServer({ service: f.service, verifyToken: async () => "owner" }, async (url) => {
     assert.equal((await remove(`${url}/7`)).status, 204);
   });
-  assert.deepEqual(f.calls, ["begin", "expenses", "event", "commit", "release", "guests:7"]);
+  assert.deepEqual(f.calls, ["begin", "drafts", "expenses", "event", "commit", "release", "guests:7"]);
   assert.equal(logged.mock.callCount(), 1);
 });

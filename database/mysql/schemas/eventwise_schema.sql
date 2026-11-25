@@ -189,7 +189,10 @@ CREATE TABLE event_documents (
  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
  UNIQUE KEY uq_document_s3_key (s3_object_key),
  KEY idx_document_event (event_id),
- CONSTRAINT fk_document_event FOREIGN KEY (event_id) REFERENCES events(event_id) ON DELETE CASCADE
+ CONSTRAINT fk_document_event FOREIGN KEY (event_id) REFERENCES events(event_id) ON DELETE CASCADE,
+ content_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+ KEY idx_document_content (event_id, content_sha256),
+ CONSTRAINT chk_document_content_hash CHECK (content_sha256 IS NULL OR REGEXP_LIKE(content_sha256, '^[0-9a-f]{64}$', 'c'))
 );
 CREATE TABLE draft_budget_items (
  draft_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -207,7 +210,67 @@ CREATE TABLE draft_budget_items (
  CONSTRAINT fk_draft_event FOREIGN KEY (event_id) REFERENCES events(event_id) ON DELETE CASCADE,
  CONSTRAINT fk_draft_document FOREIGN KEY (document_id) REFERENCES event_documents(document_id) ON DELETE SET NULL,
  CONSTRAINT chk_draft_total CHECK (total_amount IS NULL OR total_amount >= 0),
- CONSTRAINT chk_draft_deposit CHECK (deposit_amount IS NULL OR deposit_amount >= 0)
+ CONSTRAINT chk_draft_deposit CHECK (deposit_amount IS NULL OR deposit_amount >= 0),
+ description VARCHAR(255) NULL,
+ category_id BIGINT UNSIGNED NULL,
+ vendor_id BIGINT UNSIGNED NULL,
+ save_action ENUM('CREATE_EXPENSE','UPDATE_EXPENSE') NOT NULL DEFAULT 'CREATE_EXPENSE',
+ target_expense_id BIGINT UNSIGNED NULL,
+ -- Audit ID intentionally survives expense deletion; confirmed drafts cannot be reused.
+ confirmed_expense_id BIGINT UNSIGNED NULL,
+ content_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+ currency_code VARCHAR(3) CHARACTER SET ascii COLLATE ascii_bin NULL,
+ version BIGINT UNSIGNED NOT NULL DEFAULT 1,
+ created_by_sub VARCHAR(128) NULL,
+ updated_by_sub VARCHAR(128) NULL,
+ confirmed_at DATETIME(6) NULL,
+ updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+ UNIQUE KEY uq_draft_event_pair (draft_id, event_id),
+ -- Rejected drafts retain these claims; reopen the draft rather than creating another.
+ UNIQUE KEY uq_draft_document (event_id, document_id),
+ UNIQUE KEY uq_draft_content (event_id, content_sha256),
+ KEY idx_draft_review (event_id, status, updated_at),
+ -- Draft selections may disappear before review. Confirmation must revalidate
+ -- category, vendor and target-expense membership in the draft's event.
+ CONSTRAINT fk_draft_category FOREIGN KEY (category_id) REFERENCES budget_categories(category_id) ON DELETE SET NULL,
+ CONSTRAINT fk_draft_vendor FOREIGN KEY (vendor_id) REFERENCES vendors(vendor_id) ON DELETE SET NULL,
+ CONSTRAINT fk_draft_target_expense FOREIGN KEY (target_expense_id) REFERENCES expenses(expense_id) ON DELETE SET NULL,
+ CONSTRAINT chk_draft_content_hash CHECK (content_sha256 IS NULL OR REGEXP_LIKE(content_sha256, '^[0-9a-f]{64}$', 'c')),
+ CONSTRAINT chk_draft_currency CHECK (currency_code IS NULL OR REGEXP_LIKE(currency_code, '^[A-Z]{3}$', 'c')),
+ CONSTRAINT chk_draft_version CHECK (version >= 1)
+);
+
+-- One row per extraction attempt. Manual entry does not require an extraction job.
+CREATE TABLE contract_extraction_jobs (
+ job_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ request_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ event_id BIGINT UNSIGNED NOT NULL,
+ draft_id BIGINT UNSIGNED NOT NULL,
+ -- The worker may apply suggestions only if this reviewed version is still current.
+ draft_version BIGINT UNSIGNED NOT NULL,
+ requested_by_sub VARCHAR(128) NOT NULL,
+ status ENUM('QUEUED','PROCESSING','SUCCEEDED','FAILED','CANCELLED') NOT NULL DEFAULT 'QUEUED',
+ provider VARCHAR(64) NULL,
+ provider_job_id VARCHAR(255) NULL,
+ workflow_execution_arn VARCHAR(2048) CHARACTER SET ascii COLLATE ascii_bin NULL,
+ result_json JSON NULL,
+ -- Persist only sanitized errors, never credentials or the contract text.
+ error_code VARCHAR(64) NULL,
+ error_message VARCHAR(500) NULL,
+ started_at DATETIME(6) NULL,
+ completed_at DATETIME(6) NULL,
+ created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+ updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+ -- A virtual key allows retries after completion, with only one active job per draft.
+ active_draft_id BIGINT UNSIGNED GENERATED ALWAYS AS
+   (CASE WHEN status IN ('QUEUED','PROCESSING') THEN draft_id ELSE NULL END) VIRTUAL,
+ UNIQUE KEY uq_extraction_request (request_id),
+ UNIQUE KEY uq_extraction_active_draft (active_draft_id),
+ KEY idx_extraction_draft (draft_id, event_id),
+ KEY idx_extraction_event (event_id, status, created_at),
+ CONSTRAINT fk_extraction_draft_same_event FOREIGN KEY (draft_id, event_id)
+   REFERENCES draft_budget_items(draft_id, event_id) ON DELETE CASCADE,
+ CONSTRAINT chk_extraction_draft_version CHECK (draft_version >= 1)
 );
 
 -- Initial template seeds. Budget allocation percentages are intentionally not seeded:
