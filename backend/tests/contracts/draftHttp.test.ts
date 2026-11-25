@@ -5,8 +5,8 @@ import type { AddressInfo } from "node:net";
 import { ApiError } from "../../expense-service/errors";
 import type { Draft, DraftConfirmer, DraftCreator, DraftDiscarder, DraftReader, DraftUpdater } from "../../contract-service/types";
 import { createAppServer } from "../../server";
-import { prepareNewExpense } from "../../contract-service/services/confirmationValidation";
-import { parseDraftPatch, parseDraftVersion } from "../../contract-service/services/draftValidation";
+import { prepareExistingExpense, prepareNewExpense } from "../../contract-service/services/confirmationValidation";
+import { parseDraftConfirmation, parseDraftPatch, parseDraftVersion } from "../../contract-service/services/draftValidation";
 
 const draft: Draft = {
   draftId: "9007199254740993", eventId: "12", documentId: "23",
@@ -71,14 +71,21 @@ async function withServer(run: (url: string, calls: unknown[][]) => Promise<void
     async confirm(eventId, draftId, sub, body) {
       calls.push(["confirm", eventId, draftId, sub, body]); authorize(eventId, sub);
       if (draftId !== saved.draftId) throw new ApiError(404, "NOT_FOUND", "Contract draft not found.");
-      const { version } = parseDraftVersion(body);
+      const { version, expectedExpense } = parseDraftConfirmation(body);
       if (saved.status === "CONFIRMED") return { draft: saved, created: false };
       if (saved.status !== "DRAFT") throw new ApiError(409, "DRAFT_NOT_EDITABLE", "Only an open draft can be confirmed.");
       if (version !== saved.version) throw new ApiError(409, "DRAFT_CHANGED", "Reload this draft.");
-      prepareNewExpense(saved);
-      saved = { ...saved, status: "CONFIRMED", confirmedExpenseId: "9007199254740995",
+      const updating = saved.saveAction === "UPDATE_EXPENSE";
+      if (updating) {
+        prepareExistingExpense(saved);
+        if (!expectedExpense) throw new ApiError(422, "VALIDATION_ERROR", "Review the selected expense.", { expectedExpense: "Reload and review the selected expense." });
+      } else {
+        prepareNewExpense(saved);
+        if (expectedExpense) throw new ApiError(422, "VALIDATION_ERROR", "Choose the update action.", { expectedExpense: "Only include a snapshot when updating." });
+      }
+      saved = { ...saved, status: "CONFIRMED", confirmedExpenseId: updating ? saved.targetExpenseId : "9007199254740995",
         confirmedAt: "2026-11-25 12:01:00", version: String(BigInt(saved.version) + 1n) };
-      return { draft: saved, created: true };
+      return { draft: saved, created: !updating };
     },
   };
   const server = createAppServer({ contractDrafts: reader, contractDraftCreator: creator, contractDraftUpdater: updater,
@@ -400,7 +407,7 @@ test("contract confirmation requires a complete reviewed draft and returns error
     assert.equal((await (await get(item)).json()).data.status, "DRAFT");
     await patch(item, { version: "2", totalAmount: "600.10", saveAction: "UPDATE_EXPENSE", targetExpenseId: "10" });
     const update = await post(item + "/confirm", { version: "3" });
-    assert.equal(update.status, 409); assert.equal((await update.json()).error.code, "SAVE_ACTION_UNAVAILABLE");
+    assert.equal(update.status, 422); assert.ok((await update.json()).error.fields.expectedExpense);
   });
 });
 
@@ -439,6 +446,8 @@ test("contract confirmation requires verified identity and preserves event, docu
   });
   for (const failure of [
     new ApiError(409, "DOCUMENT_UNVERIFIED", "Reopen the document."),
+    new ApiError(409, "EXPENSE_CHANGED", "The selected expense changed. Reload and review it."),
+    new ApiError(409, "AMOUNT_BELOW_PAID", "The total is below the amount paid.", { totalAmount: "Keep the total at or above net paid." }),
     new ApiError(422, "VALIDATION_ERROR", "Choose a category.", { categoryId: "Choose a category from this event." }),
     new ApiError(503, "SERVICE_UNAVAILABLE", "Database temporarily unavailable."),
   ]) await withServer(async base => {
@@ -470,4 +479,43 @@ test("contract confirmation never exposes private details when the transaction f
     assert.deepEqual(await response.json(), { error: { code: "INTERNAL_ERROR", message: "Unable to confirm the contract draft." } });
     assert.ok(!JSON.stringify(logged.mock.calls).includes("private.sql"));
   }, new Error("private.sql: financial and document details"));
+});
+
+const expectedExistingExpense = { categoryId: "4", vendorId: "5", description: "Original expense",
+  committedAmount: "500.00", dueDate: null };
+
+test("contract update confirmation returns the selected expense link without creating a second expense", async () => {
+  await withServer(async (base, calls) => {
+    const item = base + "/12/contract-drafts/" + draft.draftId;
+    const targetExpenseId = "9007199254740997";
+    await patch(item, { version: "1", ...readyFields, saveAction: "UPDATE_EXPENSE", targetExpenseId });
+    const body = { version: "2", expectedExpense: expectedExistingExpense };
+    const response = await post(item + "/confirm", body, "planner");
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("Location"), "/events/12/expenses/" + targetExpenseId);
+    assert.equal(response.headers.get("Cache-Control"), "no-store");
+    const confirmed = await response.json();
+    assert.equal(confirmed.created, false); assert.equal(confirmed.data.status, "CONFIRMED");
+    assert.equal(confirmed.data.confirmedExpenseId, targetExpenseId); assert.equal(confirmed.data.version, "3");
+    assert.equal(confirmed.data.saveAction, "UPDATE_EXPENSE");
+    assert.deepEqual(calls.find(call => call[0] === "confirm"), ["confirm", "12", draft.draftId, "planner", body]);
+    const retry = await post(item + "/confirm", body);
+    assert.equal(retry.status, 200); assert.deepEqual(await retry.json(), confirmed);
+    assert.deepEqual(await (await get(item)).json(), { data: confirmed.data });
+  });
+});
+
+test("contract update confirmation rejects incomplete review snapshots and caller-supplied audit or payment values", async () => {
+  await withServer(async base => {
+    const item = base + "/12/contract-drafts/" + draft.draftId;
+    await patch(item, { version: "1", ...readyFields, saveAction: "UPDATE_EXPENSE", targetExpenseId: "10" });
+    for (const expectedExpense of [null, {}, { ...expectedExistingExpense, paidTotal: "0.00" },
+      { ...expectedExistingExpense, committedAmount: 500 }, { ...expectedExistingExpense, eventId: "13" }]) {
+      const response = await post(item + "/confirm", { version: "2", expectedExpense });
+      assert.equal(response.status, 422); assert.ok((await response.json()).error.fields.expectedExpense);
+    }
+    const forged = await post(item + "/confirm", { version: "2", expectedExpense: expectedExistingExpense, reviewedBySub: "owner" });
+    assert.equal(forged.status, 422);
+    assert.equal((await (await get(item)).json()).data.status, "DRAFT");
+  });
 });

@@ -41,7 +41,7 @@ test("confirmation cannot silently convert currency or discard an unlinked vendo
 
 test("new-expense confirmation never treats an update selection as a request for a second expense", () => {
   assert.throws(() => prepareNewExpense({ ...reviewed, saveAction: "UPDATE_EXPENSE", targetExpenseId: "10" }),
-    error => error instanceof ApiError && error.code === "SAVE_ACTION_UNAVAILABLE");
+    invalid("saveAction"));
   assert.throws(() => prepareNewExpense({ ...reviewed, targetExpenseId: "10" }), invalid("targetExpenseId"));
 });
 

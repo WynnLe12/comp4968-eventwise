@@ -6,7 +6,7 @@ import type { DraftFields } from "../types";
 /** Match the existing USD expense ledger; never infer a conversion from a contract. */
 export function prepareNewExpense(draft: DraftFields): ExpenseInput {
   if (draft.saveAction !== "CREATE_EXPENSE") {
-    throw new ApiError(409, "SAVE_ACTION_UNAVAILABLE", "Updating an existing expense is not available yet.");
+    invalid("saveAction", "Choose Create new expense.");
   }
   if (draft.targetExpenseId !== null) invalid("targetExpenseId", "Clear the existing expense selection before creating a new expense.");
   return prepareExpenseValues(draft);
