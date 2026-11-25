@@ -71,19 +71,20 @@ async function withServer(run: (url: string, calls: unknown[][]) => Promise<void
     async confirm(eventId, draftId, sub, body) {
       calls.push(["confirm", eventId, draftId, sub, body]); authorize(eventId, sub);
       if (draftId !== saved.draftId) throw new ApiError(404, "NOT_FOUND", "Contract draft not found.");
-      const { version, expectedExpense } = parseDraftConfirmation(body);
+      const { version, expectedExpense, createVendor = false } = parseDraftConfirmation(body);
       if (saved.status === "CONFIRMED") return { draft: saved, created: false };
       if (saved.status !== "DRAFT") throw new ApiError(409, "DRAFT_NOT_EDITABLE", "Only an open draft can be confirmed.");
       if (version !== saved.version) throw new ApiError(409, "DRAFT_CHANGED", "Reload this draft.");
       const updating = saved.saveAction === "UPDATE_EXPENSE";
       if (updating) {
-        prepareExistingExpense(saved);
+        prepareExistingExpense(saved, createVendor);
         if (!expectedExpense) throw new ApiError(422, "VALIDATION_ERROR", "Review the selected expense.", { expectedExpense: "Reload and review the selected expense." });
       } else {
-        prepareNewExpense(saved);
+        prepareNewExpense(saved, createVendor);
         if (expectedExpense) throw new ApiError(422, "VALIDATION_ERROR", "Choose the update action.", { expectedExpense: "Only include a snapshot when updating." });
       }
-      saved = { ...saved, status: "CONFIRMED", confirmedExpenseId: updating ? saved.targetExpenseId : "9007199254740995",
+      saved = { ...saved, vendorId: createVendor ? "9007199254740999" : saved.vendorId,
+        status: "CONFIRMED", confirmedExpenseId: updating ? saved.targetExpenseId : "9007199254740995",
         confirmedAt: "2026-11-25 12:01:00", version: String(BigInt(saved.version) + 1n) };
       return { draft: saved, created: !updating };
     },
@@ -447,6 +448,7 @@ test("contract confirmation requires verified identity and preserves event, docu
   for (const failure of [
     new ApiError(409, "DOCUMENT_UNVERIFIED", "Reopen the document."),
     new ApiError(409, "EXPENSE_CHANGED", "The selected expense changed. Reload and review it."),
+    new ApiError(409, "VENDOR_ALREADY_EXISTS", "Select the existing event vendor.", { vendorName: "Choose the existing vendor." }),
     new ApiError(409, "AMOUNT_BELOW_PAID", "The total is below the amount paid.", { totalAmount: "Keep the total at or above net paid." }),
     new ApiError(422, "VALIDATION_ERROR", "Choose a category.", { categoryId: "Choose a category from this event." }),
     new ApiError(503, "SERVICE_UNAVAILABLE", "Database temporarily unavailable."),
@@ -516,6 +518,49 @@ test("contract update confirmation rejects incomplete review snapshots and calle
     }
     const forged = await post(item + "/confirm", { version: "2", expectedExpense: expectedExistingExpense, reviewedBySub: "owner" });
     assert.equal(forged.status, 422);
+    assert.equal((await (await get(item)).json()).data.status, "DRAFT");
+  });
+});
+
+test("contract confirmation creates a vendor only when explicitly requested and returns its saved draft link", async () => {
+  for (const saveAction of ["CREATE_EXPENSE", "UPDATE_EXPENSE"]) await withServer(async (base, calls) => {
+    const item = base + "/12/contract-drafts/" + draft.draftId;
+    const updating = saveAction === "UPDATE_EXPENSE";
+    await patch(item, { version: "1", ...readyFields, vendorId: null, vendorName: "New DJ",
+      saveAction, targetExpenseId: updating ? "10" : null });
+    const expectedExpense = updating ? { ...expectedExistingExpense, vendorId: null } : undefined;
+    const body = { version: "2", ...(expectedExpense ? { expectedExpense } : {}) };
+    const implicit = await post(item + "/confirm", body);
+    assert.equal(implicit.status, 422); assert.ok((await implicit.json()).error.fields.vendorId);
+    const response = await post(item + "/confirm", { ...body, createVendor: true }, "planner");
+    assert.equal(response.status, updating ? 200 : 201);
+    const confirmed = await response.json();
+    assert.equal(confirmed.data.vendorId, "9007199254740999"); assert.equal(confirmed.data.status, "CONFIRMED");
+    assert.equal(confirmed.data.version, "3"); assert.equal(confirmed.created, !updating);
+    const confirmCall = calls.filter(call => call[0] === "confirm").at(-1);
+    assert.deepEqual(confirmCall, ["confirm", "12", draft.draftId, "planner", { ...body, createVendor: true }]);
+    const retry = await post(item + "/confirm", { ...body, createVendor: true });
+    assert.equal(retry.status, 200);
+    assert.deepEqual(await retry.json(), { data: confirmed.data, created: false });
+    assert.deepEqual(await (await get(item)).json(), { data: confirmed.data });
+  });
+});
+
+test("contract new-vendor confirmation rejects nonboolean intent, conflicting selections and unreviewed names", async () => {
+  await withServer(async base => {
+    const item = base + "/12/contract-drafts/" + draft.draftId;
+    for (const createVendor of ["true", 1, null]) {
+      const response = await post(item + "/confirm", { version: "1", createVendor });
+      assert.equal(response.status, 422); assert.ok((await response.json()).error.fields.createVendor);
+    }
+    await patch(item, { version: "1", ...readyFields, vendorName: "New DJ" });
+    const conflicting = await post(item + "/confirm", { version: "2", createVendor: true });
+    assert.equal(conflicting.status, 422); assert.ok((await conflicting.json()).error.fields.vendorId);
+    await patch(item, { version: "2", vendorId: null, vendorName: null });
+    const missingName = await post(item + "/confirm", { version: "3", createVendor: true });
+    assert.equal(missingName.status, 422); assert.ok((await missingName.json()).error.fields.vendorName);
+    const forgedName = await post(item + "/confirm", { version: "3", createVendor: true, vendorName: "Not reviewed" });
+    assert.equal(forgedName.status, 422);
     assert.equal((await (await get(item)).json()).data.status, "DRAFT");
   });
 });
