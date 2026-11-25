@@ -4,7 +4,12 @@ import { MySqlExpenseRepository } from "./expense-service/repositories/mysql-exp
 import { expenseHttpHandler } from "./expense-service/handlers/http";
 import { createCognitoAuthenticator, type Authenticate } from "./shared/auth/cognito";
 
+import type { DraftReader } from "./contract-service/types";
+import { MySqlDraftReader } from "./contract-service/repositories/draftReader";
+import { contractDraftHttpHandler } from "./contract-service/handlers/draftHttp";
+
 export interface AppDependencies {
+  contractDrafts?: DraftReader;
   expenses?: ExpenseService;
   authenticate?: Authenticate;
 }
@@ -58,6 +63,11 @@ export function createAppServer(
   const handleDeleteEvent = deleteEventHandler(deleteDependencies);
   const expenses = expenseHttpHandler(
     eventDependencies.expenses ?? new ExpenseService(new MySqlExpenseRepository()),
+    eventDependencies.authenticate ?? createCognitoAuthenticator(),
+  );
+
+  const contractDrafts = contractDraftHttpHandler(
+    eventDependencies.contractDrafts ?? new MySqlDraftReader(),
     eventDependencies.authenticate ?? createCognitoAuthenticator(),
   );
 
@@ -241,7 +251,7 @@ export function createAppServer(
     // Feature 11: Event Templates (Lulu)
     void handleTemplates(request.method, path, response)
       .then(async (handled) => {
-        if (!handled && !await expenses(request, response)) {
+        if (!handled && !await contractDrafts(request, response) && !await expenses(request, response)) {
           sendJson<ErrorResponse>(response, 404, {
             error: "Not found",
           });
