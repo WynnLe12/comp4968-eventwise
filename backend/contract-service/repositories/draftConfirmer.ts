@@ -1,9 +1,10 @@
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { ApiError, invalid } from "../../expense-service/errors";
-import { parseId } from "../../expense-service/services/validation";
+import { cents, parseId } from "../../expense-service/services/validation";
 import { getDatabasePool } from "../../shared/db/pool";
-import { prepareNewExpense } from "../services/confirmationValidation";
-import { parseDraftVersion } from "../services/draftValidation";
+import { prepareExistingExpense, prepareNewExpense } from "../services/confirmationValidation";
+import { parseDraftConfirmation } from "../services/draftValidation";
+import type { ExpenseInput } from "../../expense-service/types";
 import type { Draft, DraftConfirmation, DraftConfirmer } from "../types";
 import { selectDraft } from "./draftReader";
 import { withContractEvent } from "./eventTransaction";
@@ -19,7 +20,7 @@ export class MySqlDraftConfirmer implements DraftConfirmer {
     if (typeof sub !== "string" || !sub || sub.trim() !== sub || sub.length > 128) {
       throw new ApiError(401, "UNAUTHENTICATED", "Sign in to continue.");
     }
-    const { version } = parseDraftVersion(body);
+    const { version, expectedExpense } = parseDraftConfirmation(body);
     // Serialize confirmations with other contract mutations before taking any child locks.
     return withContractEvent(this.connect, eventId, sub, true, async connection => {
       const load = async () => {
@@ -40,7 +41,34 @@ export class MySqlDraftConfirmer implements DraftConfirmer {
       };
       editable(before);
       if (before.confirmedExpenseId) throw new ApiError(409, "CONFIRMATION_UNAVAILABLE", "Review this draft's existing expense history before continuing.");
-      const input = prepareNewExpense(before);
+      const updating = before.saveAction === "UPDATE_EXPENSE";
+      const input = updating ? prepareExistingExpense(before) : prepareNewExpense(before);
+      if (updating && !expectedExpense) invalid("expectedExpense", "Reload and review the selected expense before confirming.");
+      if (!updating && expectedExpense) invalid("expectedExpense", "An expense snapshot is only used when updating an existing expense.");
+      if (updating) {
+        // Payments, ordinary expense edits and Update both all lock this parent first.
+        const [targets] = await connection.execute<(RowDataPacket & ExpenseInput)[]>(
+          "SELECT CAST(category_id AS CHAR) AS categoryId, CAST(vendor_id AS CHAR) AS vendorId, " +
+          "description, committed_amount AS committedAmount, due_date AS dueDate " +
+          "FROM expenses WHERE event_id = ? AND expense_id = ? FOR UPDATE", [eventId, before.targetExpenseId]);
+        const target = targets[0];
+        if (!target) invalid("targetExpenseId", "Choose an expense from this event.");
+        if (Object.entries(expectedExpense!).some(([field, value]) => target[field] !== value)) {
+          throw new ApiError(409, "EXPENSE_CHANGED", "The selected expense changed. Reload and review it before confirming.");
+        }
+        if (target.vendorId !== null && target.vendorId !== input.vendorId) {
+          invalid("vendorId", "Keep the vendor linked to the selected expense.");
+        }
+        const [[payments]] = await connection.execute<RowDataPacket[]>(
+          "SELECT COALESCE(SUM(CASE WHEN payment_type = 'REFUND' THEN -amount ELSE amount END), 0.00) AS paid " +
+          "FROM expense_payments WHERE expense_id = ?", [before.targetExpenseId]);
+        const paid = cents(String(payments.paid));
+        if (paid < 0n || paid > cents(target.committedAmount)) throw new ApiError(500, "INTERNAL_ERROR", "Invalid stored payment totals.");
+        if (cents(input.committedAmount) < paid) {
+          throw new ApiError(409, "AMOUNT_BELOW_PAID", "Contract total cannot be less than the amount already paid.",
+            { totalAmount: "The contract total cannot be less than the amount already paid." });
+        }
+      }
       if (!before.documentId) throw documentUnavailable();
 
       // Referenced parents precede the draft lock, matching deletion and draft editing.
@@ -71,12 +99,21 @@ export class MySqlDraftConfirmer implements DraftConfirmer {
       if (current.fingerprint !== fingerprint) throw documentUnavailable();
       if (version === "18446744073709551615") throw new ApiError(409, "DRAFT_VERSION_LIMIT", "This draft cannot be changed further.");
 
-      await connection.execute(
-        "INSERT INTO expenses (event_id, category_id, vendor_id, description, committed_amount, due_date) VALUES (?, ?, ?, ?, ?, ?)",
-        [eventId, input.categoryId, input.vendorId, input.description, input.committedAmount, input.dueDate]);
-      // mysql2's numeric insertId cannot represent all unsigned BIGINT identifiers.
-      const [[ids]] = await connection.query<RowDataPacket[]>("SELECT CAST(LAST_INSERT_ID() AS CHAR) AS id");
-      const expenseId = String(ids.id);
+      let expenseId: string;
+      if (updating) {
+        expenseId = before.targetExpenseId!;
+        await connection.execute(
+          "UPDATE expenses SET category_id = ?, vendor_id = ?, description = ?, committed_amount = ?, due_date = ? " +
+          "WHERE event_id = ? AND expense_id = ?",
+          [input.categoryId, input.vendorId, input.description, input.committedAmount, input.dueDate, eventId, expenseId]);
+      } else {
+        await connection.execute(
+          "INSERT INTO expenses (event_id, category_id, vendor_id, description, committed_amount, due_date) VALUES (?, ?, ?, ?, ?, ?)",
+          [eventId, input.categoryId, input.vendorId, input.description, input.committedAmount, input.dueDate]);
+        // mysql2's numeric insertId cannot represent all unsigned BIGINT identifiers.
+        const [[ids]] = await connection.query<RowDataPacket[]>("SELECT CAST(LAST_INSERT_ID() AS CHAR) AS id");
+        expenseId = String(ids.id);
+      }
       const [saved] = await connection.execute<ResultSetHeader>(
         "UPDATE draft_budget_items SET status = 'CONFIRMED', confirmed_expense_id = ?, reviewed_by_sub = ?, " +
         "updated_by_sub = ?, confirmed_at = UTC_TIMESTAMP(6), version = version + 1 " +
@@ -87,7 +124,7 @@ export class MySqlDraftConfirmer implements DraftConfirmer {
       await connection.execute(
         "UPDATE contract_extraction_jobs SET status = 'CANCELLED', completed_at = UTC_TIMESTAMP(6) " +
         "WHERE event_id = ? AND draft_id = ? AND status IN ('QUEUED','PROCESSING')", [eventId, draftId]);
-      return { draft: await load(), created: true };
+      return { draft: await load(), created: !updating };
     });
   }
 }

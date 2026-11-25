@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { after, test } from "node:test";
 import type { RowDataPacket } from "mysql2/promise";
 import { ApiError } from "../../expense-service/errors";
+import { cents } from "../../expense-service/services/validation";
 import { ExpenseService } from "../../expense-service/services/expenses";
 import { MySqlExpenseRepository } from "../../expense-service/repositories/mysql-expenses";
 import { MySqlDraftConfirmer } from "../../contract-service/repositories/draftConfirmer";
@@ -147,8 +148,9 @@ test("MySQL confirmation rejects unverified callers, wrong events, revoked acces
   });
 });
 
-test("MySQL failed confirmation rolls back the new expense, review audit and extraction cancellation together", integration, async () => {
-  for (const failure of ["review", "cancel", "readback"]) await fixture(async f => {
+test("MySQL failed confirmation rolls back new or updated expenses, review audit and extraction cancellation together", integration, async () => {
+  for (const mode of ["create", "update"]) for (const failure of ["review", "cancel", "readback"]) await fixture(async f => {
+    const body = mode === "update" ? await reviewExisting(f) : { version: "1" };
     let reads = 0;
     const connect = async () => {
       const connection = await getDatabasePool().getConnection();
@@ -165,7 +167,7 @@ test("MySQL failed confirmation rolls back the new expense, review audit and ext
       } });
     };
     const before = await records(["draft_budget_items", "expenses", "expense_payments", "vendors", "contract_extraction_jobs"]);
-    await assert.rejects(new MySqlDraftConfirmer(connect).confirm(f.a, f.draft, f.owner, { version: "1" }), /Injected confirmation failure/);
+    await assert.rejects(new MySqlDraftConfirmer(connect).confirm(f.a, f.draft, f.owner, body), /Injected confirmation failure/);
     assert.deepEqual(await records(["draft_budget_items", "expenses", "expense_payments", "vendors", "contract_extraction_jobs"]), before);
   });
 });
@@ -200,5 +202,148 @@ test("MySQL confirmation validates version-only requests and keeps large version
     assert.equal(result.draft.version, "9007199254740994");
     assert.equal(result.draft.confirmedExpenseId, "9007199254740993");
     assert.equal((await expenses.get(f.a, result.draft.confirmedExpenseId!, f.owner)).committedAmount, "600.10");
+  });
+});
+
+async function reviewExisting(f: Fixture, changes: Record<string, unknown> = {}) {
+  const current = await expenses.get(f.a, f.expense, f.owner);
+  const expectedExpense = { categoryId: current.categoryId, vendorId: current.vendorId,
+    description: current.description, committedAmount: current.committedAmount, dueDate: current.dueDate };
+  const reviewed = await updater.update(f.a, f.draft, f.owner, { version: "1", saveAction: "UPDATE_EXPENSE",
+    targetExpenseId: f.expense, depositAmount: null, ...changes });
+  return { version: reviewed.version, expectedExpense };
+}
+
+test("MySQL reviewed contract updates the selected expense and preserves its payments, identity and vendor record", integration, async () => {
+  for (const totalAmount of ["600.10", "100.00"]) await fixture(async f => {
+    const body = await reviewExisting(f, { totalAmount, dueDate: null });
+    const original = await expenses.get(f.a, f.expense, f.owner);
+    const before = await records(["expense_payments", "vendors", "event_documents"]);
+    const result = await confirmer.confirm(f.a, f.draft, f.planner, body);
+    assert.equal(result.created, false); assert.equal(result.draft.status, "CONFIRMED");
+    assert.equal(result.draft.confirmedExpenseId, f.expense); assert.equal(result.draft.version, "3");
+    const saved = await expenses.get(f.a, f.expense, f.owner);
+    assert.equal(saved.expenseId, original.expenseId); assert.equal(saved.createdAt, original.createdAt);
+    assert.equal(saved.committedAmount, totalAmount); assert.equal(saved.paidTotal, "100.00");
+    assert.equal(saved.description, "DJ contract"); assert.equal(saved.dueDate, null); assert.equal(saved.vendorId, f.vendor);
+    assert.equal(saved.outstandingAmount, totalAmount === "600.10" ? "500.10" : "0.00");
+    assert.deepEqual(await records(["expense_payments", "vendors", "event_documents"]), before);
+    assert.equal((await expenses.list(f.a, f.owner, { limit: 10, offset: 0 })).total, 1);
+  });
+});
+
+test("MySQL repeat update confirmations never insert a second expense or overwrite later expense edits", integration, async () => {
+  await fixture(async f => {
+    const body = await reviewExisting(f);
+    const results = await Promise.all(Array.from({ length: 6 }, (_, i) =>
+      confirmer.confirm(f.a, f.draft, i % 2 ? f.owner : f.planner, body)));
+    assert.ok(results.every(result => !result.created && result.draft.confirmedExpenseId === f.expense && result.draft.version === "3"));
+    const audit = await records(["draft_budget_items", "contract_extraction_jobs"]);
+    await expenses.update(f.a, f.expense, f.owner, { description: "Later edit", committedAmount: "700.00" });
+    const retried = await confirmer.confirm(f.a, f.draft, f.owner, body);
+    assert.equal(retried.created, false);
+    const saved = await expenses.get(f.a, f.expense, f.owner);
+    assert.equal(saved.description, "Later edit"); assert.equal(saved.committedAmount, "700.00");
+    assert.deepEqual(await records(["draft_budget_items", "contract_extraction_jobs"]), audit);
+    assert.equal((await expenses.list(f.a, f.owner, { limit: 10, offset: 0 })).total, 1);
+  });
+});
+
+test("MySQL update confirmation rejects missing or stale expense review snapshots without changing financial data", integration, async () => {
+  await fixture(async f => {
+    const body = await reviewExisting(f);
+    await assert.rejects(confirmer.confirm(f.a, f.draft, f.owner, { version: body.version }), status(422));
+    const newCategory = await insert("INSERT INTO budget_categories (event_id, name) VALUES (?, 'Second category')", [f.a]);
+    for (const change of [{ description: "Someone else's edit" }, { committedAmount: "550.00" },
+      { categoryId: newCategory }, { vendorId: null }, { dueDate: "2026-12-21" }]) {
+      await expenses.update(f.a, f.expense, f.owner, change);
+      const before = await records(["draft_budget_items", "expenses", "expense_payments", "contract_extraction_jobs"]);
+      await assert.rejects(confirmer.confirm(f.a, f.draft, f.owner, body), error => error instanceof ApiError && error.code === "EXPENSE_CHANGED");
+      assert.deepEqual(await records(["draft_budget_items", "expenses", "expense_payments", "contract_extraction_jobs"]), before);
+      await expenses.update(f.a, f.expense, f.owner, body.expectedExpense);
+    }
+  });
+});
+
+test("MySQL update confirmation keeps target event and vendor associations and never replaces a deleted target", integration, async () => {
+  for (const scenario of ["foreign", "deleted", "differentVendor", "unlinkVendor"]) await fixture(async f => {
+    const body = await reviewExisting(f);
+    if (scenario === "foreign") {
+      const otherExpense = await insert("INSERT INTO expenses (event_id, category_id, vendor_id, description, committed_amount) VALUES (?, ?, ?, 'Other event', '500.00')",
+        [f.b, f.otherCategory, f.otherVendor]);
+      await getDatabasePool().execute("UPDATE draft_budget_items SET target_expense_id = ? WHERE draft_id = ?", [otherExpense, f.draft]);
+    } else if (scenario === "deleted") {
+      await getDatabasePool().execute("DELETE FROM expense_payments WHERE expense_id = ?", [f.expense]);
+      await expenses.remove(f.a, f.expense, f.owner);
+    } else {
+      const vendor = scenario === "unlinkVendor" ? null : await insert("INSERT INTO vendors (event_id, name) VALUES (?, 'Different vendor')", [f.a]);
+      await getDatabasePool().execute("UPDATE draft_budget_items SET vendor_id = ?, vendor_name = NULL WHERE draft_id = ?", [vendor, f.draft]);
+    }
+    const before = await records(["draft_budget_items", "expenses", "expense_payments", "vendors"]);
+    await assert.rejects(confirmer.confirm(f.a, f.draft, f.owner, body), status(422));
+    assert.deepEqual(await records(["draft_budget_items", "expenses", "expense_payments", "vendors"]), before);
+  });
+});
+
+test("MySQL update confirmation rejects totals below net paid and preserves refund history", integration, async () => {
+  await fixture(async f => {
+    const body = await reviewExisting(f, { totalAmount: "99.99" });
+    const before = await records(["draft_budget_items", "expenses", "expense_payments", "contract_extraction_jobs"]);
+    await assert.rejects(confirmer.confirm(f.a, f.draft, f.owner, body), error =>
+      error instanceof ApiError && error.code === "AMOUNT_BELOW_PAID" && Boolean(error.fields?.totalAmount));
+    assert.deepEqual(await records(["draft_budget_items", "expenses", "expense_payments", "contract_extraction_jobs"]), before);
+  });
+  await fixture(async f => {
+    await insert("INSERT INTO expense_payments (expense_id, amount, paid_at, payment_type) VALUES (?, '50.00', '2026-11-21', 'REFUND')", [f.expense]);
+    const body = await reviewExisting(f, { totalAmount: "50.00" });
+    const history = await records(["expense_payments"]);
+    await confirmer.confirm(f.a, f.draft, f.owner, body);
+    const saved = await expenses.get(f.a, f.expense, f.owner);
+    assert.equal(saved.committedAmount, "50.00"); assert.equal(saved.paidTotal, "50.00"); assert.equal(saved.outstandingAmount, "0.00");
+    assert.deepEqual(await records(["expense_payments"]), history);
+  });
+});
+
+test("MySQL update confirmation sees payments committed after the initial draft read", integration, async () => {
+  await fixture(async f => {
+    const body = await reviewExisting(f, { totalAmount: "200.00" });
+    let inserted = false;
+    const connect = async () => {
+      const connection = await getDatabasePool().getConnection();
+      return new Proxy(connection, { get(target, property) {
+        if (property === "execute") return async (sql: string, values?: unknown[]) => {
+          const result = await Reflect.apply(target.execute, target, [sql, values]);
+          if (!inserted && sql.includes("LEFT JOIN event_documents")) {
+            inserted = true;
+            await expenses.recordPayment(f.a, f.expense, f.owner, { amount: "250.00", paidAt: "2026-11-20", paymentType: "PAYMENT" });
+          }
+          return result;
+        };
+        const value = Reflect.get(target, property); return typeof value === "function" ? value.bind(target) : value;
+      } });
+    };
+    await assert.rejects(new MySqlDraftConfirmer(connect).confirm(f.a, f.draft, f.owner, body),
+      error => error instanceof ApiError && error.code === "AMOUNT_BELOW_PAID");
+    assert.ok(inserted);
+    const saved = await expenses.get(f.a, f.expense, f.owner);
+    assert.equal(saved.committedAmount, "500.00"); assert.equal(saved.paidTotal, "350.00");
+    assert.equal((await reader.get(f.a, f.draft, f.owner))?.status, "DRAFT");
+  });
+});
+
+test("MySQL concurrent payment and contract reduction cannot leave net paid above the expense total", integration, async () => {
+  for (let attempt = 0; attempt < 3; attempt++) await fixture(async f => {
+    const body = await reviewExisting(f, { totalAmount: "200.00" });
+    const results = await Promise.allSettled([
+      confirmer.confirm(f.a, f.draft, f.owner, body),
+      expenses.recordPayment(f.a, f.expense, f.planner, { amount: "250.00", paidAt: "2026-11-20", paymentType: "PAYMENT" }),
+    ]);
+    assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+    const rejected = results.find(result => result.status === "rejected");
+    assert.ok(rejected?.status === "rejected" && rejected.reason instanceof ApiError);
+    assert.ok(["AMOUNT_BELOW_PAID", "PAYMENT_EXCEEDS_BALANCE"].includes(rejected.reason.code));
+    const saved = await expenses.get(f.a, f.expense, f.owner);
+    assert.ok(cents(saved.paidTotal) <= cents(saved.committedAmount));
+    assert.equal((await expenses.list(f.a, f.owner, { limit: 10, offset: 0 })).total, 1);
   });
 });

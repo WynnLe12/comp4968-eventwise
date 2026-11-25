@@ -8,6 +8,8 @@ export async function withContractEvent<T>(
 ): Promise<T> {
   const connection = await connect();
   try {
+    // Financial confirmation must see payments committed after its initial draft read.
+    await connection.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
     await connection.beginTransaction();
     const [events] = await connection.execute<RowDataPacket[]>(
       "SELECT event_id FROM events WHERE event_id = ? " + (exclusive ? "FOR UPDATE" : "FOR SHARE"), [eventId]);
