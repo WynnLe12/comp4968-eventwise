@@ -23,11 +23,17 @@ function BudgetSnapshot({ budget }: { budget: EventDashboard["budget"] }) {
             <div>
               <b>{category.categoryName}</b>
               <small>
-                {formatMoney(category.committedTotal)} committed of {formatMoney(category.plannedAmount)} ·{" "}
+                {formatMoney(category.committedTotal)} committed of {formatMoney(category.plannedAmount)} planned ·{" "}
                 {formatMoney(category.paidTotal)} paid
               </small>
             </div>
-            {category.isOverBudget && <Badge tone="danger">Over budget</Badge>}
+            {category.isOverBudget && (
+              <div className="dashboard-flag">
+                <Badge tone="danger">
+                  Over by {formatMoney(((cents(category.committedTotal) - cents(category.plannedAmount)) / 100).toFixed(2))}
+                </Badge>
+              </div>
+            )}
           </div>
           <div className={category.isOverBudget ? "progress coral" : "progress"}>
             <i style={{ width: `${percent(category.committedTotal, category.plannedAmount)}%` }} />
@@ -68,7 +74,7 @@ function UpcomingPayments({ payments }: { payments: EventDashboard["payments"] }
               {payment.vendorName ? `${payment.vendorName} · ` : ""}{payment.categoryName} · due {formatCalendarDate(payment.dueDate)}
             </small>
           </div>
-          {payment.isOverdue && <Badge tone="danger">Overdue</Badge>}
+          {payment.isOverdue && <div className="dashboard-flag"><Badge tone="danger">Overdue</Badge></div>}
           <b>{formatMoney(payment.outstandingAmount)}</b>
         </div>
       ))}

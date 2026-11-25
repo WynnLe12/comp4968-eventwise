@@ -92,9 +92,12 @@ test("stat cards show real budget, guest, task and payment numbers", () => {
 test("budget snapshot lists categories and flags overspending", () => {
   const html = render({ data: dashboard });
   assert.match(html, /\$1,600.00 left of \$5,000.00/);
-  assert.match(html, /Photography.*\$1,400.00 committed of \$3,000.00/);
+  assert.match(html, /Photography.*\$1,400.00 committed of \$3,000.00 planned · \$200.00 paid/);
   assert.match(html, /width:47%/); // 1400 / 3000
-  assert.match(html, /Catering.*<mark>Over budget<\/mark>/);
+  // 2,000.00 committed - 1,000.00 planned. The badge sits in its own wrapper, never as a
+  // direct <span> of the row (that selector is the round avatar style).
+  assert.match(html, /Catering.*<div class="dashboard-flag"><mark>Over by \$1,000.00<\/mark><\/div>/);
+  assert.doesNotMatch(html, /Over budget/);
   assert.match(html, /progress coral"><i style="width:100%"/); // capped at 100%
 });
 
@@ -102,7 +105,7 @@ test("tasks and payments lists show due dates, people and overdue marks", () => 
   const html = render({ data: dashboard });
   assert.match(html, /Send invites.*Due \[2026-06-05\] · Heather/);
   assert.match(html, /Pick music.*Due \[2026-06-14\] · Unassigned/);
-  assert.match(html, /Photographer deposit.*Lens Studio · Photography · due \[2026-06-07\].*<mark>Overdue<\/mark>.*\$800.00/);
+  assert.match(html, /Photographer deposit.*Lens Studio · Photography · due \[2026-06-07\].*<div class="dashboard-flag"><mark>Overdue<\/mark><\/div>.*\$800.00/);
   assert.match(html, /Album.*Photography · due \[2026-06-15\]/);
   assert.doesNotMatch(html, /Album<\/b><small>null/);
 });
