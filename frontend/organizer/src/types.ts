@@ -105,7 +105,7 @@ export type VendorCreateInput = Partial<Omit<VendorFields, "quoteAmount" | "cont
 export type VendorUpdateInput = Partial<VendorCreateInput>;
 
 // ---------------------------------------------------------------------------
-// Tasks (Feature 12, docs/api/tasks.md)
+// Tasks (Feature 12)
 // ---------------------------------------------------------------------------
 
 export interface TaskAssignee {

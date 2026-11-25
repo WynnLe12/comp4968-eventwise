@@ -1,7 +1,6 @@
-// Pure task helpers for the Tasks page. No imports, so scripts/tasks.test.mjs can load it.
-//
+// Pure task helpers for the Tasks page.
 // Overdue and "due this week" are worked out here, from the user's LOCAL date: the server
-// runs in UTC and doesn't know the user's time zone (docs/api/tasks.md).
+// runs in UTC and doesn't know the user's time zone.
 // Due dates are YYYY-MM-DD strings, so plain string comparison orders them correctly.
 
 interface TaskLike {

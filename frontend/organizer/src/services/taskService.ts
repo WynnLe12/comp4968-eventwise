@@ -1,9 +1,8 @@
 /**
- * Task service backed by the Tasks API (docs/api/tasks.md), which reads and writes the
- * tasks table in RDS through the eventwise-tasks Lambda.
+ * Task service which reads and writes the tasks table in RDS through the eventwise-tasks Lambda.
  *
- * Same conventions as vendorService.ts: every request sends the Cognito access token as
- * `Authorization: Bearer <token>`, and error bodies `{ error: { code, message, fields? } }`
+ * every request sends the Cognito access token as `Authorization: Bearer <token>`,
+ * and error bodies `{ error: { code, message, fields? } }`
  * become the error classes below.
  */
 import { requireAuthSession } from "../features/auth/services/authService";
