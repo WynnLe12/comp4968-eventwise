@@ -18,6 +18,7 @@ This document describes the Events Lambda contract and deployment checks for the
 | `/events/{eventId}/invitations` | POST | eventInvitationHandler | 201 pending invitation with acceptance URL |
 | `/events/{eventId}/invitations` | GET | eventInvitationHandler | 200 direct array of active pending invitations |
 | `/events/{eventId}/invitations/{invitationId}` | DELETE | eventInvitationHandler | 204 empty body |
+| `/events/{eventId}/dashboard` | GET | dashboardHandler | 200 dashboard object (Feature 10, see `dashboard.md`) |
 | `/event-invitations/accept` | POST | acceptInvitationHandler | 200 event and co-planner membership identifiers |
 
 Use **REST API Lambda proxy integration (`AWS_PROXY`, payload v1)** for these exact methods. The integration's invocation method is POST regardless of the public HTTP method. No mapping template or HTTP API v2 adapter is needed. `event.path` is the application path without the external stage prefix; optional resource/path-parameter metadata must agree. Literal `/events/`, unsupported methods, nested budget/guest routes and unknown paths retain 404. No catch-all `ANY /{proxy+}` integration is introduced. [AWS REST proxy contract](https://docs.aws.amazon.com/apigateway/latest/developerguide/set-up-lambda-proxy-integrations.html).
@@ -398,7 +399,7 @@ Secret JSON must contain nonempty string `username` and `password`; host/databas
 Execution role trust: `lambda.amazonaws.com`. Required access:
 
 - `secretsmanager:GetSecretValue` on the existing secret ARN; `kms:Decrypt` on its key when a customer-managed KMS key requires it, with compatible key policy. No secret mutation/list-all permission is needed.
-- `dynamodb:Query` and `dynamodb:BatchWriteItem` on the **existing guest table ARN** for deletion cleanup. No Scan, CreateTable, table deletion, guest API invocation or broad DynamoDB grants are needed.
+- `dynamodb:Query` and `dynamodb:BatchWriteItem` on the **existing guest table ARN** for deletion cleanup. No Scan, CreateTable, table deletion, guest API invocation or broad DynamoDB grants are needed. The dashboard route (Feature 10) reads guests with the same `dynamodb:Query`, so it needs no new DynamoDB permission.
 - `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents` for `/aws/lambda/eventwise-events` as appropriate to the team's log-group provisioning.
 - Lambda VPC ENI permissions, e.g. the approved `AWSLambdaVPCAccessExecutionRole` equivalent. AWS lists CreateNetworkInterface, DescribeNetworkInterfaces, DescribeSubnets, DeleteNetworkInterface, AssignPrivateIpAddresses and UnassignPrivateIpAddresses on `*`. [AWS VPC permissions](https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html).
 

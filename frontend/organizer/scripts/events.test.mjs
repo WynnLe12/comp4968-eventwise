@@ -309,6 +309,13 @@ const page = {
   StatCard: ({ label, value, detail }) => React.createElement("div", null, label, value, detail),
 };
 const presentation = loadModule("../src/features/events/eventPresentation.ts", {});
+// Dashboard data loading is covered in dashboard.test.mjs; here it stays in the loading state.
+const dashboardLoading = {
+  react: React,
+  "../../hooks/useResource": { useResource: () => ({ data: null, loading: true, error: null, reload: () => {} }) },
+  "../../utils/dateFormat": { formatCalendarDate: (value) => value },
+  "./dashboardApi": { formatMoney: (amount) => "$" + amount, getDashboard: async () => { throw new Error("not called"); } },
+};
 
 const member = { member_id: first.event_id, role: "OWNER", joined_at: "2026-11-21T10:00:00.000Z", is_self: true };
 const coPlanner = { ...member, member_id: "2", role: "CO_PLANNER", is_self: false, displayName: "Maya Bennett" };
@@ -1433,7 +1440,7 @@ test("the dashboard uses detail data and available template ID without fabricati
   const api = loadModule("../src/features/dashboard/Dashboard.tsx", {
     "react/jsx-runtime": jsxRuntime, "../../components/ui": ui, "../../components/page": page,
     "../events/EventsContext": { useEvents: () => ({ selectedEvent: second, eventDetails: detailed, openCreate: () => {} }) },
-    "../events/eventPresentation": presentation,
+    "../events/eventPresentation": presentation, ...dashboardLoading,
   });
   const html = renderToStaticMarkup(React.createElement(api.Dashboard, { go: () => {} }));
   assert.match(html, /Detail response name/);
@@ -1442,7 +1449,7 @@ test("the dashboard uses detail data and available template ID without fabricati
   assert.match(html, /Template ID: 7/);
   assert.match(html, /Co-planner/);
   assert.doesNotMatch(html, /Second event|35000|120 guests|68%/);
-  assert.match(html, /Spending information is not available/);
+  assert.match(html, /Loading\.\.\./);
 });
 
 
@@ -1673,7 +1680,7 @@ test("only OWNER details display an Edit action, and the edit form uses real pre
   const dashboard = loadModule("../src/features/dashboard/Dashboard.tsx", {
     "react/jsx-runtime": jsxRuntime, "../../components/ui": ui, "../../components/page": page,
     "../events/EventsContext": { useEvents: () => ({ eventDetails: event, openCreate: () => {}, openEdit: () => {} }) },
-    "../events/eventPresentation": presentation,
+    "../events/eventPresentation": presentation, ...dashboardLoading,
   });
   assert.match(renderToStaticMarkup(React.createElement(dashboard.Dashboard, { go: () => {} })), /Edit event/);
   event = second;

@@ -51,7 +51,7 @@ test("create stores a PENDING guest, omits empty fields and never overwrites", a
     firstName: "Sofia",
     group: "Friends",
     plusOneAllowed: false,
-    rsvpStatus: "PENDING",
+    rsvpStatus: "UNINVITED",
     createdBy: "sub-1",
     createdAt: "2026-11-12T10:00:00.000Z",
     updatedAt: "2026-11-12T10:00:00.000Z",
@@ -94,7 +94,7 @@ test("update sets changed fields, removes cleared ones and only touches existing
 
 test("update ignores keys and system fields sent by the client", async () => {
   const { repo, sent } = repository([() => ({ Attributes: {} })]);
-  await repo.update("42", "guest-1", { firstName: "Ana", eventId: "99", rsvpStatus: "ATTENDING" } as never);
+  await repo.update("42", "guest-1", { firstName: "Ana", eventId: "99", rsvpStatus: "ACCEPTED" } as never);
 
   const names = Object.values(sent[0]!.input.ExpressionAttributeNames);
   assert.deepEqual(names.sort(), ["firstName", "updatedAt"]);

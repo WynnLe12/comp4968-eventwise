@@ -103,7 +103,7 @@ export class GuestRepository {
       plusOneAllowed: guest.plusOneAllowed ?? false,
       mealChoice: emptyToUndefined(guest.mealChoice),
       dietaryNotes: emptyToUndefined(guest.dietaryNotes),
-      rsvpStatus: "PENDING",
+      rsvpStatus: "UNINVITED",
       createdBy,
       createdAt: timestamp,
       updatedAt: timestamp,

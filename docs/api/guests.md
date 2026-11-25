@@ -29,7 +29,7 @@ of `{eventId}` (`event_members`, either role) before doing anything else.
 - Request and response bodies are JSON (`Content-Type: application/json`).
 - The list has no query parameters. Search, group filter and sorting are done in the
   browser from the full list.
-- RSVP is not editable in the MVP. `rsvpStatus` is always `PENDING` until Feature 8.
+- RSVP is not editable here (Feature 8 owns it). New guests start as `UNINVITED`.
 
 ## 2. Guest JSON
 
@@ -44,7 +44,7 @@ of `{eventId}` (`event_members`, either role) before doing anything else.
   "plusOneAllowed": true,
   "mealChoice": "Vegetarian",
   "dietaryNotes": "No nuts",
-  "rsvpStatus": "PENDING",
+  "rsvpStatus": "UNINVITED",
   "createdAt": "2026-11-12T18:30:00.000Z",
   "updatedAt": "2026-11-12T18:30:00.000Z"
 }
@@ -65,7 +65,7 @@ Optional fields that are empty are returned as `null`, never left out.
 | `plusOneAllowed` | boolean | yes | Defaults to `false` on create |
 | `mealChoice` | string \| null | yes | Up to 50 characters |
 | `dietaryNotes` | string \| null | yes | Up to 500 characters |
-| `rsvpStatus` | `"PENDING"` \| `"ATTENDING"` \| `"DECLINED"` | no | Always `"PENDING"` in the MVP |
+| `rsvpStatus` | `"UNINVITED"` \| `"PENDING"` \| `"ACCEPTED"` \| `"REJECTED"` | no | Starts as `"UNINVITED"`; set by Feature 8 |
 | `createdAt`, `updatedAt` | string | no | ISO 8601 UTC |
 
 ### Editable fields
