@@ -137,3 +137,59 @@ Same style as the other Events Lambda routes: `{ "error": "message" }`.
   Planning Team page. A task whose assignee was removed has `assigneeName: null`.
 - RSVP counts use the statuses stored by the guest API: `UNINVITED`, `PENDING`,
   `ACCEPTED`, `REJECTED`. Feature 8 tells Khai before changing them.
+
+## Code
+
+| Layer | File |
+| --- | --- |
+| Lambda route | `backend/event-service/lambda/events.ts` (dispatches `/events/{eventId}/dashboard`) |
+| Handler | `backend/event-service/handlers/dashboardHandler.ts` |
+| Service | `backend/event-service/services/dashboardService.ts` |
+| RDS queries | `backend/event-service/repositories/dashboardRepository.ts` |
+| Guests (DynamoDB) | `backend/guest-service/services/guestSummary.ts` |
+| Frontend | `frontend/organizer/src/features/dashboard/` (`dashboardApi.ts`, `Dashboard.tsx`) |
+
+Tests: `backend/tests/dashboard*.ts`, `backend/tests/guests/guestSummary.test.ts`,
+`frontend/organizer/scripts/dashboard*.test.mjs`. The MySQL tests run with
+`EVENTWISE_MYSQL_TEST=1` against a disposable local database.
+
+## Deployment
+
+The route ships inside `eventwise-events`. No new AWS service, environment variable or
+IAM permission is needed:
+
+- **DynamoDB:** guests are read with `dynamodb:Query`, already allowed by the inline policy
+  `EventWiseEventsGuestCleanup` on `EventWise_Guests`, through the existing gateway
+  endpoint `eventwise-dynamodb-endpoint`. Uses the existing `GUESTS_TABLE_NAME`.
+- **RDS:** the application account needs `SELECT` on `events`, `event_members`,
+  `budget_categories`, `expenses`, `expense_payments`, `vendors` and `tasks`. These are
+  already read by the Events, Expenses and member routes.
+- **Timeout:** if DynamoDB is unreachable, the AWS SDK retries before giving up. Keep the
+  Lambda timeout at **15 seconds or more** so the rest of the dashboard still returns with
+  `guests: null` instead of the whole request timing out.
+
+### Steps
+
+`eventwise-events` is shared by several features: always build it from up-to-date `dev`
+and tell the team before uploading, or newer routes from other people can disappear.
+
+1. Merge the dashboard PR into `dev`, then `git checkout dev && git pull`.
+2. Build: `cd backend && npm run package:events` (creates `backend/build/eventwise-events.zip`).
+3. Lambda → `eventwise-events` → **Upload from** `.zip file` → the zip above. Check the
+   timeout under Configuration → General configuration.
+4. API Gateway → `eventwise` → Resources → select `/events/{eventId}` → **Create resource**
+   `dashboard`.
+5. On `/events/{eventId}/dashboard` create **GET**: Lambda proxy integration →
+   `eventwise-events`. In Method request set the existing Cognito authorizer and the scope
+   `aws.cognito.signin.user.admin` (same as the other Events methods).
+6. Create **OPTIONS** with **Authorization: NONE** (CORS preflight never sends a token),
+   configured like the OPTIONS of `/events/{eventId}/members`.
+7. **Deploy API** to the `prod` stage.
+
+### Check after deploying
+
+- Owner and co-planner of an event: Dashboard page loads (200).
+- Another account: 403. A deleted event: 404.
+- Numbers match the Budget, Expenses, Guests and Tasks pages for the same event.
+- Older routes still work (event list, event detail, members, delete event).
+- CloudWatch `/aws/lambda/eventwise-events`: no `Event dashboard failed` errors.
