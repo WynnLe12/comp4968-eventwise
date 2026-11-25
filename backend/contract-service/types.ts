@@ -67,3 +67,7 @@ export interface DraftCreator {
 export interface DraftUpdater {
   update(eventId: string, draftId: string, sub: string, body: unknown): Promise<Draft>;
 }
+
+export interface DraftDiscarder {
+  discard(eventId: string, draftId: string, sub: string, body: unknown): Promise<Draft>;
+}
