@@ -28,3 +28,29 @@ export interface DraftQuery {
   offset: number;
   status?: DraftStatus;
 }
+
+export interface Draft extends DraftFields {
+  draftId: string;
+  eventId: string;
+  documentId: string | null;
+  documentFilename: string | null;
+  documentContentType: string | null;
+  status: DraftStatus;
+  version: string;
+  confirmedExpenseId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  confirmedAt: string | null;
+}
+
+export interface DraftPage {
+  data: Draft[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface DraftReader {
+  list(eventId: string, sub: string, query: DraftQuery): Promise<DraftPage>;
+  get(eventId: string, draftId: string, sub: string): Promise<Draft | null>;
+}
