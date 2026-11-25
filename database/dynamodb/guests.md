@@ -37,7 +37,7 @@ attributes; optional attributes are left out of the item when empty (never store
 | `plusOneAllowed` | BOOL | yes | Defaults to `false` |
 | `mealChoice` | S | no | |
 | `dietaryNotes` | S | no | Free text, e.g. allergies |
-| `rsvpStatus` | S | yes | `PENDING` / `ATTENDING` / `DECLINED`. Always `PENDING` in the MVP |
+| `rsvpStatus` | S | yes | `UNINVITED` / `PENDING` / `ACCEPTED` / `REJECTED` (same values the guest API stores). New guests start as `UNINVITED` |
 | `createdBy` | S | yes | Cognito `sub` of the organizer who added the guest. Not returned by the API |
 | `createdAt` | S | yes | ISO 8601 UTC |
 | `updatedAt` | S | yes | ISO 8601 UTC |
@@ -54,7 +54,7 @@ Example item:
   "plusOneAllowed": true,
   "mealChoice": "Vegetarian",
   "dietaryNotes": "No nuts",
-  "rsvpStatus": "PENDING",
+  "rsvpStatus": "UNINVITED",
   "createdBy": "a1b2c3d4-0000-0000-0000-000000000000",
   "createdAt": "2026-11-12T18:30:00.000Z",
   "updatedAt": "2026-11-12T18:30:00.000Z"

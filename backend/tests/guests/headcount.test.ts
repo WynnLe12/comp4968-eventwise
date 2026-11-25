@@ -15,7 +15,7 @@ test("headcount adds one person for each allowed plus-one", () => {
 
 test("headcount ignores RSVP answers", () => {
   const guests = [
-    { plusOneAllowed: false, rsvpStatus: "DECLINED" },
+    { plusOneAllowed: false, rsvpStatus: "REJECTED" },
     { plusOneAllowed: true, rsvpStatus: "PENDING" },
   ];
   assert.deepEqual(calculateHeadcount(guests), { invited: 2, plusOnes: 1, expectedTotal: 3 });
@@ -27,7 +27,7 @@ test("toGuest returns null for omitted optional fields and hides createdBy", () 
     guestId: "g-1",
     firstName: "Sofia",
     plusOneAllowed: false,
-    rsvpStatus: "PENDING",
+    rsvpStatus: "UNINVITED",
     createdBy: "sub-123",
     createdAt: "2026-11-12T10:00:00.000Z",
     updatedAt: "2026-11-12T10:00:00.000Z",

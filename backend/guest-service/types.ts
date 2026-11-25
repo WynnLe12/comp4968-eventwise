@@ -1,8 +1,12 @@
 // Guest types shared by the guest service. See docs/api/guests.md for the API contract
 // and database/dynamodb/guests.md for the DynamoDB table design.
 
-/** RSVP is not editable in the MVP (Feature 8 owns it); new guests start as PENDING. */
-export const RSVP_STATUSES = ["PENDING", "ATTENDING", "DECLINED"] as const;
+/**
+ * RSVP statuses as stored in EventWise_Guests by the guest API (GuestHandler) and the
+ * Guests page. New guests start as UNINVITED; Feature 8 (invitations) moves them on.
+ * The dashboard (Feature 10) counts guests by these values, so keep them in sync.
+ */
+export const RSVP_STATUSES = ["UNINVITED", "PENDING", "ACCEPTED", "REJECTED"] as const;
 export type RsvpStatus = (typeof RSVP_STATUSES)[number];
 
 /** Fields an organizer may set on create or change on update. */
