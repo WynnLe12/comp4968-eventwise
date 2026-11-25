@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AddressInfo } from "node:net";
 import { ApiError } from "../../expense-service/errors";
-import type { Draft, DraftCreator, DraftReader, DraftUpdater } from "../../contract-service/types";
+import type { Draft, DraftCreator, DraftDiscarder, DraftReader, DraftUpdater } from "../../contract-service/types";
 import { createAppServer } from "../../server";
-import { parseDraftPatch } from "../../contract-service/services/draftValidation";
+import { parseDraftPatch, parseDraftVersion } from "../../contract-service/services/draftValidation";
 
 const draft: Draft = {
   draftId: "9007199254740993", eventId: "12", documentId: "23",
@@ -47,12 +47,26 @@ async function withServer(run: (url: string, calls: unknown[][]) => Promise<void
       calls.push(["update", eventId, draftId, sub, body]); authorize(eventId, sub);
       if (draftId !== saved.draftId) throw new ApiError(404, "NOT_FOUND", "Contract draft not found.");
       const input = parseDraftPatch(body);
+      if (saved.status !== "DRAFT") throw new ApiError(409, "DRAFT_NOT_EDITABLE", "Only an open draft can be edited.");
       if (input.version !== saved.version) throw new ApiError(409, "DRAFT_CHANGED", "Reload this draft.");
       saved = { ...saved, ...input.changes, version: String(BigInt(saved.version) + 1n) };
       return saved;
     },
   };
-  const server = createAppServer({ contractDrafts: reader, contractDraftCreator: creator, contractDraftUpdater: updater, authenticate: async header => {
+  const discarder: DraftDiscarder = {
+    async discard(eventId, draftId, sub, body) {
+      calls.push(["discard", eventId, draftId, sub, body]); authorize(eventId, sub);
+      if (draftId !== saved.draftId) throw new ApiError(404, "NOT_FOUND", "Contract draft not found.");
+      const { version } = parseDraftVersion(body);
+      if (saved.status !== "REJECTED") {
+        if (version !== saved.version) throw new ApiError(409, "DRAFT_CHANGED", "Reload this draft.");
+        saved = { ...saved, status: "REJECTED", version: String(BigInt(saved.version) + 1n) };
+      }
+      return saved;
+    },
+  };
+  const server = createAppServer({ contractDrafts: reader, contractDraftCreator: creator, contractDraftUpdater: updater,
+    contractDraftDiscarder: discarder, authenticate: async header => {
     if (!header || !/^Bearer (owner|planner|outsider)$/.test(header)) throw new ApiError(401, "UNAUTHENTICATED", "Sign in to continue.");
     return header.slice(7);
   } });
@@ -254,6 +268,80 @@ test("contract PATCH never exposes private errors when saving fails", async t =>
     const response = await patch(base + "/12/contract-drafts/" + draft.draftId, { version: "1", description: "Edit" });
     assert.equal(response.status, 500);
     assert.deepEqual(await response.json(), { error: { code: "INTERNAL_ERROR", message: "Unable to save the contract draft." } });
+    assert.ok(!JSON.stringify(logged.mock.calls).includes("private.sql"));
+  }, new Error("private.sql: document and credential details"));
+});
+
+test("contract discard keeps the document link, returns the saved draft and supports repeated clicks", async () => {
+  await withServer(async (base, calls) => {
+    const item = base + "/12/contract-drafts/" + draft.draftId;
+    const response = await post(item + "/discard", { version: "1" }, "planner");
+    assert.equal(response.status, 200); assert.equal(response.headers.get("Cache-Control"), "no-store");
+    assert.equal(response.headers.get("Allow"), "POST, OPTIONS");
+    const rejected = { ...draft, status: "REJECTED", version: "2" };
+    assert.deepEqual(await response.json(), { data: rejected });
+    assert.deepEqual(calls[0], ["discard", "12", draft.draftId, "planner", { version: "1" }]);
+    assert.deepEqual(await (await get(item)).json(), { data: rejected });
+    const retry = await post(item + "/discard", { version: "1" });
+    assert.equal(retry.status, 200); assert.deepEqual(await retry.json(), { data: rejected });
+    assert.equal((await patch(item, { version: "2", description: "Late edit" })).status, 409);
+  });
+});
+
+test("contract discard checks identity, event membership, missing IDs and stale versions", async () => {
+  await withServer(async (base, calls) => {
+    const item = base + "/12/contract-drafts/" + draft.draftId;
+    const url = item + "/discard";
+    assert.equal((await fetch(url, { method: "POST" })).status, 401);
+    assert.equal((await post(url, { version: "1" }, "forged")).status, 401);
+    assert.equal(calls.length, 0);
+    assert.equal((await post(url, { version: "1" }, "outsider")).status, 403);
+    assert.equal((await post(base + "/13/contract-drafts/" + draft.draftId + "/discard", { version: "1" })).status, 403);
+    assert.equal((await post(base + "/12/contract-drafts/999/discard", { version: "1" })).status, 404);
+    await patch(item, { version: "1", description: "Newer edit" });
+    const stale = await post(url, { version: "1" });
+    assert.equal(stale.status, 409); assert.equal((await stale.json()).error.code, "DRAFT_CHANGED");
+    assert.equal((await (await get(item)).json()).data.status, "DRAFT");
+    const latest = await post(url, { version: "2" });
+    assert.equal(latest.status, 200); assert.equal((await latest.json()).data.version, "3");
+  });
+});
+
+test("contract discard accepts only versioned JSON POST requests and unauthenticated preflight", async () => {
+  await withServer(async (base, calls) => {
+    const item = base + "/12/contract-drafts/" + draft.draftId;
+    const url = item + "/discard";
+    const headers = { authorization: "Bearer owner", "content-type": "application/json" };
+    assert.equal((await fetch(url, { method: "POST", headers, body: "{" })).status, 400);
+    assert.equal((await fetch(url, { method: "POST", headers: { authorization: "Bearer owner" }, body: "{}" })).status, 415);
+    assert.equal((await post(url, { version: "1", padding: "x".repeat(65536) })).status, 413);
+    assert.equal((await post(url + "?eventId=13", { version: "1" })).status, 422);
+    for (const method of ["GET", "PATCH", "DELETE"]) {
+      const response = await fetch(url, { method, headers: { authorization: "Bearer owner" } });
+      assert.equal(response.status, 405); assert.equal(response.headers.get("Allow"), "POST, OPTIONS");
+    }
+    const options = await fetch(url, { method: "OPTIONS" });
+    assert.equal(options.status, 204); assert.equal(options.headers.get("Allow"), "POST, OPTIONS");
+    assert.equal(await options.text(), "");
+    assert.equal((await fetch(item, { method: "DELETE", headers: { authorization: "Bearer owner" } })).status, 405);
+    assert.equal(calls.length, 0);
+    for (const body of [{}, [], { version: 1 }, { version: "1", status: "REJECTED" }, { version: "1", documentId: "99" }]) {
+      assert.equal((await post(url, body)).status, 422);
+    }
+    assert.equal((await (await get(item)).json()).data.status, "DRAFT");
+  });
+});
+
+test("contract discard preserves confirmed-state errors and hides unexpected storage failures", async t => {
+  await withServer(async base => {
+    const response = await post(base + "/12/contract-drafts/" + draft.draftId + "/discard", { version: "1" });
+    assert.equal(response.status, 409); assert.equal((await response.json()).error.code, "DRAFT_NOT_EDITABLE");
+  }, new ApiError(409, "DRAFT_NOT_EDITABLE", "A confirmed draft cannot be discarded."));
+  const logged = t.mock.method(console, "error", () => {});
+  await withServer(async base => {
+    const response = await post(base + "/12/contract-drafts/" + draft.draftId + "/discard", { version: "1" });
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), { error: { code: "INTERNAL_ERROR", message: "Unable to discard the contract draft." } });
     assert.ok(!JSON.stringify(logged.mock.calls).includes("private.sql"));
   }, new Error("private.sql: document and credential details"));
 });
