@@ -29,9 +29,13 @@ export function parseDraftVersion(value: unknown): { version: string } {
   return { version: parseId(body.version, "version") };
 }
 
-export function parseDraftConfirmation(value: unknown): { version: string; expectedExpense?: ExpenseInput } {
-  const body = object(value, ["version", "expectedExpense"]);
-  const result: { version: string; expectedExpense?: ExpenseInput } = { version: parseId(body.version, "version") };
+export function parseDraftConfirmation(value: unknown): { version: string; expectedExpense?: ExpenseInput; createVendor?: boolean } {
+  const body = object(value, ["version", "expectedExpense", "createVendor"]);
+  const result: { version: string; expectedExpense?: ExpenseInput; createVendor?: boolean } = { version: parseId(body.version, "version") };
+  if (Object.hasOwn(body, "createVendor")) {
+    if (typeof body.createVendor !== "boolean") invalid("createVendor", "Choose whether to create a new vendor.");
+    result.createVendor = body.createVendor;
+  }
   if (Object.hasOwn(body, "expectedExpense")) {
     const snapshot = body.expectedExpense;
     if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) ||

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ApiError } from "../../expense-service/errors";
-import { prepareExistingExpense, prepareNewExpense } from "../../contract-service/services/confirmationValidation";
+import { prepareExistingExpense, prepareNewExpense, prepareNewVendor } from "../../contract-service/services/confirmationValidation";
 import type { DraftFields } from "../../contract-service/types";
 
 const reviewed: DraftFields = {
@@ -53,4 +53,21 @@ test("existing-expense confirmation requires an explicit update action and exact
   }
   assert.throws(() => prepareExistingExpense(reviewed), invalid("saveAction"));
   assert.throws(() => prepareExistingExpense({ ...update, totalAmount: null }), invalid("totalAmount"));
+});
+
+test("new vendors require an explicit choice and use the shared vendor rules without inferring a signed contract", () => {
+  const unlinked = { ...reviewed, vendorId: null, vendorName: "  New DJ  " };
+  assert.throws(() => prepareNewExpense(unlinked), invalid("vendorId"));
+  assert.equal(prepareNewExpense(unlinked, true).vendorId, null);
+  const vendor = prepareNewVendor(unlinked, "Entertainment");
+  assert.equal(vendor.name, "New DJ"); assert.equal(vendor.category, "Entertainment");
+  assert.equal(vendor.bookingStatus, "RESEARCHING"); assert.equal(vendor.contractStatus, "NOT_STARTED");
+  assert.equal(vendor.contractTotal, null); assert.equal(vendor.quoteAmount, null);
+  assert.equal(vendor.contactName, null); assert.equal(vendor.email, null);
+  assert.throws(() => prepareNewExpense(reviewed, true), invalid("vendorId"));
+  for (const vendorName of [null, "", " ", "x".repeat(151)]) {
+    assert.throws(() => prepareNewExpense({ ...unlinked, vendorName }, true), invalid("vendorName"));
+  }
+  const update = { ...unlinked, saveAction: "UPDATE_EXPENSE" as const, targetExpenseId: "10" };
+  assert.equal(prepareExistingExpense(update, true).vendorId, null);
 });

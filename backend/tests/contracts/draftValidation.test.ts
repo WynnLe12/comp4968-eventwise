@@ -90,3 +90,13 @@ test("confirmation requests preserve exact reviewed expense snapshots and reject
   assert.throws(() => parseDraftConfirmation({ version: "1", status: "CONFIRMED" }), invalid("status"));
   assert.throws(() => parseDraftConfirmation({ version: 1 }), invalid("version"));
 });
+
+test("confirmation requires a real boolean for the explicit create-vendor choice", () => {
+  assert.deepEqual(parseDraftConfirmation({ version: "1", createVendor: true }), { version: "1", createVendor: true });
+  assert.deepEqual(parseDraftConfirmation({ version: "1", createVendor: false }), { version: "1", createVendor: false });
+  for (const createVendor of ["true", 1, null, {}, []]) {
+    assert.throws(() => parseDraftConfirmation({ version: "1", createVendor }), invalid("createVendor"));
+  }
+  assert.throws(() => parseDraftConfirmation({ version: "1", createVendor: true, vendorName: "Unreviewed" }), invalid("vendorName"));
+  assert.throws(() => parseDraftPatch({ version: "1", createVendor: true }), invalid("createVendor"));
+});
