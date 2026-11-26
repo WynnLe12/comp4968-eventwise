@@ -12,3 +12,10 @@
 .contracts-draft-name small { display: block; margin-top: 6px; }
 .contracts-pagination { border-top: 1px solid #e9e2f3; }
 .contracts-pagination span { margin-right: auto; }
+
+.contract-details section { margin: 20px 0; }
+.contract-details section p { overflow-wrap: anywhere; }
+.contract-details dl { margin: 24px 0; }
+.contract-details dl > div { display: flex; flex-wrap: wrap; gap: 8px 24px; padding: 12px 0; border-bottom: 1px solid #e9e2f3; }
+.contract-details dt { flex: 1 1 160px; color: var(--muted, #777189); }
+.contract-details dd { flex: 1 1 200px; margin: 0; overflow-wrap: anywhere; }

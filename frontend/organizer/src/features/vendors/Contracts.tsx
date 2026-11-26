@@ -1,3 +1,4 @@
+import { ContractDraftDetailsDialog } from "./ContractDraftDetailsDialog";
 import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Badge, Button, Card } from "../../components/ui";
@@ -33,12 +34,13 @@ function EventContracts({ eventId }: { eventId: string }) {
   </>;
 }
 function DraftList({ eventId, offset, onPage }: { eventId: string; offset: number; onPage: (offset: number) => void }) {
+  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
   const load = useCallback(() => fetchContractDrafts(eventId, offset), [eventId, offset]);
   const { data: page, loading, error, reload } = useResource(load);
   if (loading) return <LoadingState label="Loading contract drafts..." />;
   if (error) return <ErrorState message={error instanceof Error ? error.message : "We couldn't load contract drafts."} onRetry={reload} />;
   if (!page) return null;
-  return <Card className="contracts-list">
+  return <><Card className="contracts-list">
     <div className="contracts-list-head">
       <h2>Saved drafts <small>({page.total})</small></h2>
       <Button variant="secondary" onClick={reload}>Refresh</Button>
@@ -54,6 +56,7 @@ function DraftList({ eventId, offset, onPage }: { eventId: string; offset: numbe
           </div>
           <strong>{draftAmount(draft)}</strong>
           <Badge tone={statuses[draft.status].tone}>{statuses[draft.status].label}</Badge>
+          <Button variant="secondary" onClick={() => setSelectedDraftId(draft.draftId)}>Review details</Button>
         </li>)}
       </ul>}
     <div className="contracts-pagination">
@@ -61,5 +64,7 @@ function DraftList({ eventId, offset, onPage }: { eventId: string; offset: numbe
       <Button variant="secondary" disabled={offset === 0} onClick={() => onPage(Math.max(0, offset - page.limit))}>Previous</Button>
       <Button variant="secondary" disabled={offset + page.limit >= page.total} onClick={() => onPage(offset + page.limit)}>Next</Button>
     </div>
-  </Card>;
+  </Card>
+    {selectedDraftId && <ContractDraftDetailsDialog key={selectedDraftId} eventId={eventId} draftId={selectedDraftId} onClose={() => setSelectedDraftId(null)} />}
+  </>;
 }
