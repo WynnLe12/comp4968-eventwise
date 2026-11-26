@@ -1,8 +1,8 @@
 import type { ContractDraftChanges, ContractDraftDetails } from "./contractsApi";
 
-export type ContractDraftFormValues = Record<keyof Required<ContractDraftChanges>, string>;
+export type ContractDraftFormValues = Record<Exclude<keyof Required<ContractDraftChanges>, "currencyCode">, string>;
 export type ContractDraftFormErrors = Partial<Record<keyof ContractDraftFormValues, string>>;
-const fields = ["description", "categoryId", "vendorId", "vendorName", "totalAmount", "depositAmount", "dueDate", "currencyCode"] as const;
+const fields = ["description", "categoryId", "vendorId", "vendorName", "totalAmount", "depositAmount", "dueDate"] as const;
 
 export function contractDraftFormValues(draft: ContractDraftDetails): ContractDraftFormValues {
   return Object.fromEntries(fields.map(field => [field, draft[field] ?? ""])) as ContractDraftFormValues;
@@ -27,10 +27,6 @@ export function prepareContractDraftChanges(values: ContractDraftFormValues, dra
   if (!errors.totalAmount && !errors.depositAmount && normalized.totalAmount && normalized.depositAmount) {
     const cents = (value: string) => BigInt(value.replace(".", ""));
     if (cents(normalized.depositAmount) > cents(normalized.totalAmount)) errors.depositAmount = "The deposit cannot exceed the total amount.";
-  }
-  if (normalized.currencyCode) {
-    normalized.currencyCode = normalized.currencyCode.toUpperCase();
-    if (!/^[A-Z]{3}$/.test(normalized.currencyCode)) errors.currencyCode = "Enter a three-letter currency code, such as USD.";
   }
   if (normalized.dueDate) {
     const raw = normalized.dueDate;

@@ -32,9 +32,12 @@ test("confirmation requires complete reviewed fields and a real calendar date", 
   assert.throws(() => prepareNewExpense({ ...reviewed, depositAmount: "600.11" }), invalid("depositAmount"));
 });
 
-test("confirmation cannot silently convert currency or discard an unlinked vendor name", () => {
+test("confirmation keeps the reviewed dollar amount regardless of optional currency metadata and preserves vendor choice", () => {
   for (const currencyCode of [null, "CAD", "EUR"]) {
-    assert.throws(() => prepareNewExpense({ ...reviewed, currencyCode }), invalid("currencyCode"));
+    const input = { ...reviewed, currencyCode };
+    assert.equal(prepareNewExpense(input).committedAmount, "600.10");
+    assert.equal(prepareExistingExpense({ ...input, saveAction: "UPDATE_EXPENSE", targetExpenseId: "10" }).committedAmount, "600.10");
+    assert.equal(input.currencyCode, currencyCode);
   }
   assert.throws(() => prepareNewExpense({ ...reviewed, vendorId: null }), invalid("vendorId"));
 });

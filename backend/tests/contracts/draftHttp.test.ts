@@ -399,7 +399,7 @@ test("contract confirmation requires a complete reviewed draft and returns error
   await withServer(async base => {
     const item = base + "/12/contract-drafts/" + draft.draftId;
     const incomplete = await post(item + "/confirm", { version: "1" });
-    assert.equal(incomplete.status, 422); assert.ok((await incomplete.json()).error.fields.currencyCode);
+    assert.equal(incomplete.status, 422); assert.ok((await incomplete.json()).error.fields.vendorId);
     await patch(item, { version: "1", ...readyFields, totalAmount: null });
     const noAmount = await post(item + "/confirm", { version: "2" });
     assert.equal(noAmount.status, 422);

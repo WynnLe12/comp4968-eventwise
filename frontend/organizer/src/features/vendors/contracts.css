@@ -24,3 +24,9 @@
 .contract-draft-form .form-row { margin: 0; }
 .contract-form-actions { display: flex; justify-content: flex-end; gap: 12px; flex-wrap: wrap; margin: 20px 0; }
 .contract-form-message { color: #b52b48; }
+
+.contract-confirmation { padding: 20px; border: 1px solid #e9e2f3; border-radius: 16px; background: #faf7ff; }
+.contract-confirmation h3 { margin-top: 0; }
+.contract-confirmation ul { padding-left: 20px; }
+.contract-confirmation li { margin: 8px 0; }
+.contract-confirmation .contract-form-actions { margin-bottom: 0; }

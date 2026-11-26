@@ -78,9 +78,8 @@ export function ContractDraftForm({ draft, onSaved, onCancel, onReload, onBusy }
       <SelectField label="Vendor (optional)" value={values.vendorId} options={vendorOptions} disabled={vendors.loading || Boolean(vendors.error)} error={errors.vendorId} onChange={event => update("vendorId", event.target.value)} />
       {Boolean(vendors.error) && <p role="alert">Couldn't load vendors. <Button variant="ghost" onClick={vendors.reload}>Retry vendors</Button></p>}
       {!values.vendorId && <Field label="Vendor name from document (optional)" value={values.vendorName} maxLength={150} error={errors.vendorName} hint="This name alone does not create or link a vendor." onChange={event => update("vendorName", event.target.value)} />}
-      <div className="form-row">
+      <div>
         <Field label="Total amount" inputMode="decimal" placeholder="0.00" value={values.totalAmount} error={errors.totalAmount} onChange={event => update("totalAmount", event.target.value)} />
-        <Field label="Currency" placeholder="e.g. USD" maxLength={3} value={values.currencyCode} error={errors.currencyCode} hint="Expenses currently support USD. No currency conversion is applied." onChange={event => update("currencyCode", event.target.value)} />
       </div>
       <div className="form-row">
         <Field label="Deposit required (optional)" inputMode="decimal" placeholder="0.00" value={values.depositAmount} error={errors.depositAmount} hint="A requirement, not a recorded payment." onChange={event => update("depositAmount", event.target.value)} />

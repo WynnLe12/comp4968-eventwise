@@ -1,3 +1,4 @@
+import { formatContractAmount } from "./contractAmount";
 import { ContractDraftDetailsDialog } from "./ContractDraftDetailsDialog";
 import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -14,10 +15,7 @@ const statuses = {
   REJECTED: { label: "Discarded", tone: "neutral" },
 };
 function draftAmount(draft: ContractDraftSummary) {
-  if (draft.totalAmount === null) return "Amount not set";
-  if (draft.currencyCode === null) return draft.totalAmount + " (currency not set)";
-  try { return new Intl.NumberFormat("en-US", { style: "currency", currency: draft.currencyCode }).format(Number(draft.totalAmount)); }
-  catch { return draft.totalAmount + " " + draft.currencyCode; }
+  return draft.totalAmount === null ? "Amount not set" : formatContractAmount(draft.totalAmount);
 }
 export function Contracts() {
   const { selectedId, userId } = useEvents();

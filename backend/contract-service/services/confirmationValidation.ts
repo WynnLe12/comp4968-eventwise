@@ -5,7 +5,7 @@ import { prepareVendor } from "../../vendor-service/services/prepareVendor";
 import { NEW_VENDOR, type VendorFields } from "../../vendor-service/types";
 import type { DraftFields } from "../types";
 
-/** Match the existing USD expense ledger; never infer a conversion from a contract. */
+/** The MVP confirms dollar amounts directly; currency selection and conversion are out of scope. */
 export function prepareNewExpense(draft: DraftFields, createVendor = false): ExpenseInput {
   if (draft.saveAction !== "CREATE_EXPENSE") {
     invalid("saveAction", "Choose Create new expense.");
@@ -21,7 +21,6 @@ export function prepareExistingExpense(draft: DraftFields, createVendor = false)
 }
 
 function prepareExpenseValues(draft: DraftFields, createVendor: boolean): ExpenseInput {
-  if (draft.currencyCode !== "USD") invalid("currencyCode", "Confirm the amount in USD before saving to expenses.");
   if (createVendor) prepareNewVendor(draft);
   else if (draft.vendorId === null && draft.vendorName !== null) {
     invalid("vendorId", "Choose an existing vendor, create a new vendor, or clear the vendor name to save without a vendor.");

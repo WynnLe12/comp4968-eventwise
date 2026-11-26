@@ -12,7 +12,7 @@ export interface ContractDraftSummary {
 }
 export interface ContractDraftPage { data: ContractDraftSummary[]; total: number; limit: number; offset: number }
 
-async function contractRequest(eventId: string, suffix: string, body?: unknown): Promise<unknown> {
+async function contractRequest(eventId: string, suffix: string, body?: unknown, method: "GET" | "PATCH" | "POST" = body === undefined ? "GET" : "PATCH"): Promise<unknown> {
   let token: string | undefined;
   try { token = (await requireAuthSession()).session.tokens?.accessToken?.toString(); }
   catch { /* Present session guidance below. */ }
@@ -20,7 +20,7 @@ async function contractRequest(eventId: string, suffix: string, body?: unknown):
   let response: Response;
   try {
     response = await fetch(apiUrl("/events/" + encodeURIComponent(eventId) + "/contract-drafts" + suffix), {
-      method: body === undefined ? "GET" : "PATCH",
+      method,
       headers: { Authorization: "Bearer " + token, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
@@ -28,8 +28,13 @@ async function contractRequest(eventId: string, suffix: string, body?: unknown):
   if (!response.ok) {
     const result = await response.json().catch(() => null);
     if (response.status === 409) {
-      const changed = result?.error?.code === "DRAFT_CHANGED";
-      throw new ContractDraftSaveError(changed ? "This draft changed in another tab. Reload the latest version before saving." : "This draft is no longer editable. Reload to see its current status.", {}, true);
+      const messages: Record<string, string> = {
+        DRAFT_CHANGED: "This draft changed in another tab. Reload the latest version before continuing.",
+        DRAFT_NOT_EDITABLE: "This draft is no longer editable. Reload to see its current status.",
+        DOCUMENT_UNVERIFIED: "The source document could not be verified. Reopen the document and reload this draft before confirming.",
+        CONFIRMATION_UNAVAILABLE: "This draft has already been confirmed. Reload and review its saved expense.",
+      };
+      throw new ContractDraftSaveError(messages[result?.error?.code] ?? "This draft could not be saved. Reload its latest details before continuing.", {}, true);
     }
     if (response.status === 422) {
       const fields: Record<string, string> = {};
@@ -120,4 +125,14 @@ export async function saveContractDraft(eventId: string, draftId: string, versio
   }
   const result = await contractRequest(eventId, "/" + encodeURIComponent(draftId), body) as { data?: ContractDraftDetails } | null;
   return readContractDraft(result, eventId, draftId);
+}
+
+export async function confirmContractDraft(eventId: string, draftId: string, version: string): Promise<{ draft: ContractDraftDetails; created: boolean }> {
+  const result = await contractRequest(eventId, "/" + encodeURIComponent(draftId) + "/confirm", { version }, "POST") as { data?: ContractDraftDetails; created?: boolean } | null;
+  const draft = readContractDraft(result, eventId, draftId);
+  if (draft.status !== "CONFIRMED" || typeof draft.confirmedExpenseId !== "string" ||
+      !/^[1-9][0-9]*$/.test(draft.confirmedExpenseId) || typeof result?.created !== "boolean") {
+    throw new Error("We couldn't verify the confirmation result. Reload this draft to check whether the expense was saved.");
+  }
+  return { draft, created: result.created };
 }

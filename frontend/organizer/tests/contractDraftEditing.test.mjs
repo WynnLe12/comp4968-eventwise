@@ -22,16 +22,16 @@ const draft = {
 };
 const values = () => validation.contractDraftFormValues(draft);
 
-test("draft edits preserve exact cents and normalize currency without recording payments", () => {
-  const result = validation.prepareContractDraftChanges({ ...values(), totalAmount: "9999999999.99", depositAmount: "0.1", currencyCode: "cad" }, draft);
+test("draft edits preserve exact cents without recording payments or changing currency metadata", () => {
+  const result = validation.prepareContractDraftChanges({ ...values(), totalAmount: "9999999999.99", depositAmount: "0.1" }, draft);
   assert.deepEqual(result.errors, {});
-  assert.deepEqual(result.changes, { totalAmount: "9999999999.99", depositAmount: "0.10", currencyCode: "CAD" });
+  assert.deepEqual(result.changes, { totalAmount: "9999999999.99", depositAmount: "0.10" });
 });
 
 test("drafts can remain incomplete and optional values can be cleared explicitly", () => {
-  const result = validation.prepareContractDraftChanges({ ...values(), description: " ", totalAmount: "", currencyCode: "", categoryId: "" }, draft);
+  const result = validation.prepareContractDraftChanges({ ...values(), description: " ", totalAmount: "", categoryId: "" }, draft);
   assert.deepEqual(result.errors, {});
-  assert.deepEqual(result.changes, { description: null, categoryId: null, totalAmount: null, currencyCode: null });
+  assert.deepEqual(result.changes, { description: null, categoryId: null, totalAmount: null });
   assert.deepEqual(validation.prepareContractDraftChanges(values(), draft).changes, {});
 });
 
@@ -43,13 +43,13 @@ test("invalid amounts and deposits above the total cannot be saved", () => {
   assert.deepEqual(validation.prepareContractDraftChanges({ ...values(), totalAmount: "0", depositAmount: "0" }, draft).errors, {});
 });
 
-test("invalid dates, oversized text, malformed currency and unsafe IDs are rejected", () => {
+test("invalid dates, oversized text and unsafe IDs are rejected", () => {
   for (const dueDate of ["2026-02-29", "2026-04-31", "0999-01-01", "2026-11-26T00:00:00Z"]) {
     assert.ok(validation.prepareContractDraftChanges({ ...values(), dueDate }, draft).errors.dueDate);
   }
   assert.deepEqual(validation.prepareContractDraftChanges({ ...values(), dueDate: "2028-02-29" }, draft).errors, {});
-  const invalid = validation.prepareContractDraftChanges({ ...values(), description: "x".repeat(256), vendorName: "x".repeat(151), currencyCode: "US", categoryId: "18446744073709551616", vendorId: "1.5" }, draft);
-  for (const field of ["description", "vendorName", "currencyCode", "categoryId", "vendorId"]) assert.ok(invalid.errors[field]);
+  const invalid = validation.prepareContractDraftChanges({ ...values(), description: "x".repeat(256), vendorName: "x".repeat(151), categoryId: "18446744073709551616", vendorId: "1.5" }, draft);
+  for (const field of ["description", "vendorName", "categoryId", "vendorId"]) assert.ok(invalid.errors[field]);
 });
 
 async function withApi(fetch, run, authenticate = async () => ({ session: { tokens: { accessToken: { toString: () => "test-access-token" } } } })) {
@@ -104,4 +104,76 @@ test("unauthenticated saves make no request, and wrong-event responses cannot en
   await withApi(async () => Response.json({ data: { ...draft, eventId: "4" } }), async api => {
     await assert.rejects(api.saveContractDraft("3", "1", "2", { description: "test" }), /couldn't read/);
   });
+});
+
+const confirmation = load("contractConfirmationReadiness", { "./contractDraftValidation": validation });
+
+test("confirmation requires saved dollar amounts without a currency requirement", () => {
+  assert.deepEqual(confirmation.contractDraftConfirmationIssues(draft), []);
+  const cad = { ...draft, currencyCode: "CAD", totalAmount: "630.00" };
+  assert.deepEqual(confirmation.contractDraftConfirmationIssues(cad), []);
+  assert.deepEqual(confirmation.contractDraftConfirmationIssues({ ...cad, currencyCode: null }), []);
+  assert.equal(cad.currencyCode, "CAD");
+  assert.equal(cad.totalAmount, "630.00");
+  const issues = confirmation.contractDraftConfirmationIssues({ ...draft, description: null, categoryId: null, totalAmount: null });
+  assert.ok(issues.some(issue => issue.includes("expense name")));
+  assert.ok(issues.some(issue => issue.includes("category")));
+  assert.ok(issues.some(issue => issue.includes("total amount")));
+});
+
+test("confirmation blocks finalized drafts, absent source documents and unresolved vendor choices", () => {
+  for (const status of ["CONFIRMED", "REJECTED"]) assert.ok(confirmation.contractDraftConfirmationIssues({ ...draft, status }).length);
+  assert.ok(confirmation.contractDraftConfirmationIssues({ ...draft, documentId: null }).length);
+  assert.ok(confirmation.contractDraftConfirmationIssues({ ...draft, vendorName: "Vendor not linked" }).some(issue => issue.includes("existing vendor")));
+  assert.deepEqual(confirmation.contractDraftConfirmationIssues({ ...draft, vendorName: "Vendor linked", vendorId: "7" }), []);
+  assert.ok(confirmation.contractDraftConfirmationIssues({ ...draft, saveAction: "UPDATE_EXPENSE", targetExpenseId: "40" }).some(issue => issue.includes("existing expense")));
+  assert.ok(confirmation.contractDraftConfirmationIssues({ ...draft, depositAmount: "100.01" }).some(issue => issue.includes("deposit")));
+});
+
+test("confirmation POSTs only the displayed version and accepts idempotent replay", async () => {
+  for (const created of [true, false]) {
+    await withApi(async (url, options) => {
+      assert.equal(url, "/api/events/3/contract-drafts/1/confirm");
+      assert.equal(options.method, "POST");
+      assert.equal(options.headers.Authorization, "Bearer test-access-token");
+      assert.deepEqual(JSON.parse(options.body), { version: "2" });
+      return Response.json({ data: { ...draft, status: "CONFIRMED", version: "3", confirmedExpenseId: "40" }, created }, { status: created ? 201 : 200 });
+    }, async api => {
+      const result = await api.confirmContractDraft("3", "1", "2");
+      assert.equal(result.draft.confirmedExpenseId, "40");
+      assert.equal(result.created, created);
+    });
+  }
+});
+
+test("unverified confirmation responses cannot be presented as saved expenses", async () => {
+  for (const invalid of [
+    { data: draft, created: true },
+    { data: { ...draft, status: "CONFIRMED", confirmedExpenseId: null }, created: true },
+    { data: { ...draft, status: "CONFIRMED", confirmedExpenseId: "40" } },
+    { data: { ...draft, eventId: "4", status: "CONFIRMED", confirmedExpenseId: "40" }, created: true },
+  ]) {
+    await withApi(async () => Response.json(invalid), async api => {
+      await assert.rejects(api.confirmContractDraft("3", "1", "2"));
+    });
+  }
+});
+
+test("confirmation conflicts stop for reload without retrying a financial write", async () => {
+  let requests = 0;
+  await withApi(async () => { requests++; return Response.json({ error: { code: "DRAFT_CHANGED" } }, { status: 409 }); }, async api => {
+    await assert.rejects(api.confirmContractDraft("3", "1", "2"), error => error instanceof api.ContractDraftSaveError && error.reloadRequired);
+    assert.equal(requests, 1);
+  });
+});
+
+const amounts = load("contractAmount");
+test("contract amounts use a plain dollar sign and preserve exact cents", () => {
+  assert.equal(amounts.formatContractAmount("630.00"), "$630.00");
+  assert.equal(amounts.formatContractAmount("9999999999.99"), "$9,999,999,999.99");
+  assert.equal(amounts.formatContractAmount("0.01"), "$0.01");
+  assert.equal(amounts.formatContractAmount(null), "Not set");
+  const edits = validation.prepareContractDraftChanges({ ...values(), totalAmount: "630" }, { ...draft, currencyCode: "CAD" });
+  assert.deepEqual(edits.changes, { totalAmount: "630.00" });
+  assert.equal(Object.hasOwn(validation.contractDraftFormValues(draft), "currencyCode"), false);
 });
