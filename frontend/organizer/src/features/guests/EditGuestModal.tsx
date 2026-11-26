@@ -15,7 +15,7 @@ import { getGuestRsvpLink } from "./services/rsvpApi";
 const FORM_ID = "edit-guest-form";
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /** Matches the guest API limit for mealChoice. */
-const MEAL_CHOICE_MAX_LENGTH = 50;
+const MEAL_CHOICE_MAX_LENGTH = 200;
 
 const rsvpOptions = RSVP_STATUSES.map((status) => ({ value: status, label: RSVP_LABELS[status] }));
 

@@ -16,15 +16,14 @@ import {
 } from "./services/rsvpApi";
 import "./rsvp.css";
 
-const MEAL_MAX = 50;
-const NOTES_MAX = 500;
+/** One field for the meal and any allergies; matches the API limit. */
+const MEAL_MAX = 200;
 
 type Choice = "yes" | "no" | "";
 
 interface Draft {
   attending: Choice;
   mealChoice: string;
-  dietaryNotes: string;
   plusOne: Choice;
 }
 
@@ -34,7 +33,6 @@ function draftFrom(data: GuestRsvpData): Draft {
   return {
     attending: !answered ? "" : guest.rsvpStatus === "ACCEPTED" ? "yes" : "no",
     mealChoice: guest.mealChoice ?? "",
-    dietaryNotes: guest.dietaryNotes ?? "",
     plusOne: guest.plusOneAttending === null ? "" : guest.plusOneAttending ? "yes" : "no",
   };
 }
@@ -131,7 +129,6 @@ function RsvpForm({ token, data, onSaved }: { token: string; data: GuestRsvpData
       const saved = await submitGuestRsvp(token, {
         attending,
         mealChoice: attending ? draft.mealChoice.trim() || null : null,
-        dietaryNotes: attending ? draft.dietaryNotes.trim() || null : null,
         plusOneAttending: attending && guest.plusOneAllowed && draft.plusOne === "yes",
       });
       onSaved(saved);
@@ -192,7 +189,6 @@ function RsvpForm({ token, data, onSaved }: { token: string; data: GuestRsvpData
               {guest.rsvpStatus === "ACCEPTED" && (
                 <dl>
                   <div><dt>Meal preference</dt><dd>{guest.mealChoice ?? "No preference"}</dd></div>
-                  <div><dt>Allergies or dietary needs</dt><dd>{guest.dietaryNotes ?? "None"}</dd></div>
                   {guest.plusOneAllowed && <div><dt>Plus-one</dt><dd>{guest.plusOneAttending ? "Coming" : "Not coming"}</dd></div>}
                 </dl>
               )}
@@ -223,15 +219,14 @@ function RsvpForm({ token, data, onSaved }: { token: string; data: GuestRsvpData
                 <>
                   <label className="rsvp-field">
                     <span>Meal preference</span>
-                    <input value={draft.mealChoice} maxLength={MEAL_MAX} placeholder="e.g. Chicken, fish, vegetarian"
-                      onChange={(e) => update("mealChoice", e.target.value)} aria-invalid={errors.mealChoice ? true : undefined} />
+                    <small id="meal-hint" className="rsvp-field-hint">
+                      If you have any food allergies or dietary needs, please include them here.
+                    </small>
+                    <textarea rows={3} value={draft.mealChoice} maxLength={MEAL_MAX}
+                      placeholder="e.g. Vegetarian, nut allergy"
+                      aria-describedby="meal-hint" aria-invalid={errors.mealChoice ? true : undefined}
+                      onChange={(e) => update("mealChoice", e.target.value)} />
                     {errors.mealChoice && <small className="rsvp-field-error">{errors.mealChoice}</small>}
-                  </label>
-                  <label className="rsvp-field">
-                    <span>Allergies or dietary needs</span>
-                    <textarea rows={3} value={draft.dietaryNotes} maxLength={NOTES_MAX} placeholder="e.g. Nut allergy, gluten-free"
-                      onChange={(e) => update("dietaryNotes", e.target.value)} aria-invalid={errors.dietaryNotes ? true : undefined} />
-                    {errors.dietaryNotes && <small className="rsvp-field-error">{errors.dietaryNotes}</small>}
                   </label>
                   {guest.plusOneAllowed && (
                     <div className="rsvp-plus-one">

@@ -91,8 +91,8 @@ export interface GuestRsvpView {
     lastName: string | null;
     plusOneAllowed: boolean;
     rsvpStatus: RsvpStatus;
+    /** Meal preference, including any allergies. */
     mealChoice: string | null;
-    dietaryNotes: string | null;
     plusOneAttending: boolean | null;
     respondedAt: string | null;
   };
@@ -101,8 +101,8 @@ export interface GuestRsvpView {
 /** The guest's answers from the RSVP form, after validation. */
 export interface RsvpResponse {
   attending: boolean;
+  /** Meal preference, including any allergies (up to 200 characters). */
   mealChoice: string | null;
-  dietaryNotes: string | null;
   plusOneAttending: boolean;
 }
 

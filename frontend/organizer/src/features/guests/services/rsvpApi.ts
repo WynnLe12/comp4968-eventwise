@@ -58,8 +58,8 @@ export interface GuestRsvp {
     lastName: string | null;
     plusOneAllowed: boolean;
     rsvpStatus: RsvpStatus;
+    /** Meal preference, including any allergies. */
     mealChoice: string | null;
-    dietaryNotes: string | null;
     plusOneAttending: boolean | null;
     respondedAt: string | null;
   };
@@ -67,8 +67,8 @@ export interface GuestRsvp {
 
 export interface RsvpAnswer {
   attending: boolean;
+  /** Meal preference, including any allergies (up to 200 characters). */
   mealChoice: string | null;
-  dietaryNotes: string | null;
   plusOneAttending: boolean;
 }
 

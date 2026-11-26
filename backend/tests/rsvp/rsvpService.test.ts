@@ -132,14 +132,19 @@ test("guests see the event and their own answer, never their email or other gues
   assert.equal(JSON.stringify(view).includes("sofia@example.com"), false);
 });
 
-test("a guest accepts with a meal, allergies and a plus-one, then changes their mind", async () => {
+test("a guest accepts with a meal preference (with allergies) and a plus-one, then changes their mind", async () => {
   const { store, service } = setup();
   await service.sendInvitations("42", "sub-1", AUTH, SETTINGS_BODY);
 
-  const accepted = await service.respond(token("g1"), { attending: true, mealChoice: "Vegetarian", dietaryNotes: "No nuts", plusOneAttending: true });
+  store.guest("42", "g1")!.dietaryNotes = "Organizer's note";
+  const accepted = await service.respond(token("g1"), {
+    attending: true, mealChoice: "Vegetarian, nut allergy", dietaryNotes: "ignored", plusOneAttending: true,
+  });
   assert.equal(accepted.guest.rsvpStatus, "ACCEPTED");
+  assert.equal(accepted.guest.mealChoice, "Vegetarian, nut allergy");
   assert.equal(accepted.guest.plusOneAttending, true);
-  assert.equal(store.guest("42", "g1")!.dietaryNotes, "No nuts");
+  // The RSVP form has one meal field; organizers' dietary notes are left alone.
+  assert.equal(store.guest("42", "g1")!.dietaryNotes, "Organizer's note");
   assert.equal(store.guest("42", "g2")!.rsvpStatus, "PENDING"); // only this guest changed
 
   const declined = await service.respond(token("g1"), { attending: false, mealChoice: "", plusOneAttending: true });

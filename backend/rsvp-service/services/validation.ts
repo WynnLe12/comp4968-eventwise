@@ -6,8 +6,8 @@ import type { RsvpResponse, SendInvitationsInput } from "../types";
 
 export const EVENT_TIME_ZONE = "America/Vancouver";
 export const MESSAGE_MAX = 1000;
-export const MEAL_CHOICE_MAX = 50;
-export const DIETARY_NOTES_MAX = 500;
+/** One "Meal preference" field on the RSVP form, including any allergies. */
+export const MEAL_CHOICE_MAX = 200;
 export const REMINDER_DAYS_MAX = 14;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_DEADLINE_MS = 400 * DAY_MS;
@@ -132,8 +132,8 @@ export function parseRsvpResponse(body: unknown, plusOneAllowed: boolean): RsvpR
 
   return {
     attending,
+    // Meal preference and allergies are one field; organizers' dietaryNotes are never touched.
     mealChoice: optionalText(body, "mealChoice", MEAL_CHOICE_MAX),
-    dietaryNotes: optionalText(body, "dietaryNotes", DIETARY_NOTES_MAX),
     // A guest who isn't coming can't bring a plus-one.
     plusOneAttending: attending && plusOne === true,
   };

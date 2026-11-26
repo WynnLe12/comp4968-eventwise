@@ -108,7 +108,6 @@ The workflow is started **before** any email is queued. If it can't start, the c
     "plusOneAllowed": true,
     "rsvpStatus": "PENDING",
     "mealChoice": null,
-    "dietaryNotes": null,
     "plusOneAttending": null,
     "respondedAt": null
   }
@@ -120,15 +119,16 @@ It never includes the guest's email, other guests, or anything about the event b
 ### PUT /rsvp/{token}
 
 ```json
-{ "attending": true, "mealChoice": "Vegetarian", "dietaryNotes": "Nut allergy", "plusOneAttending": true }
+{ "attending": true, "mealChoice": "Vegetarian, nut allergy", "plusOneAttending": true }
 ```
 
 | Field | Rules |
 | --- | --- |
 | `attending` | **Required** boolean. Sets `rsvpStatus` to `ACCEPTED` or `REJECTED` |
-| `mealChoice` | Optional, up to 50 characters. Empty or null clears it |
-| `dietaryNotes` | Optional, up to 500 characters (allergies and dietary needs). Empty or null clears it |
+| `mealChoice` | Optional, up to 200 characters. The form's single **Meal preference** field, which also asks for any allergies. Empty or null clears it |
 | `plusOneAttending` | Optional boolean. `true` is only allowed when the guest's `plusOneAllowed` is true. Always stored as `false` when `attending` is false |
+
+Any other field in the body (including `dietaryNotes`) is ignored: the guest's `dietaryNotes` belongs to organizers and an RSVP never changes it.
 
 Guests can change their answer any number of times until the deadline. The save is a DynamoDB transaction that also checks the event's RSVPs are still open, so an answer can't slip in after closing.
 

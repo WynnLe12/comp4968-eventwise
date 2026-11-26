@@ -87,7 +87,7 @@ and its leftover guests are unreachable because the event has no members.
 ## RSVP attributes (Feature 8)
 
 Written by the RSVP Lambdas (`backend/rsvp-service`), which only ever touch these
-attributes plus `rsvpStatus`, `mealChoice`, `dietaryNotes` and `updatedAt`:
+attributes plus `rsvpStatus`, `mealChoice` and `updatedAt`:
 
 | Attribute | Type | Notes |
 | --- | --- | --- |
@@ -96,8 +96,9 @@ attributes plus `rsvpStatus`, `mealChoice`, `dietaryNotes` and `updatedAt`:
 | `plusOneAttending` | BOOL | The guest's answer about their plus-one. Always `false` when the guest declined |
 | `reminderSentAt` | S | When the one reminder was queued. Never cleared, so each guest is reminded once |
 
-The guest's answer sets `rsvpStatus` to `ACCEPTED` or `REJECTED`, and `mealChoice` /
-`dietaryNotes` (allergies) to what they entered.
+The guest's answer sets `rsvpStatus` to `ACCEPTED` or `REJECTED`, and `mealChoice` to the
+RSVP form's single **Meal preference** field, which also asks for any allergies (up to 200
+characters). `dietaryNotes` is never changed by an RSVP.
 
 No `rsvpToken` attribute or index was needed: a guest's private link carries `eventId` and
 `guestId` signed with HMAC (see [docs/api/rsvp.md](../../docs/api/rsvp.md) §3), so the

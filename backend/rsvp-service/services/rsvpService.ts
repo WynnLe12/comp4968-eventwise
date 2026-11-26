@@ -100,7 +100,6 @@ function toGuestView(settings: RsvpSettings, guest: GuestRecord, now: Date): Gue
       plusOneAllowed: guest.plusOneAllowed === true,
       rsvpStatus: guestStatus(guest.rsvpStatus),
       mealChoice: guest.mealChoice?.trim() || null,
-      dietaryNotes: guest.dietaryNotes?.trim() || null,
       plusOneAttending: typeof guest.plusOneAttending === "boolean" ? guest.plusOneAttending : null,
       respondedAt: guest.rsvpRespondedAt ?? null,
     },

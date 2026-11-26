@@ -208,13 +208,13 @@ export class RsvpRepository {
       ":now": now,
     };
     const set = ["#status = :status", "plusOneAttending = :plusOne", "rsvpRespondedAt = :now", "updatedAt = :now"];
+    // Only the meal preference (which includes allergies) comes from the guest; dietaryNotes
+    // belongs to organizers and is left as it is.
     const remove: string[] = [];
-    for (const field of ["mealChoice", "dietaryNotes"] as const) {
-      if (response[field] === null) remove.push(field);
-      else {
-        set.push(`${field} = :${field}`);
-        values[`:${field}`] = response[field];
-      }
+    if (response.mealChoice === null) remove.push("mealChoice");
+    else {
+      set.push("mealChoice = :mealChoice");
+      values[":mealChoice"] = response.mealChoice;
     }
 
     try {

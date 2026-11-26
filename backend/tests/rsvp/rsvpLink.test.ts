@@ -97,10 +97,12 @@ test("a reminder that would already have passed, or a bad start time, is rejecte
 
 test("guests must say whether they're coming; text fields are trimmed and limited", () => {
   assert.ok(fieldsOf(() => parseRsvpResponse({}, true)).attending);
-  assert.ok(fieldsOf(() => parseRsvpResponse({ attending: true, mealChoice: "x".repeat(51) }, true)).mealChoice);
-  assert.deepEqual(parseRsvpResponse({ attending: true, mealChoice: " Fish ", dietaryNotes: "", plusOneAttending: true }, true), {
-    attending: true, mealChoice: "Fish", dietaryNotes: null, plusOneAttending: true,
+  assert.ok(fieldsOf(() => parseRsvpResponse({ attending: true, mealChoice: "x".repeat(201) }, true)).mealChoice);
+  assert.equal(parseRsvpResponse({ attending: true, mealChoice: "x".repeat(200) }, true).mealChoice?.length, 200);
+  assert.deepEqual(parseRsvpResponse({ attending: true, mealChoice: " Fish, no shellfish ", dietaryNotes: "x", plusOneAttending: true }, true), {
+    attending: true, mealChoice: "Fish, no shellfish", plusOneAttending: true,
   });
+  assert.equal(parseRsvpResponse({ attending: true, mealChoice: "  " }, true).mealChoice, null);
 });
 
 test("a plus-one needs an invitation that allows one, and a guest who is coming", () => {

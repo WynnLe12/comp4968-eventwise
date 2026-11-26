@@ -99,10 +99,8 @@ export class MemoryRsvpStore {
       plusOneAttending: response.plusOneAttending,
       rsvpRespondedAt: now,
     });
-    for (const field of ["mealChoice", "dietaryNotes"] as const) {
-      if (response[field] === null) delete found[field];
-      else found[field] = response[field]!;
-    }
+    if (response.mealChoice === null) delete found.mealChoice;
+    else found.mealChoice = response.mealChoice;
     return "SAVED";
   }
 }
