@@ -173,7 +173,7 @@ POST /events/1/tasks/from-template
 
 Migration [005_tasks_checklists.sql](../../database/mysql/migrations/005_tasks_checklists.sql), already folded into `eventwise_schema.sql`:
 
-- **`template_tasks`**: the default checklist per event template (`title`, `description`, `days_before_event`, `sort_order`). The wedding and birthday lists are **provisional** and need team sign-off.
+- **`template_tasks`**: the default checklist per event template (`title`, `description`, `days_before_event`, `sort_order`). 005 creates the table, and [006_template_checklists.sql](../../database/mysql/migrations/006_template_checklists.sql) fills in a list for all five templates.
 - **`tasks.completed_at`**, with `chk_task_completed_at`: completed tasks always have a time, open tasks never do.
 - **`tasks.template_task_id`**, with `uq_task_template (event_id, template_task_id)` so generating twice can't duplicate.
 - **`tasks.updated_at`** and the index `idx_task_event_open (event_id, is_completed, due_date)`.
