@@ -45,14 +45,15 @@ function BudgetSnapshot({ budget }: { budget: EventDashboard["budget"] }) {
 }
 
 /**
- * Footer pinned to the bottom of a dashboard card: a one-line summary plus a link to the
- * full page. Keeps side-by-side cards balanced when one list is shorter.
+ * Footer pinned to the bottom of a dashboard card with a one-line summary. It keeps
+ * side-by-side cards balanced when one list is shorter. The link to the full page stays
+ * in the card header only, so each card has one link. Hidden when there is no summary.
  */
-function CardFooter({ summary, linkText, onView }: { summary: string; linkText: string; onView: () => void }) {
+function CardFooter({ summary }: { summary: string }) {
+  if (!summary) return null;
   return (
     <div className="dashboard-card-foot">
       <span>{summary}</span>
-      <button className="text-link" onClick={onView}>{linkText} <Icon name="arrow" size={14} /></button>
     </div>
   );
 }
@@ -187,7 +188,7 @@ export function Dashboard({ go }: { go: (p: Page) => void }) {
                 <button className="text-link" onClick={() => go("budget")}>View budget <Icon name="arrow" size={14} /></button>
               </div>
               {data && <BudgetSnapshot budget={data.budget} />}
-              {data && <CardFooter summary={budgetSummary(data.budget)} linkText="View full budget" onView={() => go("budget")} />}
+              {data && <CardFooter summary={budgetSummary(data.budget)} />}
             </Card>
             <Card className="dashboard-card">
               <div className="card-head"><div><h3>Tasks due</h3><p>{data ? "Overdue and upcoming, nearest due date first" : loadingText}</p></div>
@@ -197,8 +198,6 @@ export function Dashboard({ go }: { go: (p: Page) => void }) {
               {data && (
                 <CardFooter
                   summary={showing(data.tasks.nextDue.length, data.tasks.total - data.tasks.completed, "open task", "open tasks")}
-                  linkText="View all tasks"
-                  onView={() => go("tasks")}
                 />
               )}
             </Card>
@@ -212,8 +211,6 @@ export function Dashboard({ go }: { go: (p: Page) => void }) {
             {data && (
               <CardFooter
                 summary={showing(data.payments.items.length, data.payments.overdueCount + data.payments.upcomingCount, "payment due", "payments due")}
-                linkText="View all expenses"
-                onView={() => go("expenses")}
               />
             )}
           </Card>
