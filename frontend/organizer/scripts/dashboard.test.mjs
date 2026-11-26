@@ -114,24 +114,32 @@ test("tasks and payments lists show due dates, people and overdue marks", () => 
   assert.doesNotMatch(html, /Album<\/b><small>null/);
 });
 
-test("list footers say how many items are shown and link to the full page", () => {
+test("list footers say how many items are shown, with no extra link", () => {
   const html = render({ data: dashboard });
   // 3 tasks - 1 done = 2 open, both listed; 1 overdue + 1 upcoming payment, both listed.
-  assert.match(html, /<div class="dashboard-card-foot"><span>Showing 2 of 2 open tasks<\/span><button class="text-link">View all tasks/);
-  assert.match(html, /<div class="dashboard-card-foot"><span>Showing 2 of 2 payments due<\/span><button class="text-link">View all expenses/);
+  assert.match(html, /<div class="dashboard-card-foot"><span>Showing 2 of 2 open tasks<\/span><\/div>/);
+  assert.match(html, /<div class="dashboard-card-foot"><span>Showing 2 of 2 payments due<\/span><\/div>/);
+});
+
+test("each card has a single link to its page, in the header", () => {
+  const html = render({ data: dashboard });
+  for (const link of ["View budget", "All tasks", "View expenses"]) {
+    assert.equal(html.split(`>${link} <`).length - 1, 1, link);
+  }
+  assert.doesNotMatch(html, /View all tasks|View all expenses|View full budget/);
 });
 
 test("the budget footer summarizes overspending", () => {
   // Fixture: Photography is within budget, Catering is over.
   assert.match(render({ data: dashboard }),
-    /<div class="dashboard-card-foot"><span>1 category over budget<\/span><button class="text-link">View full budget/);
+    /<div class="dashboard-card-foot"><span>1 category over budget<\/span><\/div>/);
   const categories = dashboard.budget.categories;
   const allOver = categories.map((category) => ({ ...category, isOverBudget: true }));
   assert.match(render({ data: { ...dashboard, budget: { ...dashboard.budget, categories: allOver } } }), /2 categories over budget/);
   const noneOver = categories.map((category) => ({ ...category, isOverBudget: false }));
   assert.match(render({ data: { ...dashboard, budget: { ...dashboard.budget, categories: noneOver } } }), /All categories within budget/);
   const none = render({ data: { ...dashboard, budget: { ...dashboard.budget, categories: [] } } });
-  assert.match(none, /<span><\/span><button class="text-link">View full budget/);
+  assert.doesNotMatch(none, /over budget|within budget/);
 });
 
 test("the task footer counts open tasks that are not listed, with the right word for one", () => {
@@ -141,16 +149,15 @@ test("the task footer counts open tasks that are not listed, with the right word
   assert.match(one, /Showing 1 of 1 open task</);
 });
 
-test("with nothing open, the footer keeps only the link", () => {
+test("with nothing to summarize, the footer is hidden", () => {
   const empty = {
     ...dashboard,
+    budget: { ...dashboard.budget, categories: [] },
     payments: { ...dashboard.payments, overdueCount: 0, upcomingCount: 0, items: [] },
     tasks: { total: 0, completed: 0, overdue: 0, percentComplete: 0, nextDue: [] },
   };
   const html = render({ data: empty });
-  assert.doesNotMatch(html, /Showing/);
-  assert.match(html, /<span><\/span><button class="text-link">View all tasks/);
-  assert.match(html, /<span><\/span><button class="text-link">View all expenses/);
+  assert.doesNotMatch(html, /dashboard-card-foot/);
 });
 
 test("a task due today is not marked overdue", () => {
