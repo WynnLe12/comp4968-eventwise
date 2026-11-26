@@ -1,24 +1,24 @@
--- MySQL 8.0. Apply once to the selected EventWise database after migration 004.
+-- MySQL 8.0. Apply once to the selected EventWise database after migration 006.
+-- For mysql2 conn.query(sql) with multipleStatements enabled; no CLI preprocessing.
 -- Pause document/draft writes while applying. DDL implicitly commits in MySQL.
 -- Nullable additions preserve legacy drafts and F6 uploads. Existing fingerprints
 -- remain unknown until trusted backend code reads and hashes the original bytes.
 -- No vendor, expense or payment records are created or modified by this migration.
 
 -- Fail before any table changes rather than deleting or merging duplicate drafts.
-DROP PROCEDURE IF EXISTS eventwise_migration_005_preflight;
-DELIMITER $$
-CREATE PROCEDURE eventwise_migration_005_preflight()
+DROP PROCEDURE IF EXISTS eventwise_migration_007_preflight;
+CREATE PROCEDURE eventwise_migration_007_preflight()
+SQL SECURITY INVOKER
 BEGIN
  IF EXISTS (
    SELECT 1 FROM draft_budget_items WHERE document_id IS NOT NULL
    GROUP BY event_id, document_id HAVING COUNT(*) > 1
  ) THEN
-   SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Migration 005: reconcile duplicate document drafts before applying';
+   SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Migration 007: reconcile duplicate document drafts before applying';
  END IF;
-END$$
-DELIMITER ;
-CALL eventwise_migration_005_preflight();
-DROP PROCEDURE eventwise_migration_005_preflight;
+END;
+CALL eventwise_migration_007_preflight();
+DROP PROCEDURE eventwise_migration_007_preflight;
 
 -- F6 may store repeated uploads; F15 deduplicates their drafts using the hash.
 ALTER TABLE event_documents

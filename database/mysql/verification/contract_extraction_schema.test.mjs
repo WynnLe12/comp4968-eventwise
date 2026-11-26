@@ -12,8 +12,8 @@ const mysql = require('mysql2/promise');
 const schema = readFileSync(new URL('../schemas/eventwise_schema.sql', import.meta.url), 'utf8');
 // Snapshot of the two pre-F15 tables, to exercise an upgrade with existing data.
 const legacyTables = readFileSync(new URL('./fixtures/pre_contract_extraction_tables.sql', import.meta.url), 'utf8');
-const migration = readFileSync(new URL('../migrations/005_contract_extraction_foundation.sql', import.meta.url), 'utf8')
-  .replace(/^DELIMITER .*\r?\n/gm, '').replace(/END\$\$/g, 'END;');
+// Execute the exact bytes used by the deployed filename/checksum migration runner.
+const migration = readFileSync(new URL('../migrations/007_contract_extraction_foundation.sql', import.meta.url), 'utf8');
 const enabled = process.env.EVENTWISE_SCHEMA_MYSQL_TEST === '1';
 
 async function database(legacy, run) {
