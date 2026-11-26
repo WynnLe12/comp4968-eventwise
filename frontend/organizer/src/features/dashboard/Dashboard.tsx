@@ -44,6 +44,32 @@ function BudgetSnapshot({ budget }: { budget: EventDashboard["budget"] }) {
   );
 }
 
+/**
+ * Footer pinned to the bottom of a dashboard card: a one-line summary plus a link to the
+ * full page. Keeps side-by-side cards balanced when one list is shorter.
+ */
+function CardFooter({ summary, linkText, onView }: { summary: string; linkText: string; onView: () => void }) {
+  return (
+    <div className="dashboard-card-foot">
+      <span>{summary}</span>
+      <button className="text-link" onClick={onView}>{linkText} <Icon name="arrow" size={14} /></button>
+    </div>
+  );
+}
+
+/** "Showing 5 of 9 open tasks", or "" when there is nothing to show. */
+function showing(shown: number, total: number, singular: string, pluralWord: string): string {
+  return total > 0 ? `Showing ${shown} of ${total} ${total === 1 ? singular : pluralWord}` : "";
+}
+
+/** "1 category over budget" / "All categories within budget", or "" without categories. */
+function budgetSummary(budget: EventDashboard["budget"]): string {
+  if (!budget.categories.length) return "";
+  const over = budget.categories.filter((category) => category.isOverBudget).length;
+  if (!over) return "All categories within budget";
+  return `${over} ${over === 1 ? "category" : "categories"} over budget`;
+}
+
 function UpcomingTasks({ tasks, asOfDate }: { tasks: EventDashboard["tasks"]; asOfDate: string }) {
   if (!tasks.nextDue.length) {
     return <p className="dashboard-empty">{tasks.total ? "No open tasks with a due date." : "No tasks yet."}</p>;
@@ -155,26 +181,41 @@ export function Dashboard({ go }: { go: (p: Page) => void }) {
             />
           </div>
           <div className="dashboard-columns">
-            <Card>
+            <Card className="dashboard-card">
               <div className="card-head"><div><h3>Budget snapshot</h3>
                 <p>{data ? `${formatMoney(data.budget.remainingBudget)} left of ${formatMoney(data.budget.eventBudget)}` : loadingText}</p></div>
                 <button className="text-link" onClick={() => go("budget")}>View budget <Icon name="arrow" size={14} /></button>
               </div>
               {data && <BudgetSnapshot budget={data.budget} />}
+              {data && <CardFooter summary={budgetSummary(data.budget)} linkText="View full budget" onView={() => go("budget")} />}
             </Card>
-            <Card>
+            <Card className="dashboard-card">
               <div className="card-head"><div><h3>Tasks due</h3><p>{data ? "Overdue and upcoming, nearest due date first" : loadingText}</p></div>
                 <button className="text-link" onClick={() => go("tasks")}>All tasks <Icon name="arrow" size={14} /></button>
               </div>
               {data && <UpcomingTasks tasks={data.tasks} asOfDate={data.asOfDate} />}
+              {data && (
+                <CardFooter
+                  summary={showing(data.tasks.nextDue.length, data.tasks.total - data.tasks.completed, "open task", "open tasks")}
+                  linkText="View all tasks"
+                  onView={() => go("tasks")}
+                />
+              )}
             </Card>
           </div>
-          <Card>
+          <Card className="dashboard-card">
             <div className="card-head"><div><h3>Payments due</h3>
               <p>{data ? `Overdue and due in the next ${data.payments.windowDays} days` : loadingText}</p></div>
               <button className="text-link" onClick={() => go("expenses")}>View expenses <Icon name="arrow" size={14} /></button>
             </div>
             {data && <UpcomingPayments payments={data.payments} />}
+            {data && (
+              <CardFooter
+                summary={showing(data.payments.items.length, data.payments.overdueCount + data.payments.upcomingCount, "payment due", "payments due")}
+                linkText="View all expenses"
+                onView={() => go("expenses")}
+              />
+            )}
           </Card>
         </>
       )}

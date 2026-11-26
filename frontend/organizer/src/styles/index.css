@@ -890,6 +890,24 @@
   display: block;
 }
 
+/* Dashboard list cards stretch to the row height; the footer stays at the bottom. */
+.dashboard-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-card-foot {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  border-top: 1px solid #f0eef4;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
 /* Empty list message inside a dashboard card (same text style as .card-head p). */
 .dashboard-empty {
   margin: 0;

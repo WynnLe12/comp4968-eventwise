@@ -114,6 +114,45 @@ test("tasks and payments lists show due dates, people and overdue marks", () => 
   assert.doesNotMatch(html, /Album<\/b><small>null/);
 });
 
+test("list footers say how many items are shown and link to the full page", () => {
+  const html = render({ data: dashboard });
+  // 3 tasks - 1 done = 2 open, both listed; 1 overdue + 1 upcoming payment, both listed.
+  assert.match(html, /<div class="dashboard-card-foot"><span>Showing 2 of 2 open tasks<\/span><button class="text-link">View all tasks/);
+  assert.match(html, /<div class="dashboard-card-foot"><span>Showing 2 of 2 payments due<\/span><button class="text-link">View all expenses/);
+});
+
+test("the budget footer summarizes overspending", () => {
+  // Fixture: Photography is within budget, Catering is over.
+  assert.match(render({ data: dashboard }),
+    /<div class="dashboard-card-foot"><span>1 category over budget<\/span><button class="text-link">View full budget/);
+  const categories = dashboard.budget.categories;
+  const allOver = categories.map((category) => ({ ...category, isOverBudget: true }));
+  assert.match(render({ data: { ...dashboard, budget: { ...dashboard.budget, categories: allOver } } }), /2 categories over budget/);
+  const noneOver = categories.map((category) => ({ ...category, isOverBudget: false }));
+  assert.match(render({ data: { ...dashboard, budget: { ...dashboard.budget, categories: noneOver } } }), /All categories within budget/);
+  const none = render({ data: { ...dashboard, budget: { ...dashboard.budget, categories: [] } } });
+  assert.match(none, /<span><\/span><button class="text-link">View full budget/);
+});
+
+test("the task footer counts open tasks that are not listed, with the right word for one", () => {
+  const many = render({ data: { ...dashboard, tasks: { ...dashboard.tasks, total: 10, completed: 1 } } });
+  assert.match(many, /Showing 2 of 9 open tasks/);
+  const one = render({ data: { ...dashboard, tasks: { ...dashboard.tasks, total: 2, completed: 1, nextDue: [dashboard.tasks.nextDue[0]] } } });
+  assert.match(one, /Showing 1 of 1 open task</);
+});
+
+test("with nothing open, the footer keeps only the link", () => {
+  const empty = {
+    ...dashboard,
+    payments: { ...dashboard.payments, overdueCount: 0, upcomingCount: 0, items: [] },
+    tasks: { total: 0, completed: 0, overdue: 0, percentComplete: 0, nextDue: [] },
+  };
+  const html = render({ data: empty });
+  assert.doesNotMatch(html, /Showing/);
+  assert.match(html, /<span><\/span><button class="text-link">View all tasks/);
+  assert.match(html, /<span><\/span><button class="text-link">View all expenses/);
+});
+
 test("a task due today is not marked overdue", () => {
   const today = { ...dashboard, tasks: { ...dashboard.tasks, nextDue: [
     { taskId: "30", title: "Call DJ", dueDate: "2026-06-10", assigneeName: null },
