@@ -103,3 +103,52 @@ export type VendorCreateInput = Partial<Omit<VendorFields, "quoteAmount" | "cont
 
 /** PATCH body: only the fields that change. */
 export type VendorUpdateInput = Partial<VendorCreateInput>;
+
+// ---------------------------------------------------------------------------
+// Tasks (Feature 12)
+// ---------------------------------------------------------------------------
+
+export interface TaskAssignee {
+  memberId: string;
+  role: "OWNER" | "CO_PLANNER";
+  displayName: string | null;
+}
+
+export interface Task {
+  id: string;
+  eventId: string;
+  title: string;
+  description: string | null;
+  /** YYYY-MM-DD, a calendar date. Never pass it through `new Date()` for display. */
+  dueDate: string | null;
+  isCompleted: boolean;
+  /** ISO UTC timestamp, set when the task was completed. */
+  completedAt: string | null;
+  assignee: TaskAssignee | null;
+  source: "MANUAL" | "TEMPLATE";
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** The only fields the API accepts. PATCH sends just the ones that change. */
+export interface TaskInput {
+  title: string;
+  description: string | null;
+  dueDate: string | null;
+  assignedMemberId: string | null;
+  isCompleted: boolean;
+}
+
+export type TaskFieldErrors = Partial<Record<keyof TaskInput, string>>;
+
+export interface TaskProgress {
+  total: number;
+  completed: number;
+  open: number;
+  percentComplete: number;
+}
+
+export interface TaskList {
+  tasks: Task[];
+  progress: TaskProgress;
+}

@@ -31,7 +31,8 @@
     "package:vendors": "npm run build && node scripts/package-vendors.mjs",
     "package:photos": "npm run build && node scripts/package-photos.mjs",
     "package:expenses": "npm run build && node scripts/package-expenses.mjs",
-    "package:timeline": "npm run build && node scripts/package-timeline.mjs"
+    "package:timeline": "npm run build && node scripts/package-timeline.mjs",
+    "package:tasks": "npm run build && node scripts/package-tasks.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
