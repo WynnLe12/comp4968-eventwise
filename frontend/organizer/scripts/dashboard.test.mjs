@@ -84,7 +84,7 @@ const render = (next) => {
 test("stat cards show real budget, guest, task and payment numbers", () => {
   const html = render({ data: dashboard });
   assert.match(html, /Total budget\|\$5,000.00\|\$3,400.00 committed · \$1,200.00 paid/);
-  assert.match(html, /Guest responses\|2 \/ 4\|People accepted · 3 guests \+ 1 plus-one/);
+  assert.match(html, /Guest responses\|2 \/ 4\|People coming · 3 guests \+ 1 plus-one/);
   assert.match(html, /Tasks complete\|33%\|1 of 3 tasks · 1 overdue/);
   // Overdue 800.00 + upcoming 400.00
   assert.match(html, /Upcoming payments\|\$1,200.00\|1 payment in 7 days · 1 overdue/);

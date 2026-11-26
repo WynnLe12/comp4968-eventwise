@@ -29,10 +29,15 @@ const rsvpDisplay = Object.fromEntries(
 
 type StatusFilter = "ALL" | RsvpStatus;
 
+/** The guest accepted but their plus-one isn't coming (counted under "Not coming"). */
+function plusOneDeclined(guest: GuestRecord): boolean {
+  return guest.rsvpStatus === "ACCEPTED" && guest.plusOneAttending === false;
+}
+
 /** After an accepted RSVP (Feature 8) the tag says whether the plus-one is coming. */
 function plusOneLabel(guest: GuestRecord): string {
   if (guest.rsvpStatus === "ACCEPTED" && guest.plusOneAttending === true) return "+ plus-one coming";
-  if (guest.rsvpStatus === "ACCEPTED" && guest.plusOneAttending === false) return "· plus-one not coming";
+  if (plusOneDeclined(guest)) return "· plus-one not coming";
   return "+ plus-one";
 }
 
@@ -162,22 +167,22 @@ export function Guests({
       <div className="guest-summary">
         <div>
           <b>{counts.ACCEPTED}</b>
-          <span>Accepted</span>
+          <span>Coming</span>
           <i className="green" />
         </div>
         <div>
           <b>{counts.REJECTED}</b>
-          <span>Rejected</span>
+          <span>Not coming</span>
           <i className="coral" />
         </div>
         <div>
           <b>{counts.PENDING}</b>
-          <span>Pending</span>
+          <span>Awaiting reply</span>
           <i className="gray" />
         </div>
         <div>
           <b>{counts.UNINVITED}</b>
-          <span>Uninvited</span>
+          <span>Not invited</span>
         </div>
         <div>
           <b>{totalHeadcount(guests)}</b>
@@ -236,7 +241,10 @@ export function Guests({
                         <span>{initials(name)}</span>
                         <b>
                           {name}
-                          {g.plusOneAllowed && <small> {plusOneLabel(g)}</small>}
+                          {g.plusOneAllowed && (
+                            // A declined plus-one is the "Not coming" seat in the cards above: same coral color.
+                            <small className={plusOneDeclined(g) ? "plus-one-declined" : undefined}> {plusOneLabel(g)}</small>
+                          )}
                           {hasName && g.email && <small> · {g.email}</small>}
                         </b>
                       </div>

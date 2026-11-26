@@ -158,7 +158,7 @@ export function Dashboard({ go }: { go: (p: Page) => void }) {
               label="Guest responses"
               value={guests ? `${guests.rsvp.ACCEPTED} / ${guests.expectedHeadcount}` : "--"}
               detail={guests
-                ? `People accepted · ${plural(guests.records, "guest")} + ${plural(guests.plusOnes, "plus-one")}`
+                ? `People coming · ${plural(guests.records, "guest")} + ${plural(guests.plusOnes, "plus-one")}`
                 : loadingText || "Guest information unavailable"}
               icon="users"
               tone="coral"
