@@ -44,7 +44,7 @@ function BudgetSnapshot({ budget }: { budget: EventDashboard["budget"] }) {
   );
 }
 
-function UpcomingTasks({ tasks }: { tasks: EventDashboard["tasks"] }) {
+function UpcomingTasks({ tasks, asOfDate }: { tasks: EventDashboard["tasks"]; asOfDate: string }) {
   if (!tasks.nextDue.length) {
     return <p className="dashboard-empty">{tasks.total ? "No open tasks with a due date." : "No tasks yet."}</p>;
   }
@@ -56,6 +56,8 @@ function UpcomingTasks({ tasks }: { tasks: EventDashboard["tasks"] }) {
             <b>{task.title}</b>
             <small>Due {formatCalendarDate(task.dueDate)} · {task.assigneeName ?? "Unassigned"}</small>
           </div>
+          {/* Same rule as the API's overdue count: open and due before today (UTC). */}
+          {task.dueDate < asOfDate && <div className="dashboard-flag"><Badge tone="danger">Overdue</Badge></div>}
         </div>
       ))}
     </div>
@@ -161,10 +163,10 @@ export function Dashboard({ go }: { go: (p: Page) => void }) {
               {data && <BudgetSnapshot budget={data.budget} />}
             </Card>
             <Card>
-              <div className="card-head"><div><h3>Upcoming tasks</h3><p>{data ? "Open tasks, nearest due date first" : loadingText}</p></div>
+              <div className="card-head"><div><h3>Tasks due</h3><p>{data ? "Overdue and upcoming, nearest due date first" : loadingText}</p></div>
                 <button className="text-link" onClick={() => go("tasks")}>All tasks <Icon name="arrow" size={14} /></button>
               </div>
-              {data && <UpcomingTasks tasks={data.tasks} />}
+              {data && <UpcomingTasks tasks={data.tasks} asOfDate={data.asOfDate} />}
             </Card>
           </div>
           <Card>

@@ -104,11 +104,23 @@ test("budget snapshot lists categories and flags overspending", () => {
 
 test("tasks and payments lists show due dates, people and overdue marks", () => {
   const html = render({ data: dashboard });
-  assert.match(html, /Send invites.*Due \[2026-06-05\] · Heather/);
-  assert.match(html, /Pick music.*Due \[2026-06-14\] · Unassigned/);
+  // Overdue tasks are listed too, so the card is "Tasks due" (like "Payments due").
+  assert.match(html, /<h3>Tasks due<\/h3><p>Overdue and upcoming, nearest due date first<\/p>/);
+  // asOfDate is 2026-06-10: a task due before it is overdue, a later one is not.
+  assert.match(html, /Send invites.*Due \[2026-06-05\] · Heather<\/small><\/div><div class="dashboard-flag"><mark>Overdue<\/mark><\/div>/);
+  assert.match(html, /Pick music.*Due \[2026-06-14\] · Unassigned<\/small><\/div><\/div>/);
   assert.match(html, /Photographer deposit.*Lens Studio · Photography · due \[2026-06-07\].*<div class="dashboard-flag"><mark>Overdue<\/mark><\/div>.*\$800.00/);
   assert.match(html, /Album.*Photography · due \[2026-06-15\]/);
   assert.doesNotMatch(html, /Album<\/b><small>null/);
+});
+
+test("a task due today is not marked overdue", () => {
+  const today = { ...dashboard, tasks: { ...dashboard.tasks, nextDue: [
+    { taskId: "30", title: "Call DJ", dueDate: "2026-06-10", assigneeName: null },
+  ] } };
+  const html = render({ data: today });
+  // The row ends right after its text: no badge (the payments list below has its own).
+  assert.match(html, /Call DJ<\/b><small>Due \[2026-06-10\] · Unassigned<\/small><\/div><\/div>/);
 });
 
 test("when guests can't be loaded, only the guest card says so", () => {
