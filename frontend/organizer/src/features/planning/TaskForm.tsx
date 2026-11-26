@@ -71,7 +71,7 @@ export function TaskForm({
         </div>
       )}
       <Field
-        label="Task"
+        label="Task *"
         value={values.title}
         maxLength={200}
         required
