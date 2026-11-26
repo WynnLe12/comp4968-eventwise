@@ -487,7 +487,20 @@ function EventTasks({ onToast }: { onToast: Toast }) {
                 >
                   {t.isCompleted && "✓"}
                 </button>
-                <div className="task-main">
+                <div
+                  className="task-main"
+                  role="button"
+                  tabIndex={0}
+                  title="Edit task"
+                  aria-label={`Edit ${t.title}`}
+                  onClick={() => setEditing(t)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setEditing(t);
+                    }
+                  }}
+                >
                   <b>{t.title}</b>
                   {late && <Badge tone="danger">Overdue</Badge>}
                   {t.description && <small>{t.description}</small>}
