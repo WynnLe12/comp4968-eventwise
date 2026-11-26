@@ -177,3 +177,68 @@ test("contract amounts use a plain dollar sign and preserve exact cents", () => 
   assert.deepEqual(edits.changes, { totalAmount: "630.00" });
   assert.equal(Object.hasOwn(validation.contractDraftFormValues(draft), "currencyCode"), false);
 });
+
+const contractDocuments = load("contractDocuments", { "../documents/documentsApi": {} });
+const document = { documentId: "9", eventId: "3", filename: "contract.pdf", contentType: "application/pdf", sizeBytes: "27882", uploadedAt: "2026-11-26 12:19:25" };
+
+test("document picker accepts completed PDF and image uploads within the size limit", () => {
+  const documents = [document, { ...document, documentId: "10", contentType: "image/jpeg", sizeBytes: "10485760" }, { ...document, documentId: "11", contentType: "image/png", sizeBytes: "1" }];
+  assert.deepEqual(contractDocuments.eligibleContractDocuments(documents, "3"), documents);
+  assert.deepEqual(contractDocuments.eligibleContractDocuments([], "3"), []);
+});
+
+test("document picker excludes unsupported, empty and oversized files", () => {
+  for (const change of [ { contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }, { sizeBytes: "0" }, { sizeBytes: "10485761" } ]) {
+    assert.deepEqual(contractDocuments.eligibleContractDocuments([{ ...document, ...change }], "3"), []);
+  }
+});
+
+test("document picker rejects another event's documents and malformed or duplicate identities", () => {
+  for (const documents of [null, [{ ...document, eventId: "4" }], [{ ...document, documentId: "18446744073709551616" }], [{ ...document, documentId: "01" }], [{ ...document, sizeBytes: "unknown" }], [document, document]]) {
+    assert.throws(() => contractDocuments.eligibleContractDocuments(documents, "3"), /couldn't read/);
+  }
+});
+
+test("draft creation sends only the selected document ID and opens the server's new or reused draft", async () => {
+  for (const created of [true, false]) {
+    await withApi(async (url, options) => {
+      assert.equal(url, "/api/events/3/contract-drafts");
+      assert.equal(options.method, "POST");
+      assert.equal(options.headers.Authorization, "Bearer test-access-token");
+      assert.equal(options.headers["Content-Type"], "application/json");
+      assert.deepEqual(JSON.parse(options.body), { documentId: "9" });
+      return Response.json({ data: { draftId: "9007199254740993" }, created }, { status: created ? 201 : 200 });
+    }, async api => {
+      assert.deepEqual(await api.createContractDraft("3", "9"), { draftId: "9007199254740993", created });
+    });
+  }
+});
+
+test("draft creation rejects invalid IDs before sending a request and validates returned draft identities", async () => {
+  await withApi(async () => { assert.fail("Invalid selection must not make a request"); }, async api => {
+    for (const id of ["0", "01", "-1", "18446744073709551616", ""] ) await assert.rejects(api.createContractDraft("3", id));
+  });
+  for (const invalid of [null, {}, { data: { draftId: "0" }, created: true }, { data: { draftId: "2" }, created: "true" }, { data: { draftId: "18446744073709551616" }, created: false }]) {
+    await withApi(async () => Response.json(invalid), async api => {
+      await assert.rejects(api.createContractDraft("3", "9"), /couldn't read/);
+    });
+  }
+});
+
+test("document creation failures give useful guidance without leaking private storage errors", async () => {
+  for (const [status, code, expected] of [
+    [404, "NOT_FOUND", /no longer available/], [422, "INVALID_DOCUMENT", /PDF, JPG or PNG/],
+    [409, "DOCUMENT_CHANGED", /document changed/], [409, "DUPLICATE_CONTRACT", /conflicting saved drafts/],
+    [503, "DOCUMENT_UNAVAILABLE", /source file couldn't be read/], [500, "INTERNAL_ERROR", /couldn't create/],
+  ]) {
+    await withApi(async () => Response.json({ error: { code, message: "private-bucket-key" } }, { status }), async api => {
+      await assert.rejects(api.createContractDraft("3", "9"), error => expected.test(error.message) && !error.message.includes("private-bucket-key"));
+    });
+  }
+});
+
+test("signed-out draft creation never sends a request", async () => {
+  await withApi(async () => { assert.fail("No unauthenticated request expected"); }, async api => {
+    await assert.rejects(api.createContractDraft("3", "9"), /sign in again/);
+  }, async () => { throw new Error("Signed out"); });
+});

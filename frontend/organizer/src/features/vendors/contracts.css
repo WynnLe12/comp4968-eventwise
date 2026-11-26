@@ -30,3 +30,5 @@
 .contract-confirmation ul { padding-left: 20px; }
 .contract-confirmation li { margin: 8px 0; }
 .contract-confirmation .contract-form-actions { margin-bottom: 0; }
+
+.contract-page-actions { display: flex; gap: 12px; flex-wrap: wrap; }

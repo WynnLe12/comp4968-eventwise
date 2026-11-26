@@ -1,3 +1,4 @@
+import { ChooseContractDocumentDialog } from "./ChooseContractDocumentDialog";
 import { formatContractAmount } from "./contractAmount";
 import { ContractDraftDetailsDialog } from "./ContractDraftDetailsDialog";
 import { useCallback, useState } from "react";
@@ -25,16 +26,28 @@ export function Contracts() {
 function EventContracts({ eventId }: { eventId: string }) {
   const navigate = useNavigate();
   const [offset, setOffset] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [choosing, setChoosing] = useState(false);
+  const [selectedDraft, setSelectedDraft] = useState<{ draftId: string; notice: string } | null>(null);
   return <>
-    <PageHeader page="contracts" action={<Button variant="secondary" onClick={() => navigate("/app/documents")}>Open Documents</Button>} />
+    <PageHeader page="contracts" action={<div className="contract-page-actions">
+      <Button variant="secondary" onClick={() => navigate("/app/documents")}>Open Documents</Button>
+      <Button onClick={() => setChoosing(true)}>Choose document</Button>
+    </div>} />
     <p className="contracts-help">Review contract details before adding them to expenses. Automatic extraction is not available yet.</p>
-    <DraftList key={offset} eventId={eventId} offset={offset} onPage={setOffset} />
+    <DraftList key={JSON.stringify([offset, refreshKey])} eventId={eventId} offset={offset} onPage={setOffset}
+      onSelect={draftId => setSelectedDraft({ draftId, notice: "" })} onChoose={() => setChoosing(true)} />
+    {choosing && <ChooseContractDocumentDialog eventId={eventId} onClose={() => setChoosing(false)} onCreated={result => {
+      setChoosing(false); setOffset(0); setRefreshKey(value => value + 1);
+      setSelectedDraft({ draftId: result.draftId, notice: result.created ? "Draft created. Review and save its details before confirming an expense." : "This file already has a saved draft. We opened the existing draft; no duplicate was created." });
+    }} />}
+    {selectedDraft && <ContractDraftDetailsDialog key={selectedDraft.draftId} eventId={eventId} draftId={selectedDraft.draftId}
+      initialNotice={selectedDraft.notice} onSaved={() => setRefreshKey(value => value + 1)} onClose={() => setSelectedDraft(null)} />}
   </>;
 }
-function DraftList({ eventId, offset, onPage }: { eventId: string; offset: number; onPage: (offset: number) => void }) {
-  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
+function DraftList({ eventId, offset, onPage, onSelect, onChoose }: { eventId: string; offset: number; onPage: (offset: number) => void; onSelect: (draftId: string) => void; onChoose: () => void }) {
   const load = useCallback(() => fetchContractDrafts(eventId, offset), [eventId, offset]);
-  const { data: page, loading, error, reload, update } = useResource(load);
+  const { data: page, loading, error, reload } = useResource(load);
   if (loading) return <LoadingState label="Loading contract drafts..." />;
   if (error) return <ErrorState message={error instanceof Error ? error.message : "We couldn't load contract drafts."} onRetry={reload} />;
   if (!page) return null;
@@ -44,7 +57,8 @@ function DraftList({ eventId, offset, onPage }: { eventId: string; offset: numbe
       <Button variant="secondary" onClick={reload}>Refresh</Button>
     </div>
     {page.data.length === 0 ? <EmptyState title={offset ? "No drafts on this page" : "No contract drafts yet"}
-      message={offset ? "Go back to see earlier drafts." : "Uploaded documents will appear here once a contract draft has been created."} /> :
+      message={offset ? "Go back to see earlier drafts." : "Choose an uploaded document to start reviewing a contract."}
+      action={!offset ? <Button onClick={onChoose}>Choose document</Button> : undefined} /> :
       <ul className="contracts-rows">
         {page.data.map(draft => <li key={draft.draftId}>
           <div className="contracts-draft-name">
@@ -54,7 +68,7 @@ function DraftList({ eventId, offset, onPage }: { eventId: string; offset: numbe
           </div>
           <strong>{draftAmount(draft)}</strong>
           <Badge tone={statuses[draft.status].tone}>{statuses[draft.status].label}</Badge>
-          <Button variant="secondary" onClick={() => setSelectedDraftId(draft.draftId)}>Review details</Button>
+          <Button variant="secondary" onClick={() => onSelect(draft.draftId)}>Review details</Button>
         </li>)}
       </ul>}
     <div className="contracts-pagination">
@@ -63,6 +77,5 @@ function DraftList({ eventId, offset, onPage }: { eventId: string; offset: numbe
       <Button variant="secondary" disabled={offset + page.limit >= page.total} onClick={() => onPage(offset + page.limit)}>Next</Button>
     </div>
   </Card>
-    {selectedDraftId && <ContractDraftDetailsDialog key={selectedDraftId} eventId={eventId} draftId={selectedDraftId} onSaved={saved => update(current => ({ ...current, data: current.data.map(row => row.draftId === saved.draftId ? saved : row) }))} onClose={() => setSelectedDraftId(null)} />}
   </>;
 }

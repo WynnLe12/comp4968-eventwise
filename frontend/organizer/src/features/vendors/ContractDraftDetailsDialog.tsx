@@ -13,11 +13,11 @@ import { fetchContractDraft, type ContractDraftDetails } from "./contractsApi";
 
 
 
-export function ContractDraftDetailsDialog({ eventId, draftId, onClose, onSaved }: { eventId: string; draftId: string; onClose: () => void; onSaved: (draft: ContractDraftDetails) => void }) {
+export function ContractDraftDetailsDialog({ eventId, draftId, onClose, onSaved, initialNotice = "" }: { eventId: string; draftId: string; onClose: () => void; onSaved: (draft: ContractDraftDetails) => void; initialNotice?: string }) {
   const load = useCallback(() => fetchContractDraft(eventId, draftId), [eventId, draftId]);
   const { data, loading, error, reload, update } = useResource(load);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState(initialNotice);
   const saved = (draft: ContractDraftDetails) => { update(() => draft); setNotice(draft.status === "CONFIRMED" ? "Contract confirmed and saved to expenses." : "Draft saved. No expense was created."); onSaved(draft); };
   return <Modal title="Contract details" onClose={() => { if (!busy) onClose(); }} footer={<Button variant="secondary" disabled={busy} onClick={onClose}>Close</Button>}>
     {notice && <p role="status">{notice}</p>}

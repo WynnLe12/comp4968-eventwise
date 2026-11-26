@@ -27,6 +27,15 @@ async function contractRequest(eventId: string, suffix: string, body?: unknown, 
   } catch { throw new Error("We couldn't reach the server. Check your connection and try again."); }
   if (!response.ok) {
     const result = await response.json().catch(() => null);
+    if (method === "POST" && suffix === "" && ![401, 403].includes(response.status)) {
+      const messages: Record<string, string> = {
+        INVALID_DOCUMENT: "Choose a completed PDF, JPG or PNG upload up to 10 MB.",
+        DOCUMENT_CHANGED: "This document changed. Refresh the document list and choose it again.",
+        DUPLICATE_CONTRACT: "This file has conflicting saved drafts. Close this picker and review the existing drafts.",
+        DOCUMENT_UNAVAILABLE: "The source file couldn't be read. Check it in Documents and try again.",
+      };
+      throw new Error(messages[result?.error?.code] ?? (response.status === 404 ? "This document is no longer available. Refresh the document list." : "We couldn't create the draft. Please try again."));
+    }
     if (response.status === 409) {
       const messages: Record<string, string> = {
         DRAFT_CHANGED: "This draft changed in another tab. Reload the latest version before continuing.",
@@ -135,4 +144,14 @@ export async function confirmContractDraft(eventId: string, draftId: string, ver
     throw new Error("We couldn't verify the confirmation result. Reload this draft to check whether the expense was saved.");
   }
   return { draft, created: result.created };
+}
+
+export async function createContractDraft(eventId: string, documentId: string): Promise<{ draftId: string; created: boolean }> {
+  const validId = (value: string) => /^[1-9][0-9]{0,19}$/.test(value) && BigInt(value) <= 18446744073709551615n;
+  if (!validId(eventId) || !validId(documentId)) throw new Error("Choose a document from the selected event.");
+  const result = await contractRequest(eventId, "", { documentId }, "POST") as { data?: { draftId?: string }; created?: boolean } | null;
+  if (!result || typeof result.data?.draftId !== "string" || !validId(result.data.draftId) || typeof result.created !== "boolean") {
+    throw new Error("We couldn't read the draft result. Refresh the saved drafts before trying again.");
+  }
+  return { draftId: result.data.draftId, created: result.created };
 }
