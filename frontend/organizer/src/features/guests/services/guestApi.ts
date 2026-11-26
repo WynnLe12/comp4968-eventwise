@@ -144,6 +144,8 @@ export interface GuestChanges {
   plusOneAllowed: boolean;
   rsvpStatus: RsvpStatus;
   mealChoice: string | null;
+  /** Set from the form's Attendee(s) field; left out to keep the guest's own RSVP answer. */
+  plusOneAttending?: boolean;
 }
 
 /**

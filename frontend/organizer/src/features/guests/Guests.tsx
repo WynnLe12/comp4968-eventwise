@@ -11,7 +11,7 @@ import {
   type GuestRecord,
   type RsvpStatus,
 } from "./services/guestApi";
-import { partySize, peopleByStatus, totalHeadcount } from "./guestHeadcount";
+import { attendeeCount, peopleByStatus, totalHeadcount } from "./guestHeadcount";
 import { AddGuestModal } from "./AddGuestModal";
 import { EditGuestModal } from "./EditGuestModal";
 import "./guests.css";
@@ -218,7 +218,7 @@ export function Guests({
             <thead>
               <tr>
                 <th>Guest</th>
-                <th>Party size</th>
+                <th>Attendee(s)</th>
                 <th>RSVP</th>
                 <th>Meal choice</th>
                 <th></th>
@@ -241,7 +241,7 @@ export function Guests({
                         </b>
                       </div>
                     </td>
-                    <td>{partySize(g)}</td>
+                    <td>{attendeeCount(g) ?? "-"}</td>
                     <td>
                       <Badge tone={status.tone}>{status.label}</Badge>
                     </td>

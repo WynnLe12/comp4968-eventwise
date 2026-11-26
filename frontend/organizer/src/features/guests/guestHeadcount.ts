@@ -7,6 +7,47 @@ export function partySize(guest: { plusOneAllowed: boolean }): number {
   return guest.plusOneAllowed ? 2 : 1;
 }
 
+/**
+ * People actually coming for one guest record, from their RSVP (Feature 8), for the
+ * Guests table's "Attendee(s)" column:
+ *   UNINVITED / PENDING  null (no answer yet; shown as "-")
+ *   REJECTED             0
+ *   ACCEPTED             1, or 2 when their plus-one is coming
+ */
+export function attendeeCount(guest: {
+  rsvpStatus: string;
+  plusOneAllowed: boolean;
+  plusOneAttending?: boolean | null;
+}): number | null {
+  if (guest.rsvpStatus === "REJECTED") return 0;
+  if (guest.rsvpStatus !== "ACCEPTED") return null;
+  return guest.plusOneAllowed && guest.plusOneAttending === true ? 2 : 1;
+}
+
+/**
+ * The attendee counts an organizer can pick in the Edit guest form, or null when the
+ * guest hasn't answered (Uninvited / Pending), where the count is shown as "-".
+ */
+export function attendeeOptions(rsvpStatus: string, plusOneAllowed: boolean): number[] | null {
+  if (rsvpStatus === "REJECTED") return [0];
+  if (rsvpStatus !== "ACCEPTED") return null;
+  return plusOneAllowed ? [1, 2] : [1];
+}
+
+/**
+ * The plusOneAttending value to save for an attendee count chosen in the Edit guest form,
+ * so the Attendee(s) column shows that count. undefined = leave it unchanged.
+ */
+export function plusOneAttendingFor(
+  rsvpStatus: string,
+  plusOneAllowed: boolean,
+  attendees: number | null,
+): boolean | undefined {
+  if (rsvpStatus === "REJECTED") return false;
+  if (rsvpStatus !== "ACCEPTED") return undefined;
+  return plusOneAllowed && attendees === 2;
+}
+
 /** Total people across all guest records, plus-ones included. */
 export function totalHeadcount(guests: readonly { plusOneAllowed: boolean }[]): number {
   return guests.reduce((total, guest) => total + partySize(guest), 0);
