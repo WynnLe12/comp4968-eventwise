@@ -5,6 +5,7 @@
   min-width: 0;
   row-gap: 2px;
   align-self: stretch;
+  align-content: center;
   margin: 0 -8px;
   padding: 0 8px;
   border-radius: 8px;
