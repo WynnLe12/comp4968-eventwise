@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Field, Icon, SelectField, TextAreaField } from "../../components/ui";
 import type { Task, TaskFieldErrors } from "../../types";
 import { draftErrors, draftOf, type TaskDraft } from "./taskRules";
@@ -22,18 +22,32 @@ export function TaskForm({
   formId,
   task,
   assignees,
+  defaultAssigneeId,
   onSubmit,
 }: {
   formId: string;
   task: Task | null;
   assignees: AssigneeOption[];
+  /** Pre-selected "Assigned to" when adding a task (the event owner). Ignored when editing. */
+  defaultAssigneeId?: string | null;
   onSubmit: (draft: TaskDraft) => Promise<TaskFormSubmitError | null>;
 }) {
-  const [values, setValues] = useState<TaskDraft>(() => draftOf(task));
+  const [values, setValues] = useState<TaskDraft>(() => ({
+    ...draftOf(task),
+    ...(!task && defaultAssigneeId ? { assignedMemberId: defaultAssigneeId } : {}),
+  }));
   const [errors, setErrors] = useState<TaskFieldErrors>({});
   const [banner, setBanner] = useState("");
+  const assigneeTouched = useRef(false);
+
+  // The member list can arrive after the modal opens. Apply the default then, unless the user already picked.
+  useEffect(() => {
+    if (task || !defaultAssigneeId || assigneeTouched.current) return;
+    setValues((current) => (current.assignedMemberId ? current : { ...current, assignedMemberId: defaultAssigneeId }));
+  }, [task, defaultAssigneeId]);
 
   const set = (field: keyof TaskDraft) => (value: string) => {
+    if (field === "assignedMemberId") assigneeTouched.current = true;
     setValues((current) => ({ ...current, [field]: value }));
     setErrors((current) => ({ ...current, [field]: undefined }));
   };

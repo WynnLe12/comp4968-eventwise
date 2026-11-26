@@ -180,6 +180,7 @@ function EventTasks({ onToast }: { onToast: Toast }) {
     [members],
   );
   const myMemberId = members?.find((m) => m.is_self)?.member_id ?? null;
+  const ownerMemberId = members?.find((m) => m.role === "OWNER")?.member_id ?? null;
 
   const [tab, setTab] = useState<TaskTab>("all");
   const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>("all");
@@ -326,7 +327,7 @@ function EventTasks({ onToast }: { onToast: Toast }) {
         </>
       }
     >
-      <TaskForm key={editing?.id ?? "new"} formId={TASK_FORM_ID} task={editing} assignees={assignees} onSubmit={save} />
+      <TaskForm key={editing?.id ?? "new"} formId={TASK_FORM_ID} task={editing} assignees={assignees} defaultAssigneeId={ownerMemberId} onSubmit={save} />
     </Modal>
   );
 
