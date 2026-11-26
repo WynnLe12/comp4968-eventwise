@@ -1554,6 +1554,12 @@
   font-weight: 400;
 }
 
+/* Plus-one declined: same color as the "Not coming" cue (rejected badge text). */
+.guest-name small.plus-one-declined {
+  color: #a92f57;
+  font-weight: 600;
+}
+
 .events-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
