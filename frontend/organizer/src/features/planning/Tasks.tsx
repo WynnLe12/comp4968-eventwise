@@ -49,6 +49,26 @@ function errorMessage(reason: unknown, fallback: string) {
 
 const isNotFound = (reason: unknown) => reason instanceof TaskServiceError && reason.status === 404;
 
+/** Per-browser memory of "don't suggest the checklist for this event again". Storage can be blocked, so it fails quietly. */
+const suggestionKey = (eventId: string) => `eventwise.tasks.suggestionDismissed.${eventId}`;
+
+function readSuggestionDismissed(eventId: string | null): boolean {
+  if (!eventId) return false;
+  try {
+    return window.localStorage.getItem(suggestionKey(eventId)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveSuggestionDismissed(eventId: string) {
+  try {
+    window.localStorage.setItem(suggestionKey(eventId), "1");
+  } catch {
+    // Not saved, so the hint comes back on the next visit. That's acceptable.
+  }
+}
+
 function memberLabel(m: EventMember): string {
   const name = m.displayName ?? (m.role === "OWNER" ? "Event owner" : "Co-planner");
   return m.is_self ? `${name} (you)` : name;
@@ -169,6 +189,11 @@ function EventTasks({ onToast }: { onToast: Toast }) {
   const [saving, setSaving] = useState(false);
   const [toggling, setToggling] = useState<ReadonlySet<string>>(new Set());
   const [generating, setGenerating] = useState(false);
+  const [suggestionDismissed, setSuggestionDismissed] = useState(() => readSuggestionDismissed(eventId));
+
+  // Once any suggested task is on the list, the checklist has been used, so stop offering it.
+  const usedTemplate = useMemo(() => tasks.some((t) => t.source === "TEMPLATE"), [tasks]);
+  const showSuggestionHint = hasTemplate && tasks.length > 0 && !usedTemplate && !suggestionDismissed;
 
   const today = localToday();
   const progress = useMemo(() => progressOf(tasks), [tasks]);
@@ -263,7 +288,15 @@ function EventTasks({ onToast }: { onToast: Toast }) {
     try {
       const result = await generateTasksFromTemplate(eventId);
       update(() => ({ tasks: result.tasks, progress: progressOf(result.tasks) }));
-      onToast(result.created ? `Added ${result.created} suggested tasks` : "The suggested checklist is already added");
+      if (result.created) {
+        onToast(result.created === 1 ? "Added 1 suggested task" : `Added ${result.created} suggested tasks`);
+      } else if (result.tasks.some((t) => t.source === "TEMPLATE")) {
+        onToast("The suggested checklist is already added");
+      } else {
+        // The template has no checklist items, so there is nothing to keep suggesting.
+        setSuggestionDismissed(true);
+        onToast("There's no suggested checklist for this type of event yet.");
+      }
     } catch (reason) {
       onToast(errorMessage(reason, "We couldn't add the suggested checklist."), "error");
     } finally {
@@ -274,6 +307,11 @@ function EventTasks({ onToast }: { onToast: Toast }) {
   // ---- Pieces ------------------------------------------------------------
 
   const addButton = <Button icon="plus" onClick={() => setEditing(null)}>Add task</Button>;
+
+  const dismissSuggestion = () => {
+    setSuggestionDismissed(true);
+    if (eventId) saveSuggestionDismissed(eventId);
+  };
 
   const formModal = editing !== undefined && (
     <Modal
@@ -309,10 +347,17 @@ function EventTasks({ onToast }: { onToast: Toast }) {
     </Modal>
   );
 
-  const generateButton = hasTemplate && (
-    <Button variant="secondary" icon="check" onClick={generate} disabled={generating}>
-      {generating ? "Adding..." : "Add the suggested checklist"}
-    </Button>
+  const suggestionHint = showSuggestionHint && (
+    <div className="task-suggestion">
+      <Icon name="check" size={16} />
+      <p>There's a suggested checklist for this type of event. Add it to fill in the usual planning tasks.</p>
+      <div className="task-suggestion-actions">
+        <Button variant="secondary" onClick={generate} disabled={generating}>
+          {generating ? "Adding..." : "Add checklist"}
+        </Button>
+        <Button variant="ghost" onClick={dismissSuggestion} disabled={generating}>Dismiss</Button>
+      </div>
+    </div>
   );
 
   // ---- States ------------------------------------------------------------
@@ -367,7 +412,15 @@ function EventTasks({ onToast }: { onToast: Toast }) {
           message={hasTemplate
             ? "Start from the suggested checklist for this type of event, or add your own tasks."
             : "Add the first task to start a shared checklist for your planning team."}
-          action={<div className="task-empty-actions">{generateButton}{addButton}</div>}
+          action={hasTemplate ? (
+            // A blank list is where the suggestion helps most, so it leads and "Add task" steps back.
+            <div className="task-empty-actions">
+              <Button icon="check" onClick={generate} disabled={generating}>
+                {generating ? "Adding..." : "Add the suggested checklist"}
+              </Button>
+              <Button variant="secondary" icon="plus" onClick={() => setEditing(null)}>Add my own task</Button>
+            </div>
+          ) : addButton}
         />
         {formModal}
       </>
@@ -395,6 +448,7 @@ function EventTasks({ onToast }: { onToast: Toast }) {
         <b>{progress.percentComplete}%</b>
         <span>{momentum(progress.open, dueThisWeek, overdue)}</span>
       </div>
+      {suggestionHint}
       <Card>
         <div className="table-toolbar">
           <div className="tabs" role="tablist" aria-label="Filter tasks by status">
@@ -414,7 +468,6 @@ function EventTasks({ onToast }: { onToast: Toast }) {
                 {assignees.map((a) => <option key={a.memberId} value={a.memberId}>{a.label}</option>)}
               </select>
             </label>
-            {generateButton}
           </div>
         </div>
         <div className="checklist">

@@ -58,6 +58,49 @@
   justify-content: center;
 }
 
+/* One-time hint above the list when the event has a template but none of its tasks were added */
+.task-suggestion {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border-radius: 12px;
+  background: var(--lavender);
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.task-suggestion > svg {
+  flex-shrink: 0;
+  color: var(--purple);
+}
+
+.task-suggestion p {
+  flex: 1;
+  margin: 0;
+}
+
+.task-suggestion-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 600px) {
+  .task-suggestion {
+    flex-wrap: wrap;
+  }
+
+  .task-suggestion p {
+    flex-basis: calc(100% - 26px);
+  }
+
+  .task-suggestion-actions {
+    margin-left: 26px;
+  }
+}
+
 .task-form {
   display: flex;
   flex-direction: column;
