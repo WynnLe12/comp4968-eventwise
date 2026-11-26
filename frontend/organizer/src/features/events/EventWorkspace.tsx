@@ -88,6 +88,7 @@ export function EventWorkspace({
     page !== "events" &&
     page !== "budget" &&
     page !== "guests" &&
+    page !== "invitations" &&
     page !== "vendors" &&
     page !== "expenses" &&
     page !== "coplanners" &&

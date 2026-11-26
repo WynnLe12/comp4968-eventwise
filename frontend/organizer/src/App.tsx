@@ -33,6 +33,7 @@ const CoPlanners = named(() => import("./features/collaboration/CoPlanners"), "C
 const Alerts = named(() => import("./features/alerts/Alerts"), "Alerts");
 const GuestGallery = named(() => import("./features/photos/GuestGallery"), "GuestGallery");
 const GuestTimeline = named(() => import("./features/planning/GuestTimeline"), "GuestTimeline");
+const GuestRsvp = named(() => import("./features/guests/GuestRsvp"), "GuestRsvp");
 const Photos = named(() => import("./features/photos/Photos"), "Photos");
 
 const publicPaths: Record<PublicPage, string> = {
@@ -250,6 +251,9 @@ export default function App() {
         } />
         <Route path="/timeline/:share" element={
           <Suspense fallback={<LoadingState label="Loading the schedule…" />}><GuestTimeline /></Suspense>
+        } />
+        <Route path="/rsvp/:token" element={
+          <Suspense fallback={<LoadingState label="Loading your invitation…" />}><GuestRsvp /></Suspense>
         } />
         <Route path={invitationAcceptancePath} element={<AcceptInvitation
           authenticated={authenticated} checkingSession={checkingSession || signingOut}

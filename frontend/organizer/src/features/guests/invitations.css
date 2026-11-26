@@ -1,0 +1,96 @@
+/* Invitations & RSVP page (Feature 8). Layout of the preview and settings cards comes
+   from the existing .invite-builder / .paper-invite / .invite-settings styles. */
+
+.rsvp-status {
+  display: grid;
+  grid-template-columns: 2.2fr repeat(4, 1fr);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  margin-bottom: 18px;
+  min-height: 84px;
+}
+.rsvp-status > div {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 14px 18px;
+  border-right: 1px solid var(--line);
+}
+.rsvp-status > div:last-child {
+  border-right: 0;
+}
+.rsvp-status-main b {
+  font-size: 13px;
+}
+.rsvp-status-main span {
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.rsvp-status-main.closed b {
+  color: #c95145;
+}
+.rsvp-count {
+  align-items: center;
+}
+.rsvp-count b {
+  font-size: 19px;
+}
+.rsvp-count span {
+  font-size: 9.5px;
+  color: var(--muted);
+}
+.rsvp-count.accepted b {
+  color: #2f8f6b;
+}
+.rsvp-count.rejected b {
+  color: #c95145;
+}
+.rsvp-count.pending b {
+  color: #b7791f;
+}
+
+.paper-invite .invite-message {
+  white-space: pre-line;
+  max-width: 420px;
+}
+.paper-invite .invite-deadline {
+  margin-top: 10px;
+  font-style: italic;
+}
+
+.invite-settings form {
+  margin-bottom: 14px;
+}
+.rsvp-notice {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: #ecf8f1;
+  color: #23744f;
+  font-size: 11px;
+}
+.rsvp-hint {
+  margin: 10px 0 0;
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+@media (max-width: 900px) {
+  .rsvp-status {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  .rsvp-status-main {
+    grid-column: 1 / -1;
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--line);
+  }
+}
+@media (max-width: 600px) {
+  .rsvp-status {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

@@ -13,12 +13,48 @@ function loadModule(path) {
   return module.exports;
 }
 
-const { partySize, peopleByStatus, totalHeadcount } = loadModule("../src/features/guests/guestHeadcount.ts");
+const { attendeeCount, attendeeOptions, partySize, peopleByStatus, plusOneAttendingFor, totalHeadcount } =
+  loadModule("../src/features/guests/guestHeadcount.ts");
 const STATUSES = ["UNINVITED", "PENDING", "ACCEPTED", "REJECTED"];
 
 test("a guest counts as one person, two with a plus-one", () => {
   assert.equal(partySize({ plusOneAllowed: false }), 1);
   assert.equal(partySize({ plusOneAllowed: true }), 2);
+});
+
+test("Attendee(s) shows who is actually coming, from the guest's RSVP", () => {
+  // No answer yet: shown as "-".
+  assert.equal(attendeeCount({ rsvpStatus: "UNINVITED", plusOneAllowed: true }), null);
+  assert.equal(attendeeCount({ rsvpStatus: "PENDING", plusOneAllowed: true, plusOneAttending: null }), null);
+  // Declined: nobody, even with a plus-one allowed.
+  assert.equal(attendeeCount({ rsvpStatus: "REJECTED", plusOneAllowed: true, plusOneAttending: false }), 0);
+  // Accepted: 2 only when the plus-one is coming.
+  assert.equal(attendeeCount({ rsvpStatus: "ACCEPTED", plusOneAllowed: true, plusOneAttending: true }), 2);
+  assert.equal(attendeeCount({ rsvpStatus: "ACCEPTED", plusOneAllowed: true, plusOneAttending: false }), 1);
+  assert.equal(attendeeCount({ rsvpStatus: "ACCEPTED", plusOneAllowed: false }), 1);
+  // Marked accepted by an organizer, so the plus-one never answered: just the guest.
+  assert.equal(attendeeCount({ rsvpStatus: "ACCEPTED", plusOneAllowed: true, plusOneAttending: null }), 1);
+  // A plus-one answer can't count without an allowed plus-one.
+  assert.equal(attendeeCount({ rsvpStatus: "ACCEPTED", plusOneAllowed: false, plusOneAttending: true }), 1);
+});
+
+test("the Edit guest form offers attendee counts that match the RSVP status", () => {
+  assert.deepEqual(attendeeOptions("ACCEPTED", true), [1, 2]);
+  assert.deepEqual(attendeeOptions("ACCEPTED", false), [1]);
+  assert.deepEqual(attendeeOptions("REJECTED", true), [0]);
+  assert.equal(attendeeOptions("PENDING", true), null);
+  assert.equal(attendeeOptions("UNINVITED", false), null);
+});
+
+test("a chosen attendee count is saved as plusOneAttending, and reads back the same", () => {
+  for (const [status, allowed, attendees] of [["ACCEPTED", true, 2], ["ACCEPTED", true, 1], ["ACCEPTED", false, 1], ["REJECTED", true, 0]]) {
+    const plusOneAttending = plusOneAttendingFor(status, allowed, attendees);
+    assert.equal(attendeeCount({ rsvpStatus: status, plusOneAllowed: allowed, plusOneAttending }), attendees);
+  }
+  // 2 isn't possible without an allowed plus-one.
+  assert.equal(plusOneAttendingFor("ACCEPTED", false, 2), false);
+  // No answer yet: the guest's own value is left alone.
+  assert.equal(plusOneAttendingFor("PENDING", true, null), undefined);
 });
 
 test("total guests includes plus-ones", () => {
@@ -43,6 +79,17 @@ test("RSVP cards count people: a guest with a plus-one adds 2 to its status", ()
   const counts = peopleByStatus(guests, STATUSES);
   assert.deepEqual(counts, { UNINVITED: 2, PENDING: 0, ACCEPTED: 3, REJECTED: 0 });
   // Every card adds up to the total people.
+  assert.equal(Object.values(counts).reduce((sum, count) => sum + count, 0), totalHeadcount(guests));
+});
+
+test("an accepted guest whose plus-one isn't coming counts 1 accepted and 1 rejected", () => {
+  const guests = [
+    { plusOneAllowed: true, rsvpStatus: "ACCEPTED", plusOneAttending: false },
+    { plusOneAllowed: true, rsvpStatus: "ACCEPTED", plusOneAttending: true },
+    { plusOneAllowed: true, rsvpStatus: "ACCEPTED" },
+  ];
+  const counts = peopleByStatus(guests, STATUSES);
+  assert.deepEqual(counts, { UNINVITED: 0, PENDING: 0, ACCEPTED: 5, REJECTED: 1 });
   assert.equal(Object.values(counts).reduce((sum, count) => sum + count, 0), totalHeadcount(guests));
 });
 
