@@ -36,7 +36,7 @@ function EventContracts({ eventId }: { eventId: string }) {
 function DraftList({ eventId, offset, onPage }: { eventId: string; offset: number; onPage: (offset: number) => void }) {
   const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
   const load = useCallback(() => fetchContractDrafts(eventId, offset), [eventId, offset]);
-  const { data: page, loading, error, reload } = useResource(load);
+  const { data: page, loading, error, reload, update } = useResource(load);
   if (loading) return <LoadingState label="Loading contract drafts..." />;
   if (error) return <ErrorState message={error instanceof Error ? error.message : "We couldn't load contract drafts."} onRetry={reload} />;
   if (!page) return null;
@@ -65,6 +65,6 @@ function DraftList({ eventId, offset, onPage }: { eventId: string; offset: numbe
       <Button variant="secondary" disabled={offset + page.limit >= page.total} onClick={() => onPage(offset + page.limit)}>Next</Button>
     </div>
   </Card>
-    {selectedDraftId && <ContractDraftDetailsDialog key={selectedDraftId} eventId={eventId} draftId={selectedDraftId} onClose={() => setSelectedDraftId(null)} />}
+    {selectedDraftId && <ContractDraftDetailsDialog key={selectedDraftId} eventId={eventId} draftId={selectedDraftId} onSaved={saved => update(current => ({ ...current, data: current.data.map(row => row.draftId === saved.draftId ? saved : row) }))} onClose={() => setSelectedDraftId(null)} />}
   </>;
 }

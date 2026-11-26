@@ -19,3 +19,8 @@
 .contract-details dl > div { display: flex; flex-wrap: wrap; gap: 8px 24px; padding: 12px 0; border-bottom: 1px solid #e9e2f3; }
 .contract-details dt { flex: 1 1 160px; color: var(--muted, #777189); }
 .contract-details dd { flex: 1 1 200px; margin: 0; overflow-wrap: anywhere; }
+
+.contract-draft-form fieldset { border: 0; padding: 0; margin: 20px 0; min-width: 0; display: grid; gap: 20px; }
+.contract-draft-form .form-row { margin: 0; }
+.contract-form-actions { display: flex; justify-content: flex-end; gap: 12px; flex-wrap: wrap; margin: 20px 0; }
+.contract-form-message { color: #b52b48; }

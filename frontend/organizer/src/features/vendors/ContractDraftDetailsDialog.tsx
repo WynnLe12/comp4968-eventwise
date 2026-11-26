@@ -1,3 +1,4 @@
+import { ContractDraftForm } from "./ContractDraftForm";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Button, Modal } from "../../components/ui";
 import { ErrorState, LoadingState } from "../../components/page";
@@ -15,17 +16,22 @@ function amount(value: string | null, currency: string | null) {
   catch { return value + " " + currency; }
 }
 
-export function ContractDraftDetailsDialog({ eventId, draftId, onClose }: { eventId: string; draftId: string; onClose: () => void }) {
+export function ContractDraftDetailsDialog({ eventId, draftId, onClose, onSaved }: { eventId: string; draftId: string; onClose: () => void; onSaved: (draft: ContractDraftDetails) => void }) {
   const load = useCallback(() => fetchContractDraft(eventId, draftId), [eventId, draftId]);
-  const { data, loading, error, reload } = useResource(load);
-  return <Modal title="Contract details" onClose={onClose} footer={<Button variant="secondary" onClick={onClose}>Close</Button>}>
+  const { data, loading, error, reload, update } = useResource(load);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const saved = (draft: ContractDraftDetails) => { update(() => draft); setNotice("Draft saved. No expense was created."); onSaved(draft); };
+  return <Modal title="Contract details" onClose={() => { if (!busy) onClose(); }} footer={<Button variant="secondary" disabled={busy} onClick={onClose}>Close</Button>}>
+    {notice && <p role="status">{notice}</p>}
     {loading ? <LoadingState label="Loading contract details..." /> : error ?
       <ErrorState message={error instanceof Error ? error.message : "We couldn't load this draft."} onRetry={reload} /> :
-      data && <Details key={data.version} draft={data} />}
+      data && <Details key={data.version} draft={data} onSaved={saved} onReload={() => { setNotice(""); reload(); }} onBusy={setBusy} />}
   </Modal>;
 }
 
-function Details({ draft }: { draft: ContractDraftDetails }) {
+function Details({ draft, onSaved, onReload, onBusy }: { draft: ContractDraftDetails; onSaved: (draft: ContractDraftDetails) => void; onReload: () => void; onBusy: (busy: boolean) => void }) {
+  const [editing, setEditing] = useState(false);
   const loadReferences = useCallback(async () => {
     const [categories, vendors] = await Promise.allSettled([
       draft.categoryId ? fetchBudgetCategories(draft.eventId) : Promise.resolve(null),
@@ -72,8 +78,11 @@ function Details({ draft }: { draft: ContractDraftDetails }) {
       {draft.documentId && <Button variant="secondary" disabled={opening} onClick={() => void openDocument()}>{opening ? "Opening..." : "Open source document"}</Button>}
       {documentError && <p role="alert">{documentError}</p>}
     </section>
+    {editing ? <ContractDraftForm draft={draft} onSaved={onSaved} onReload={onReload} onBusy={onBusy} onCancel={() => setEditing(false)} /> : <>
+    {draft.status === "DRAFT" && <Button variant="secondary" onClick={() => setEditing(true)}>Edit draft</Button>}
     <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
     <p className="contracts-help">A deposit requirement does not record a payment. Payments are managed separately in Expenses.</p>
     {draft.status === "CONFIRMED" && <p>This draft has been confirmed and saved to expenses.</p>}
+    </>}
   </div>;
 }

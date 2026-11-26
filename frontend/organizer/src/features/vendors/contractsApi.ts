@@ -12,7 +12,7 @@ export interface ContractDraftSummary {
 }
 export interface ContractDraftPage { data: ContractDraftSummary[]; total: number; limit: number; offset: number }
 
-async function contractRequest(eventId: string, suffix: string): Promise<unknown> {
+async function contractRequest(eventId: string, suffix: string, body?: unknown): Promise<unknown> {
   let token: string | undefined;
   try { token = (await requireAuthSession()).session.tokens?.accessToken?.toString(); }
   catch { /* Present session guidance below. */ }
@@ -20,10 +20,29 @@ async function contractRequest(eventId: string, suffix: string): Promise<unknown
   let response: Response;
   try {
     response = await fetch(apiUrl("/events/" + encodeURIComponent(eventId) + "/contract-drafts" + suffix), {
-      headers: { Authorization: "Bearer " + token },
+      method: body === undefined ? "GET" : "PATCH",
+      headers: { Authorization: "Bearer " + token, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   } catch { throw new Error("We couldn't reach the server. Check your connection and try again."); }
   if (!response.ok) {
+    const result = await response.json().catch(() => null);
+    if (response.status === 409) {
+      const changed = result?.error?.code === "DRAFT_CHANGED";
+      throw new ContractDraftSaveError(changed ? "This draft changed in another tab. Reload the latest version before saving." : "This draft is no longer editable. Reload to see its current status.", {}, true);
+    }
+    if (response.status === 422) {
+      const fields: Record<string, string> = {};
+      const safeFields: Record<string, string> = {
+        description: "Use up to 255 characters.", vendorName: "Use up to 150 characters.",
+        totalAmount: "Enter an amount of 0 or more, with up to 2 decimals.",
+        depositAmount: "Check the deposit amount. It cannot exceed the total.",
+        dueDate: "Enter a valid date.", currencyCode: "Enter a three-letter currency code.",
+        categoryId: "Choose a category from this event.", vendorId: "Choose a vendor from this event.",
+      };
+      for (const name of Object.keys(result?.error?.fields ?? {})) if (Object.hasOwn(safeFields, name)) fields[name] = safeFields[name]!;
+      throw new ContractDraftSaveError("Please check the highlighted details and try again.", fields);
+    }
     const messages: Record<number, string> = {
       401: "Your session has expired. Please sign in again.",
       403: "You don't have access to this event.",
@@ -65,6 +84,10 @@ export interface ContractDraftDetails extends ContractDraftSummary {
 
 export async function fetchContractDraft(eventId: string, draftId: string): Promise<ContractDraftDetails> {
   const result = await contractRequest(eventId, "/" + encodeURIComponent(draftId)) as { data?: ContractDraftDetails } | null;
+  return readContractDraft(result, eventId, draftId);
+}
+
+function readContractDraft(result: { data?: ContractDraftDetails } | null, eventId: string, draftId: string): ContractDraftDetails {
   const draft = result?.data;
   const nullableText = (value: unknown) => value === null || typeof value === "string";
   const money = (value: unknown) => value === null || typeof value === "string" && /^[0-9]{1,10}\.[0-9]{2}$/.test(value);
@@ -78,4 +101,23 @@ export async function fetchContractDraft(eventId: string, draftId: string): Prom
     throw new Error("We couldn't read this contract draft. Please try again.");
   }
   return draft;
+}
+
+export type ContractDraftChanges = Partial<Pick<ContractDraftDetails,
+  "description" | "categoryId" | "vendorId" | "vendorName" | "totalAmount" | "depositAmount" | "dueDate" | "currencyCode">>;
+
+export class ContractDraftSaveError extends Error {
+  constructor(message: string, public readonly fields: Record<string, string> = {}, public readonly reloadRequired = false) {
+    super(message);
+    this.name = "ContractDraftSaveError";
+  }
+}
+
+export async function saveContractDraft(eventId: string, draftId: string, version: string, changes: ContractDraftChanges): Promise<ContractDraftDetails> {
+  const body: Record<string, unknown> = { version };
+  for (const name of ["description", "categoryId", "vendorId", "vendorName", "totalAmount", "depositAmount", "dueDate", "currencyCode"] as const) {
+    if (Object.hasOwn(changes, name)) body[name] = changes[name];
+  }
+  const result = await contractRequest(eventId, "/" + encodeURIComponent(draftId), body) as { data?: ContractDraftDetails } | null;
+  return readContractDraft(result, eventId, draftId);
 }
