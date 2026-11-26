@@ -29,6 +29,13 @@ const rsvpDisplay = Object.fromEntries(
 
 type StatusFilter = "ALL" | RsvpStatus;
 
+/** After an accepted RSVP (Feature 8) the tag says whether the plus-one is coming. */
+function plusOneLabel(guest: GuestRecord): string {
+  if (guest.rsvpStatus === "ACCEPTED" && guest.plusOneAttending === true) return "+ plus-one coming";
+  if (guest.rsvpStatus === "ACCEPTED" && guest.plusOneAttending === false) return "· plus-one not coming";
+  return "+ plus-one";
+}
+
 function guestName(guest: GuestRecord) {
   return [guest.firstName, guest.lastName].filter(Boolean).join(" ") || guest.email || "Unnamed guest";
 }
@@ -229,7 +236,7 @@ export function Guests({
                         <span>{initials(name)}</span>
                         <b>
                           {name}
-                          {g.plusOneAllowed && <small> + plus-one</small>}
+                          {g.plusOneAllowed && <small> {plusOneLabel(g)}</small>}
                           {hasName && g.email && <small> · {g.email}</small>}
                         </b>
                       </div>
@@ -238,7 +245,10 @@ export function Guests({
                     <td>
                       <Badge tone={status.tone}>{status.label}</Badge>
                     </td>
-                    <td>{g.mealChoice ?? "Not selected"}</td>
+                    <td>
+                      {g.mealChoice ?? "Not selected"}
+                      {g.dietaryNotes && <small className="guest-dietary">{g.dietaryNotes}</small>}
+                    </td>
                     <td>
                       <button
                         className="icon-btn"

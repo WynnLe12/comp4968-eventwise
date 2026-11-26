@@ -48,6 +48,10 @@ export interface GuestRecord {
   mealChoice: string | null;
   dietaryNotes: string | null;
   rsvpStatus: RsvpStatus;
+  /** From the guest's RSVP (Feature 8): whether their plus-one is coming; null before they answer. */
+  plusOneAttending: boolean | null;
+  /** When the guest last answered the RSVP form. */
+  rsvpRespondedAt: string | null;
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -76,6 +80,8 @@ function parseGuest(row: unknown): GuestRecord {
     mealChoice: text(guest.mealChoice),
     dietaryNotes: text(guest.dietaryNotes),
     rsvpStatus,
+    plusOneAttending: typeof guest.plusOneAttending === "boolean" ? guest.plusOneAttending : null,
+    rsvpRespondedAt: text(guest.rsvpRespondedAt),
     createdAt: text(guest.createdAt),
     updatedAt: text(guest.updatedAt),
   };

@@ -46,6 +46,17 @@ test("RSVP cards count people: a guest with a plus-one adds 2 to its status", ()
   assert.equal(Object.values(counts).reduce((sum, count) => sum + count, 0), totalHeadcount(guests));
 });
 
+test("an accepted guest whose plus-one isn't coming counts 1 accepted and 1 rejected", () => {
+  const guests = [
+    { plusOneAllowed: true, rsvpStatus: "ACCEPTED", plusOneAttending: false },
+    { plusOneAllowed: true, rsvpStatus: "ACCEPTED", plusOneAttending: true },
+    { plusOneAllowed: true, rsvpStatus: "ACCEPTED" },
+  ];
+  const counts = peopleByStatus(guests, STATUSES);
+  assert.deepEqual(counts, { UNINVITED: 0, PENDING: 0, ACCEPTED: 5, REJECTED: 1 });
+  assert.equal(Object.values(counts).reduce((sum, count) => sum + count, 0), totalHeadcount(guests));
+});
+
 test("rejected and pending guests with a plus-one also count as 2", () => {
   const counts = peopleByStatus([
     { plusOneAllowed: true, rsvpStatus: "REJECTED" },

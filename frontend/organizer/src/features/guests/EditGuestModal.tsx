@@ -10,6 +10,7 @@ import {
   type GuestRecord,
   type RsvpStatus,
 } from "./services/guestApi";
+import { getGuestRsvpLink } from "./services/rsvpApi";
 
 const FORM_ID = "edit-guest-form";
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -17,6 +18,40 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MEAL_CHOICE_MAX_LENGTH = 50;
 
 const rsvpOptions = RSVP_STATUSES.map((status) => ({ value: status, label: RSVP_LABELS[status] }));
+
+/**
+ * Copies this guest's private RSVP link (Feature 8), for guests without an email address
+ * or to share another way. The link only works after invitations have been sent once,
+ * because that sets the RSVP deadline.
+ */
+function RsvpLinkCopier({ eventId, guestId, disabled }: { eventId: string; guestId: string; disabled: boolean }) {
+  const [state, setState] = useState<{ busy: boolean; message: string; url: string }>({ busy: false, message: "", url: "" });
+
+  const copy = async () => {
+    setState({ busy: true, message: "", url: "" });
+    try {
+      const url = await getGuestRsvpLink(eventId, guestId);
+      try {
+        await navigator.clipboard.writeText(url);
+        setState({ busy: false, message: "RSVP link copied. Only share it with this guest.", url: "" });
+      } catch {
+        setState({ busy: false, message: "Copy this link and share it only with this guest:", url });
+      }
+    } catch (error) {
+      setState({ busy: false, message: error instanceof Error ? error.message : "We couldn't create the link.", url: "" });
+    }
+  };
+
+  return (
+    <div className="rsvp-link-row">
+      <Button variant="secondary" icon="link" onClick={() => void copy()} disabled={disabled || state.busy}>
+        {state.busy ? "Getting link..." : "Copy RSVP link"}
+      </Button>
+      {state.message && <p role="status">{state.message}</p>}
+      {state.url && <input readOnly value={state.url} aria-label="RSVP link" onFocus={(e) => e.target.select()} />}
+    </div>
+  );
+}
 
 /**
  * Name, email, RSVP status and meal choice, pre-filled with one guest's details.
@@ -203,6 +238,7 @@ export function EditGuestModal({
           onChange={(e) => setMealChoice(e.target.value)}
         />
         </fieldset>
+        <RsvpLinkCopier eventId={guestEventId} guestId={guest.guestId} disabled={busy} />
       </form>
     </Modal>
   );
