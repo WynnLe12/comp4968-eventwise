@@ -1,89 +1,65 @@
-import { useState } from "react";
-import { Badge, Button, Card, Field, Icon } from "../../components/ui";
-import { PageHeader } from "../../components/page";
+import { useCallback, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Badge, Button, Card } from "../../components/ui";
+import { EmptyState, ErrorState, LoadingState, PageHeader } from "../../components/page";
+import { useResource } from "../../hooks/useResource";
+import { useEvents } from "../events/EventsContext";
+import { fetchContractDrafts, type ContractDraftSummary } from "./contractsApi";
+import "./contracts.css";
 
-const steps = ["Upload", "Review details", "Confirm"];
-
+const statuses = {
+  DRAFT: { label: "Needs review", tone: "warning" },
+  CONFIRMED: { label: "Confirmed", tone: "success" },
+  REJECTED: { label: "Discarded", tone: "neutral" },
+};
+function draftAmount(draft: ContractDraftSummary) {
+  if (draft.totalAmount === null) return "Amount not set";
+  if (draft.currencyCode === null) return draft.totalAmount + " (currency not set)";
+  try { return new Intl.NumberFormat("en-US", { style: "currency", currency: draft.currencyCode }).format(Number(draft.totalAmount)); }
+  catch { return draft.totalAmount + " " + draft.currencyCode; }
+}
 export function Contracts() {
-  const [step, setStep] = useState(2);
-  return (
-    <>
-      <PageHeader page="contracts" />
-      <div className="stepper">
-        {steps.map((label, i) => (
-          <div className={step >= i + 1 ? "active" : ""} key={label}>
-            <span>{step > i + 1 ? "✓" : i + 1}</span>
-            <b>{label}</b>
-            {i < steps.length - 1 && <i />}
+  const { selectedId, userId } = useEvents();
+  if (!selectedId || !userId) return <EmptyState title="Select an event" message="Choose an event to view its contract drafts." />;
+  return <EventContracts key={JSON.stringify([userId, selectedId])} eventId={selectedId} />;
+}
+function EventContracts({ eventId }: { eventId: string }) {
+  const navigate = useNavigate();
+  const [offset, setOffset] = useState(0);
+  return <>
+    <PageHeader page="contracts" action={<Button variant="secondary" onClick={() => navigate("/app/documents")}>Open Documents</Button>} />
+    <p className="contracts-help">Review contract details before adding them to expenses. Automatic extraction is not available yet.</p>
+    <DraftList key={offset} eventId={eventId} offset={offset} onPage={setOffset} />
+  </>;
+}
+function DraftList({ eventId, offset, onPage }: { eventId: string; offset: number; onPage: (offset: number) => void }) {
+  const load = useCallback(() => fetchContractDrafts(eventId, offset), [eventId, offset]);
+  const { data: page, loading, error, reload } = useResource(load);
+  if (loading) return <LoadingState label="Loading contract drafts..." />;
+  if (error) return <ErrorState message={error instanceof Error ? error.message : "We couldn't load contract drafts."} onRetry={reload} />;
+  if (!page) return null;
+  return <Card className="contracts-list">
+    <div className="contracts-list-head">
+      <h2>Saved drafts <small>({page.total})</small></h2>
+      <Button variant="secondary" onClick={reload}>Refresh</Button>
+    </div>
+    {page.data.length === 0 ? <EmptyState title={offset ? "No drafts on this page" : "No contract drafts yet"}
+      message={offset ? "Go back to see earlier drafts." : "Uploaded documents will appear here once a contract draft has been created."} /> :
+      <ul className="contracts-rows">
+        {page.data.map(draft => <li key={draft.draftId}>
+          <div className="contracts-draft-name">
+            <h3>{draft.description || draft.documentFilename || "Untitled contract"}</h3>
+            {draft.description && draft.documentFilename && <p>{draft.documentFilename}</p>}
+            {draft.status === "CONFIRMED" && <small>Saved to expenses</small>}
           </div>
-        ))}
-      </div>
-      {step === 1 ? (
-        <div className="contract-upload">
-          <Icon name="scan" size={34} />
-          <h2>Upload a vendor contract</h2>
-          <p>
-            We’ll extract payment amounts, due dates, cancellation terms, and key contacts for you
-            to review.
-          </p>
-          <Button onClick={() => setStep(2)} icon="upload">
-            Choose contract
-          </Button>
-          <small>PDF or DOCX · Max 20 MB</small>
-        </div>
-      ) : step === 2 ? (
-        <div className="contract-review">
-          <Card className="contract-preview">
-            <div className="doc-page">
-              <small>THE WILLOW HOUSE</small>
-              <h3>EVENT SERVICES AGREEMENT</h3>
-              {Array.from({ length: 12 }).map((_, i) => (
-                <p key={`a${i}`} style={{ width: `${70 + (i % 4) * 7}%` }} />
-              ))}
-              <mark>Final balance of $7,800 is due June 15, 2025</mark>
-              {Array.from({ length: 5 }).map((_, i) => (
-                <p key={`b${i}`} />
-              ))}
-            </div>
-          </Card>
-          <Card className="extracted">
-            <div className="card-head">
-              <div>
-                <Badge tone="success">Extraction complete</Badge>
-                <h3>Review extracted details</h3>
-              </div>
-            </div>
-            <Field label="Vendor" defaultValue="The Willow House" />
-            <div className="form-row">
-              <Field label="Contract total" defaultValue="$12,800" />
-              <Field label="Deposit paid" defaultValue="$5,000" />
-            </div>
-            <Field label="Final payment due" type="date" defaultValue="2025-06-15" />
-            <Field label="Cancellation deadline" type="date" defaultValue="2025-07-20" />
-            <label className="field">
-              <span>Key terms</span>
-              <textarea defaultValue="Final guest count due 14 days before event. Outdoor ceremony includes indoor weather backup." />
-            </label>
-            <div className="extraction-note">
-              <Icon name="spark" size={16} />
-              Please review these details against the original contract.
-            </div>
-            <Button onClick={() => setStep(3)}>Confirm and save</Button>
-          </Card>
-        </div>
-      ) : (
-        <Card className="success-card">
-          <div>
-            <Icon name="check" size={30} />
-          </div>
-          <h2>Contract saved</h2>
-          <p>
-            We added the payment date to your expenses and timeline, and stored the original file in
-            Documents.
-          </p>
-          <Button onClick={() => setStep(1)}>Extract another contract</Button>
-        </Card>
-      )}
-    </>
-  );
+          <strong>{draftAmount(draft)}</strong>
+          <Badge tone={statuses[draft.status].tone}>{statuses[draft.status].label}</Badge>
+        </li>)}
+      </ul>}
+    <div className="contracts-pagination">
+      <span>{page.data.length ? "Showing " + (offset + 1) + (page.data.length > 1 ? " to " + (offset + page.data.length) : "") : "Showing 0"} of {page.total} {page.total === 1 ? "draft" : "drafts"}</span>
+      <Button variant="secondary" disabled={offset === 0} onClick={() => onPage(Math.max(0, offset - page.limit))}>Previous</Button>
+      <Button variant="secondary" disabled={offset + page.limit >= page.total} onClick={() => onPage(offset + page.limit)}>Next</Button>
+    </div>
+  </Card>;
 }

@@ -90,6 +90,7 @@ export function EventWorkspace({
     page !== "guests" &&
     page !== "vendors" &&
     page !== "expenses" &&
+    page !== "contracts" &&
     page !== "coplanners" &&
     page !== "timeline" &&
     page !== "documents" &&
