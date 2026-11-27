@@ -1022,7 +1022,9 @@ test("event workspace renders loading, empty, retry, and unavailable states inst
   // Connected pages receive the workspace; unconnected sections still hide sample data.
   assert.match(render("guests"), /LIVE CONTENT/);
   assert.match(render("coplanners"), /LIVE CONTENT/);
-  assert.match(render("tasks"), /not available for this event/);
+  // Tasks is connected to the Task API (Feature 12); Alerts isn't connected yet.
+  assert.match(render("tasks"), /LIVE CONTENT/);
+  assert.match(render("alerts"), /not available for this event/);
   // The timeline is connected to the Timeline API (Feature 13).
   assert.match(render("timeline"), /LIVE CONTENT/);
   state = { ...state, status: "empty" };

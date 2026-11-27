@@ -1,0 +1,84 @@
+{
+  "Comment": "EventWise Feature 8: remind guests who haven't answered (once), then close RSVPs at the deadline. Started by the eventwise-rsvp Lambda each time invitations are sent.",
+  "StartAt": "HasReminder",
+  "States": {
+    "HasReminder": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.reminderAt",
+          "IsNull": false,
+          "Next": "WaitForReminder"
+        }
+      ],
+      "Default": "WaitForDeadline"
+    },
+    "WaitForReminder": {
+      "Type": "Wait",
+      "TimestampPath": "$.reminderAt",
+      "Next": "SendReminders"
+    },
+    "SendReminders": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "arn:aws:lambda:us-west-2:984774735121:function:eventwise-rsvp-deadline",
+        "Payload": {
+          "action": "REMIND",
+          "eventId.$": "$.eventId",
+          "workflowId.$": "$.workflowId"
+        }
+      },
+      "ResultSelector": {
+        "result.$": "$.Payload"
+      },
+      "ResultPath": "$.reminders",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.reminderError",
+          "Next": "WaitForDeadline"
+        }
+      ],
+      "Next": "WaitForDeadline"
+    },
+    "WaitForDeadline": {
+      "Type": "Wait",
+      "TimestampPath": "$.deadline",
+      "Next": "CloseRsvps"
+    },
+    "CloseRsvps": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "arn:aws:lambda:us-west-2:984774735121:function:eventwise-rsvp-deadline",
+        "Payload": {
+          "action": "CLOSE",
+          "eventId.$": "$.eventId",
+          "workflowId.$": "$.workflowId"
+        }
+      },
+      "ResultSelector": {
+        "result.$": "$.Payload"
+      },
+      "ResultPath": "$.close",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 5,
+          "BackoffRate": 2
+        }
+      ],
+      "End": true
+    }
+  }
+}

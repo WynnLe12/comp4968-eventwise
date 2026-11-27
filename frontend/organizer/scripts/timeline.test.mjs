@@ -31,6 +31,8 @@ function offset(date, time) {
 const local = (date, time) => `${date}T${time}:00${offset(date, time)}`;
 /** The UTC instant for a Vancouver wall-clock time. */
 const utc = (date, time) => new Date(local(date, time)).toISOString().replace(".000Z", "Z");
+/** A fixed "now" before every test date, so the tests don't depend on today's date. */
+const BEFORE = new Date("2026-11-20T12:00:00Z");
 
 const item = (overrides = {}) => ({
   eventId: "42", itemId: "a", title: "Ceremony begins", place: "Garden", notes: null,
@@ -106,7 +108,7 @@ test("the form round-trips an item and validates like the API", () => {
     title: "Ceremony begins", date: "2026-12-05", startTime: "15:00", endTime: "15:30",
     place: "Garden", notes: "Bring umbrellas", visibility: "GUESTS", reminderMinutes: "60",
   });
-  assert.deepEqual(t.validateForm(form).fields, {
+  assert.deepEqual(t.validateForm(form, { now: BEFORE }).fields, {
     title: "Ceremony begins", place: "Garden", notes: "Bring umbrellas",
     startsAt: local("2026-12-05", "15:00"), endsAt: local("2026-12-05", "15:30"),
     visibility: "GUESTS", reminderMinutes: 60,
@@ -117,24 +119,24 @@ test("the form round-trips an item and validates like the API", () => {
 });
 
 test("form validation reports missing and too-long values, and blank optional text becomes null", () => {
-  const { errors, fields } = t.validateForm({ ...t.emptyForm(null), title: " ", place: "x".repeat(161) });
+  const { errors, fields } = t.validateForm({ ...t.emptyForm(null), title: " ", place: "x".repeat(161) }, { now: BEFORE });
   assert.equal(fields, undefined);
   assert.deepEqual(Object.keys(errors).sort(), ["date", "place", "startTime", "title"]);
-  const ok = t.validateForm({ ...t.emptyForm("2026-12-05"), title: " Dinner ", startTime: "18:00", place: "  " });
+  const ok = t.validateForm({ ...t.emptyForm("2026-12-05"), title: " Dinner ", startTime: "18:00", place: "  " }, { now: BEFORE });
   assert.equal(ok.fields.title, "Dinner");
   assert.equal(ok.fields.place, null);
   assert.equal(ok.fields.endsAt, null);
 });
 
 test("an end time before the start time means the activity runs past midnight", () => {
-  const { fields } = t.validateForm({ ...t.emptyForm("2026-12-05"), title: "Dancing", startTime: "21:00", endTime: "01:00" });
+  const { fields } = t.validateForm({ ...t.emptyForm("2026-12-05"), title: "Dancing", startTime: "21:00", endTime: "01:00" }, { now: BEFORE });
   assert.equal(fields.endsAt, local("2026-12-06", "01:00"));
 });
 
 test("an edit sends only the changed fields, comparing times as instants", () => {
   const stored = item();
-  assert.deepEqual(t.changedFields(stored, t.validateForm(t.formFromItem(stored)).fields), {});
-  const moved = t.validateForm({ ...t.formFromItem(stored), startTime: "15:30", endTime: "", notes: "x" }).fields;
+  assert.deepEqual(t.changedFields(stored, t.validateForm(t.formFromItem(stored), { now: BEFORE }).fields), {});
+  const moved = t.validateForm({ ...t.formFromItem(stored), startTime: "15:30", endTime: "", notes: "x" }, { now: BEFORE }).fields;
   assert.deepEqual(t.changedFields(stored, moved), { notes: "x", startsAt: local("2026-12-05", "15:30"), endsAt: null });
   assert.equal(t.isNotifiableChange({ notes: "x" }), false);
   assert.equal(t.isNotifiableChange({ notes: "x", startsAt: "…" }), true);
@@ -166,4 +168,32 @@ test("guest gallery and guest timeline links skip the organizer session check; a
   }
   assert.equal(nav.guestTimelinePath("42-a_b"), "/timeline/42-a_b");
   assert.equal(nav.guestTimelinePath("x/y"), "/timeline/x%2Fy");
+});
+
+test("times in the past are rejected, like the RSVP deadline; exactly now counts as past", () => {
+  const form = { ...t.emptyForm("2026-12-05"), title: "Ceremony", startTime: "15:00", endTime: "15:30" };
+  const after = { now: new Date(utc("2026-12-05", "16:00")) };
+  assert.deepEqual(t.validateForm(form, after).errors, {
+    startTime: "The start time must be in the future.",
+    endTime: "The end time must be in the future.",
+  });
+  assert.equal(t.validateForm(form, { now: new Date(utc("2026-12-05", "15:00")) }).errors.startTime, "The start time must be in the future.");
+  assert.deepEqual(t.validateForm(form, { now: new Date(utc("2026-12-05", "14:59")) }).errors, {});
+});
+
+test("an activity that is already over can be edited without changing its times", () => {
+  const stored = item(); // 3:00–3:30 PM on Dec 5
+  const later = { now: new Date(utc("2026-12-05", "18:00")), item: stored };
+  const notesOnly = t.validateForm({ ...t.formFromItem(stored), notes: "Moved indoors" }, later);
+  assert.deepEqual(notesOnly.errors, {});
+  assert.equal(notesOnly.fields.notes, "Moved indoors");
+  // Changing a time on it must still be in the future.
+  assert.equal(t.validateForm({ ...t.formFromItem(stored), startTime: "15:15" }, later).errors.startTime, "The start time must be in the future.");
+  assert.equal(t.validateForm({ ...t.formFromItem(stored), endTime: "16:00" }, later).errors.endTime, "The end time must be in the future.");
+  assert.deepEqual(t.validateForm({ ...t.formFromItem(stored), date: "2026-12-06" }, later).errors, {});
+});
+
+test("the earliest date offered is today in Vancouver, even late at night UTC", () => {
+  assert.equal(t.todayInVancouver(new Date(utc("2026-12-05", "23:30"))), "2026-12-05");
+  assert.equal(t.todayInVancouver(new Date(utc("2026-12-06", "00:10"))), "2026-12-06");
 });

@@ -88,10 +88,12 @@ export function EventWorkspace({
     page !== "events" &&
     page !== "budget" &&
     page !== "guests" &&
+    page !== "invitations" &&
     page !== "vendors" &&
     page !== "expenses" &&
     page !== "contracts" &&
     page !== "coplanners" &&
+    page !== "tasks" &&
     page !== "timeline" &&
     page !== "documents" &&
     page !== "photos"

@@ -44,7 +44,34 @@ function BudgetSnapshot({ budget }: { budget: EventDashboard["budget"] }) {
   );
 }
 
-function UpcomingTasks({ tasks }: { tasks: EventDashboard["tasks"] }) {
+/**
+ * Footer pinned to the bottom of a dashboard card with a one-line summary. It keeps
+ * side-by-side cards balanced when one list is shorter. The link to the full page stays
+ * in the card header only, so each card has one link. Hidden when there is no summary.
+ */
+function CardFooter({ summary }: { summary: string }) {
+  if (!summary) return null;
+  return (
+    <div className="dashboard-card-foot">
+      <span>{summary}</span>
+    </div>
+  );
+}
+
+/** "Showing 5 of 9 open tasks", or "" when there is nothing to show. */
+function showing(shown: number, total: number, singular: string, pluralWord: string): string {
+  return total > 0 ? `Showing ${shown} of ${total} ${total === 1 ? singular : pluralWord}` : "";
+}
+
+/** "1 category over budget" / "All categories within budget", or "" without categories. */
+function budgetSummary(budget: EventDashboard["budget"]): string {
+  if (!budget.categories.length) return "";
+  const over = budget.categories.filter((category) => category.isOverBudget).length;
+  if (!over) return "All categories within budget";
+  return `${over} ${over === 1 ? "category" : "categories"} over budget`;
+}
+
+function UpcomingTasks({ tasks, asOfDate }: { tasks: EventDashboard["tasks"]; asOfDate: string }) {
   if (!tasks.nextDue.length) {
     return <p className="dashboard-empty">{tasks.total ? "No open tasks with a due date." : "No tasks yet."}</p>;
   }
@@ -56,6 +83,8 @@ function UpcomingTasks({ tasks }: { tasks: EventDashboard["tasks"] }) {
             <b>{task.title}</b>
             <small>Due {formatCalendarDate(task.dueDate)} · {task.assigneeName ?? "Unassigned"}</small>
           </div>
+          {/* Same rule as the API's overdue count: open and due before today (UTC). */}
+          {task.dueDate < asOfDate && <div className="dashboard-flag"><Badge tone="danger">Overdue</Badge></div>}
         </div>
       ))}
     </div>
@@ -129,7 +158,7 @@ export function Dashboard({ go }: { go: (p: Page) => void }) {
               label="Guest responses"
               value={guests ? `${guests.rsvp.ACCEPTED} / ${guests.expectedHeadcount}` : "--"}
               detail={guests
-                ? `People accepted · ${plural(guests.records, "guest")} + ${plural(guests.plusOnes, "plus-one")}`
+                ? `People coming · ${plural(guests.records, "guest")} + ${plural(guests.plusOnes, "plus-one")}`
                 : loadingText || "Guest information unavailable"}
               icon="users"
               tone="coral"
@@ -153,26 +182,37 @@ export function Dashboard({ go }: { go: (p: Page) => void }) {
             />
           </div>
           <div className="dashboard-columns">
-            <Card>
+            <Card className="dashboard-card">
               <div className="card-head"><div><h3>Budget snapshot</h3>
                 <p>{data ? `${formatMoney(data.budget.remainingBudget)} left of ${formatMoney(data.budget.eventBudget)}` : loadingText}</p></div>
                 <button className="text-link" onClick={() => go("budget")}>View budget <Icon name="arrow" size={14} /></button>
               </div>
               {data && <BudgetSnapshot budget={data.budget} />}
+              {data && <CardFooter summary={budgetSummary(data.budget)} />}
             </Card>
-            <Card>
-              <div className="card-head"><div><h3>Upcoming tasks</h3><p>{data ? "Open tasks, nearest due date first" : loadingText}</p></div>
+            <Card className="dashboard-card">
+              <div className="card-head"><div><h3>Tasks due</h3><p>{data ? "Overdue and upcoming, nearest due date first" : loadingText}</p></div>
                 <button className="text-link" onClick={() => go("tasks")}>All tasks <Icon name="arrow" size={14} /></button>
               </div>
-              {data && <UpcomingTasks tasks={data.tasks} />}
+              {data && <UpcomingTasks tasks={data.tasks} asOfDate={data.asOfDate} />}
+              {data && (
+                <CardFooter
+                  summary={showing(data.tasks.nextDue.length, data.tasks.total - data.tasks.completed, "open task", "open tasks")}
+                />
+              )}
             </Card>
           </div>
-          <Card>
+          <Card className="dashboard-card">
             <div className="card-head"><div><h3>Payments due</h3>
               <p>{data ? `Overdue and due in the next ${data.payments.windowDays} days` : loadingText}</p></div>
               <button className="text-link" onClick={() => go("expenses")}>View expenses <Icon name="arrow" size={14} /></button>
             </div>
             {data && <UpcomingPayments payments={data.payments} />}
+            {data && (
+              <CardFooter
+                summary={showing(data.payments.items.length, data.payments.overdueCount + data.payments.upcomingCount, "payment due", "payments due")}
+              />
+            )}
           </Card>
         </>
       )}
