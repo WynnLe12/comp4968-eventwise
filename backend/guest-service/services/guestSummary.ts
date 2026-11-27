@@ -19,26 +19,29 @@ export interface GuestSummary {
   rsvp: Record<RsvpStatus, number>;
 }
 
-/** Only these two fields are needed, so items written by any guest API version work. */
-type CountableGuest = { plusOneAllowed?: unknown; rsvpStatus?: unknown };
+/** Only these fields are needed, so items written by any guest API version work. */
+type CountableGuest = { plusOneAllowed?: unknown; rsvpStatus?: unknown; plusOneAttending?: unknown };
 
 const isRsvpStatus = (value: unknown): value is RsvpStatus =>
   typeof value === "string" && (RSVP_STATUSES as readonly string[]).includes(value);
 
 /**
  * Counts people by RSVP status and computes the planned headcount.
- * A guest with a plus-one counts as 2 people in its status: the plus-one is assumed to
- * follow the guest's answer until Feature 8 records whether the plus-one is coming.
+ * A guest with a plus-one counts as 2 people. The plus-one follows the guest's answer,
+ * except when the guest ACCEPTED and said on the RSVP form (Feature 8) that their
+ * plus-one isn't coming: that seat counts as REJECTED. The counts still add up to
+ * expectedHeadcount.
  * An item without a status has not been invited yet, so it counts as UNINVITED.
- * An unknown status is left out of `rsvp` (but still counts in `records`), so a new
- * Feature 8 status never shows up as the wrong answer.
+ * An unknown status is left out of `rsvp` (but still counts in `records`).
  */
 export function summarizeGuests(guests: readonly CountableGuest[]): GuestSummary {
   const rsvp = Object.fromEntries(RSVP_STATUSES.map((status) => [status, 0])) as Record<RsvpStatus, number>;
   for (const guest of guests) {
-    const people = guest.plusOneAllowed === true ? 2 : 1;
-    if (guest.rsvpStatus === undefined || guest.rsvpStatus === null) rsvp.UNINVITED += people;
-    else if (isRsvpStatus(guest.rsvpStatus)) rsvp[guest.rsvpStatus] += people;
+    const status = guest.rsvpStatus === undefined || guest.rsvpStatus === null ? "UNINVITED" : guest.rsvpStatus;
+    if (!isRsvpStatus(status)) continue;
+    rsvp[status] += 1;
+    if (guest.plusOneAllowed !== true) continue;
+    rsvp[status === "ACCEPTED" && guest.plusOneAttending === false ? "REJECTED" : status] += 1;
   }
   const headcount = calculateHeadcount(guests.map((guest) => ({ plusOneAllowed: guest.plusOneAllowed === true })));
   return {

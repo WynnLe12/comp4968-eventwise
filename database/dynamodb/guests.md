@@ -84,13 +84,26 @@ commits, so guests are only removed once the event is really gone. If the Dynamo
 fails, the error is logged and the request still returns 204: the event is already deleted,
 and its leftover guests are unreachable because the event has no members.
 
-## Post-MVP (not created yet)
+## RSVP attributes (Feature 8)
 
-- `rsvpToken` attribute plus a global secondary index `rsvpToken-index`, so a guest's
-  private RSVP link can find the guest without knowing the `eventId` (Feature 8).
-- `plusOneName`, `rsvpRespondedAt`.
+Written by the RSVP Lambdas (`backend/rsvp-service`), which only ever touch these
+attributes plus `rsvpStatus`, `mealChoice` and `updatedAt`:
 
-New attributes need no migration; the index can be added to the existing table.
+| Attribute | Type | Notes |
+| --- | --- | --- |
+| `invitedAt` | S | When the latest invitation email was queued. The guest moves from `UNINVITED` to `PENDING` |
+| `rsvpRespondedAt` | S | When the guest last submitted the RSVP form |
+| `plusOneAttending` | BOOL | The guest's answer about their plus-one. Always `false` when the guest declined |
+| `reminderSentAt` | S | When the one reminder was queued. Never cleared, so each guest is reminded once |
+
+The guest's answer sets `rsvpStatus` to `ACCEPTED` or `REJECTED`, and `mealChoice` to the
+RSVP form's single **Meal preference** field, which also asks for any allergies (up to 200
+characters). `dietaryNotes` is never changed by an RSVP.
+
+No `rsvpToken` attribute or index was needed: a guest's private link carries `eventId` and
+`guestId` signed with HMAC (see [docs/api/rsvp.md](../../docs/api/rsvp.md) §3), so the
+link itself is the table key. Event-wide RSVP settings live in
+[`EventWise_Rsvp`](rsvp.md).
 
 ## Local development
 

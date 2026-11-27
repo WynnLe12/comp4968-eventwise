@@ -58,7 +58,7 @@ export const pagePath = (page: Page) => `/app/${page}`;
  * signing in, so App skips the organizer session check for them.
  */
 export function isPublicGuestPage(pathname: string): boolean {
-  return /^\/(gallery|timeline)\/[^/]+\/?$/i.test(pathname);
+  return /^\/(gallery|timeline|rsvp)\/[^/]+\/?$/i.test(pathname);
 }
 
 export const guestTimelinePath = (share: string) => `/timeline/${encodeURIComponent(share)}`;

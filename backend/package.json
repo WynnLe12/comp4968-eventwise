@@ -33,6 +33,7 @@
     "package:expenses": "npm run build && node scripts/package-expenses.mjs",
     "package:timeline": "npm run build && node scripts/package-timeline.mjs",
     "package:tasks": "npm run build && node scripts/package-tasks.mjs",
+    "package:rsvp": "npm run build && node scripts/package-rsvp.mjs",
     "package:alerts": "npm run build && node scripts/package-alerts.mjs"
   },
   "devDependencies": {
@@ -46,6 +47,7 @@
     "@aws-sdk/client-s3": "^3.1176.0",
     "@aws-sdk/client-secrets-manager": "^3.1169.0",
     "@aws-sdk/client-sesv2": "^3.1176.0",
+    "@aws-sdk/client-sfn": "^3.1178.0",
     "@aws-sdk/client-sns": "^3.1178.0",
     "@aws-sdk/client-sqs": "^3.1169.0",
     "@aws-sdk/lib-dynamodb": "^3.1168.0",

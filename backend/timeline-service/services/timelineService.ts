@@ -15,6 +15,7 @@ import { toTimelineItem } from "./timelineMapper";
 import {
   LIMITS,
   assertEndsAfterStart,
+  assertInFuture,
   parseNotifyQuery,
   requireEventId,
   requireItemId,
@@ -131,9 +132,12 @@ export class TimelineService {
     const eventId = requireEventId(rawEventId);
     await this.requireMember(eventId, sub);
     const fields = validateNewItem(body);
+    // New activities can't be scheduled in the past.
+    const now = this.now();
+    assertInFuture("startsAt", fields.startsAt, now);
     // Best-effort limit: two simultaneous creates at 99 can both succeed. Acceptable for a soft cap.
     if ((await this.repository.countItems(eventId)) >= LIMITS.itemsPerEvent) throw timelineFull();
-    const reminderAt = calculateReminderAt(fields.startsAt, fields.reminderMinutes, this.now());
+    const reminderAt = calculateReminderAt(fields.startsAt, fields.reminderMinutes, now);
     const record = await this.repository.createItem(eventId, { ...fields, reminderAt }, sub);
     return toTimelineItem(record);
   }
@@ -150,8 +154,13 @@ export class TimelineService {
     if (stored.version !== version) throw versionConflict();
 
     const merged = { ...fieldsOf(stored), ...changes };
+    // A time can't be moved into the past. An activity that is already over can still have
+    // its name, place or notes corrected, as long as its times are left as they are.
+    const now = this.now();
+    if (changes.startsAt !== undefined && changes.startsAt !== stored.startsAt) assertInFuture("startsAt", changes.startsAt, now);
+    if (changes.endsAt !== undefined && changes.endsAt !== (stored.endsAt ?? null)) assertInFuture("endsAt", changes.endsAt, now);
     assertEndsAfterStart(merged.startsAt, merged.endsAt);
-    const reminderAt = rescheduleReminder(fieldsOf(stored), merged, this.now());
+    const reminderAt = rescheduleReminder(fieldsOf(stored), merged, now);
 
     const outcome = await this.repository.updateItem(
       eventId, itemId, version,

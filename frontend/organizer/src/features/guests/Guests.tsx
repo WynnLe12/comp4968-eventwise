@@ -11,7 +11,7 @@ import {
   type GuestRecord,
   type RsvpStatus,
 } from "./services/guestApi";
-import { partySize, peopleByStatus, totalHeadcount } from "./guestHeadcount";
+import { attendeeCount, peopleByStatus, totalHeadcount } from "./guestHeadcount";
 import { AddGuestModal } from "./AddGuestModal";
 import { EditGuestModal } from "./EditGuestModal";
 import "./guests.css";
@@ -28,6 +28,18 @@ const rsvpDisplay = Object.fromEntries(
 ) as Record<RsvpStatus, { label: string; tone: string }>;
 
 type StatusFilter = "ALL" | RsvpStatus;
+
+/** The guest accepted but their plus-one isn't coming (counted under "Not coming"). */
+function plusOneDeclined(guest: GuestRecord): boolean {
+  return guest.rsvpStatus === "ACCEPTED" && guest.plusOneAttending === false;
+}
+
+/** After an accepted RSVP (Feature 8) the tag says whether the plus-one is coming. */
+function plusOneLabel(guest: GuestRecord): string {
+  if (guest.rsvpStatus === "ACCEPTED" && guest.plusOneAttending === true) return "+ plus-one coming";
+  if (plusOneDeclined(guest)) return "· plus-one not coming";
+  return "+ plus-one";
+}
 
 function guestName(guest: GuestRecord) {
   return [guest.firstName, guest.lastName].filter(Boolean).join(" ") || guest.email || "Unnamed guest";
@@ -155,22 +167,22 @@ export function Guests({
       <div className="guest-summary">
         <div>
           <b>{counts.ACCEPTED}</b>
-          <span>Accepted</span>
+          <span>Coming</span>
           <i className="green" />
         </div>
         <div>
           <b>{counts.REJECTED}</b>
-          <span>Rejected</span>
+          <span>Not coming</span>
           <i className="coral" />
         </div>
         <div>
           <b>{counts.PENDING}</b>
-          <span>Pending</span>
+          <span>Awaiting reply</span>
           <i className="gray" />
         </div>
         <div>
           <b>{counts.UNINVITED}</b>
-          <span>Uninvited</span>
+          <span>Not invited</span>
         </div>
         <div>
           <b>{totalHeadcount(guests)}</b>
@@ -211,7 +223,7 @@ export function Guests({
             <thead>
               <tr>
                 <th>Guest</th>
-                <th>Party size</th>
+                <th>Attendee(s)</th>
                 <th>RSVP</th>
                 <th>Meal choice</th>
                 <th></th>
@@ -229,16 +241,22 @@ export function Guests({
                         <span>{initials(name)}</span>
                         <b>
                           {name}
-                          {g.plusOneAllowed && <small> + plus-one</small>}
+                          {g.plusOneAllowed && (
+                            // A declined plus-one is the "Not coming" seat in the cards above: same coral color.
+                            <small className={plusOneDeclined(g) ? "plus-one-declined" : undefined}> {plusOneLabel(g)}</small>
+                          )}
                           {hasName && g.email && <small> · {g.email}</small>}
                         </b>
                       </div>
                     </td>
-                    <td>{partySize(g)}</td>
+                    <td>{attendeeCount(g) ?? "-"}</td>
                     <td>
                       <Badge tone={status.tone}>{status.label}</Badge>
                     </td>
-                    <td>{g.mealChoice ?? "Not selected"}</td>
+                    <td>
+                      {g.mealChoice ?? "Not selected"}
+                      {g.dietaryNotes && <small className="guest-dietary">{g.dietaryNotes}</small>}
+                    </td>
                     <td>
                       <button
                         className="icon-btn"

@@ -50,3 +50,33 @@
   font-weight: 700;
   color: #c95145;
 }
+
+/* Allergies / dietary notes from the guest's RSVP, under the meal choice. */
+.guest-dietary {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 9px;
+  max-width: 220px;
+  white-space: normal;
+}
+
+/* Edit guest: copy the guest's private RSVP link (Feature 8). */
+.rsvp-link-row {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.rsvp-link-row p {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.rsvp-link-row input {
+  width: 100%;
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 9px;
+  font-size: 11px;
+}

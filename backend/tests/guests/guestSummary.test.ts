@@ -25,6 +25,16 @@ test("people are counted per RSVP status: a guest with a plus-one counts as 2", 
   });
 });
 
+test("an accepted guest whose plus-one isn't coming counts 1 accepted and 1 rejected (Feature 8)", () => {
+  const summary = summarizeGuests([
+    { plusOneAllowed: true, rsvpStatus: "ACCEPTED", plusOneAttending: false },
+    { plusOneAllowed: true, rsvpStatus: "ACCEPTED", plusOneAttending: true },
+    { plusOneAllowed: true, rsvpStatus: "REJECTED", plusOneAttending: false },
+  ]);
+  assert.deepEqual(summary.rsvp, { UNINVITED: 0, PENDING: 0, ACCEPTED: 3, REJECTED: 3 });
+  assert.equal(summary.expectedHeadcount, 6);
+});
+
 test("the RSVP counts add up to the expected headcount", () => {
   const summary = summarizeGuests([
     { plusOneAllowed: true, rsvpStatus: "REJECTED" },
