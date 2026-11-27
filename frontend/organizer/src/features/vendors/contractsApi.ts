@@ -61,6 +61,9 @@ async function contractRequest(eventId: string, suffix: string, body?: unknown, 
       };
       throw new ContractDraftSaveError(messages[result?.error?.code] ?? "This draft could not be saved. Reload its latest details before continuing.", {}, true);
     }
+    if (method === "POST" && suffix.endsWith("/discard") && ![401, 403].includes(response.status)) {
+      throw new Error(response.status === 404 ? "This draft is no longer available. Close it and refresh the list." : "We couldn't discard this draft. Please try again.");
+    }
     if (response.status === 422) {
       const fields: Record<string, string> = {};
       const safeFields: Record<string, string> = {
@@ -200,4 +203,18 @@ export async function extractContractDraft(eventId: string, draftId: string, ver
     throw new ContractDraftSaveError("We couldn't verify the extraction result. Reload this draft before trying again.", {}, true);
   }
   return { draft, appliedFields: result.appliedFields, skippedFields: result.skippedFields, warnings: result.warnings };
+}
+
+
+export async function discardContractDraft(eventId: string, draftId: string, version: string): Promise<ContractDraftDetails> {
+  const validId = (value: string) => /^[1-9][0-9]{0,19}$/.test(value) && BigInt(value) <= 18446744073709551615n;
+  if (![eventId, draftId, version].every(validId)) throw new Error("Reload this draft before discarding it.");
+  const result = await contractRequest(eventId, "/" + encodeURIComponent(draftId) + "/discard", { version }, "POST") as { data?: ContractDraftDetails } | null;
+  try {
+    const draft = readContractDraft(result, eventId, draftId);
+    if (draft.status !== "REJECTED" || !validId(draft.version) || BigInt(draft.version) < BigInt(version) || draft.confirmedExpenseId !== null) throw new Error("Unexpected discard result");
+    return draft;
+  } catch {
+    throw new ContractDraftSaveError("We couldn't verify whether the draft was discarded. Reload its latest details before continuing.", {}, true);
+  }
 }

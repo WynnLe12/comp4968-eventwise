@@ -305,3 +305,48 @@ test("extraction feedback distinguishes filled and preserved fields and flags pa
   for (const expected of [/due date/, /saved details were kept/, /vendor name/, /Some pages/, /conflicting/, /No expense or payment was created/]) assert.match(message, expected);
   assert.match(feedback.contractExtractionFeedback({ appliedFields: [], skippedFields: [], warnings: [] }), /No new details/);
 });
+
+
+test("discard sends the saved version and verified access token, accepting an idempotent saved result", async () => {
+  for (const version of ["3", "4"]) {
+    await withApi(async (url, options) => {
+      assert.equal(url, "/api/events/3/contract-drafts/1/discard");
+      assert.equal(options.method, "POST");
+      assert.equal(options.headers.Authorization, "Bearer test-access-token");
+      assert.deepEqual(JSON.parse(options.body), { version: "2" });
+      return Response.json({ data: { ...draft, status: "REJECTED", version } });
+    }, async api => {
+      const saved = await api.discardContractDraft("3", "1", "2");
+      assert.equal(saved.status, "REJECTED");
+      assert.equal(saved.documentId, draft.documentId);
+      assert.equal(saved.confirmedExpenseId, null);
+    });
+  }
+});
+
+test("unverified discard results require reload rather than displaying a false success", async () => {
+  for (const change of [{ status: "DRAFT" }, { status: "CONFIRMED" }, { eventId: "4" }, { draftId: "99" }, { version: "1" }, { confirmedExpenseId: "40" }]) {
+    await withApi(async () => Response.json({ data: { ...draft, status: "REJECTED", version: "3", ...change } }), async api => {
+      await assert.rejects(api.discardContractDraft("3", "1", "2"), error => error instanceof api.ContractDraftSaveError && error.reloadRequired);
+    });
+  }
+});
+
+test("discard respects conflicts and permissions and reports safe errors without automatically retrying", async () => {
+  for (const [status, code, expected, reload] of [[409, "DRAFT_CHANGED", /Reload/, true], [409, "DRAFT_NOT_EDITABLE", /no longer editable/, true],
+    [401, "UNAUTHENTICATED", /sign in again/, false], [403, "FORBIDDEN", /access/, false],
+    [404, "NOT_FOUND", /no longer available/, false], [500, "INTERNAL_ERROR", /couldn't discard/, false]]) {
+    let calls = 0;
+    await withApi(async () => { calls++; return Response.json({ error: { code, message: "private sql details" } }, { status }); }, async api => {
+      await assert.rejects(api.discardContractDraft("3", "1", "2"), error => expected.test(error.message) && !error.message.includes("private sql") && Boolean(error.reloadRequired) === reload);
+      assert.equal(calls, 1);
+    });
+  }
+});
+
+test("signed-out users and invalid discard selections make no request", async () => {
+  await withApi(async () => { assert.fail("No invalid discard request expected"); }, async api => {
+    for (const version of ["", "0", "01", "18446744073709551616"]) await assert.rejects(api.discardContractDraft("3", "1", version));
+    await assert.rejects(api.discardContractDraft("3", "1", "2"), /sign in again/);
+  }, async () => { throw new Error("Signed out"); });
+});

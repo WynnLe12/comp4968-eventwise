@@ -1,3 +1,4 @@
+import { ContractDraftDiscard } from "./ContractDraftDiscard";
 import { ContractDraftExtraction } from "./ContractDraftExtraction";
 import { contractExtractionFeedback } from "./contractExtractionFeedback";
 import { formatContractAmount } from "./contractAmount";
@@ -33,6 +34,8 @@ function Details({ draft, onSaved, onReload, onBusy }: { draft: ContractDraftDet
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [extracting, setExtracting] = useState(false);
+  const [discardIntent, setDiscardIntent] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const [extractionNeedsReload, setExtractionNeedsReload] = useState(false);
   const loadReferences = useCallback(async () => {
     const [categories, vendors] = await Promise.allSettled([
@@ -76,20 +79,24 @@ function Details({ draft, onSaved, onReload, onBusy }: { draft: ContractDraftDet
     <section>
       <h3>Source document</h3>
       <p>{draft.documentFilename || "Source document unavailable"}</p>
-      {draft.documentId && <Button variant="secondary" disabled={opening || confirming || extracting} onClick={() => void openDocument()}>{opening ? "Opening..." : "Open Source Document"}</Button>}
+      {draft.documentId && <Button variant="secondary" disabled={opening || confirming || extracting || discarding} onClick={() => void openDocument()}>{opening ? "Opening..." : "Open Source Document"}</Button>}
       {documentError && <p role="alert">{documentError}</p>}
     </section>
     {editing ? <ContractDraftForm draft={draft} onSaved={onSaved} onReload={onReload} onBusy={onBusy} onCancel={() => setEditing(false)} /> : <>
-    {draft.status === "DRAFT" && <Button variant="secondary" disabled={confirming || extracting || extractionNeedsReload} onClick={() => setEditing(true)}>Edit Draft</Button>}
-    <ContractDraftExtraction draft={draft} disabled={confirming || extractionNeedsReload}
+    {draft.status === "DRAFT" && <Button variant="secondary" disabled={confirming || extracting || extractionNeedsReload || discardIntent} onClick={() => setEditing(true)}>Edit Draft</Button>}
+    <ContractDraftExtraction draft={draft} disabled={confirming || extractionNeedsReload || discardIntent}
       onExtracted={result => onSaved(result.draft, contractExtractionFeedback(result))} onReload={onReload}
       onReloadRequired={() => setExtractionNeedsReload(true)} onBusy={value => { setExtracting(value); onBusy(value); }} />
     <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
     <p className="contracts-help">A deposit requirement does not record a payment. Payments are managed separately in Expenses.</p>
+    {draft.status === "REJECTED" && <p>This draft was discarded. The uploaded document is kept, and no expense was created from this draft.</p>}
     {draft.status === "CONFIRMED" && <p>This draft has been confirmed and saved to expenses.</p>}
-    {draft.status === "DRAFT" && !extracting && !extractionNeedsReload && <ContractDraftConfirmation draft={draft} onConfirmed={onSaved} onReload={onReload}
+    {draft.status === "DRAFT" && !extracting && !extractionNeedsReload && !discardIntent && <ContractDraftConfirmation draft={draft} onConfirmed={onSaved} onReload={onReload}
       referenceIssue={references.loading ? "Checking the selected category and vendor..." : draft.categoryId && !references.data?.category ? "The selected category could not be loaded. Reload details before confirming." : draft.vendorId && !references.data?.vendor ? "The selected vendor could not be loaded. Reload details before confirming." : ""}
       onBusy={busy => { setConfirming(busy); onBusy(busy); }} />}
+    {draft.status === "DRAFT" && <ContractDraftDiscard draft={draft} disabled={confirming || extracting || extractionNeedsReload}
+      onDiscarded={saved => onSaved(saved, "Draft discarded. Your uploaded document was kept. Expenses and payments were not changed.")}
+      onReload={onReload} onIntent={setDiscardIntent} onBusy={value => { setDiscarding(value); onBusy(value); }} />}
     </>}
   </div>;
 }

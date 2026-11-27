@@ -35,3 +35,8 @@
 
 .contract-extraction { margin: 16px 0; }
 .contract-extraction .contracts-help { margin: 8px 0 0; font-size: 14px; }
+
+.contract-discard { margin-top: 24px; padding-top: 20px; border-top: 1px solid #e9e2f3; }
+
+.contract-discard > h3 { margin: 0 0 8px; font-size: 16px; }
+.contract-discard > .contracts-help { margin-bottom: 12px; font-size: 14px; }
