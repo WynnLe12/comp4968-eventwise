@@ -87,7 +87,7 @@ export function suggestContractFields(source: PdfTextResult): ContractFieldSugge
     }
     const paid = /^(?:amount\s+paid|payments?\s+received|total\s+paid|deposit\s+(?:paid|received))\s*(?::|=)?\s*(.*)$/i.exec(line);
     if (paid) payments.push(parseMoney(labelled(index, paid[1]).raw));
-    const dueTotal = /^total\s+due\s*(?::|=)?\s*(.*)$/i.exec(line);
+    const dueTotal = /^total\s+due(?:\s*\([A-Za-z]{3}\))?\s*(?::|=)?\s*(.*)$/i.exec(line);
     if (dueTotal) {
       const value = labelled(index, dueTotal[1]), parsed = parseMoney(value.raw);
       if (parsed === null) invalidTotalDue = true; else totalsDue.push({ value: parsed, evidence: value.evidence });
@@ -107,6 +107,8 @@ export function suggestContractFields(source: PdfTextResult): ContractFieldSugge
       }
     }
     const due = /^(?:payment\s+due\s+date|final\s+payment\s+due(?:\s+date)?|due\s+date|payment\s+due|balance\s+due\s+date)(?:\s*[:=]\s*|\s+|$)(.*)$/i.exec(line)
+      ?? /^due\s*[:=]\s*(.*)$/i.exec(line)
+      ?? /^(?:full\s+)?payment\s+due\s+(.+)$/i.exec(line)
       ?? /^(?:payment\s+terms\s*:\s*)?(?:full\s+)?payment\s+(?:is\s+)?(?:due\s+)?by\s+(.+)$/i.exec(line);
     if (due) {
       const value = labelled(index, due[1]);

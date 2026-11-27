@@ -127,3 +127,41 @@ test("large inputs are rejected before label processing", () => {
   assert.throws(() => suggestContractFields(source("A".repeat(PDF_TEXT_LIMITS.characters + 1))), error => error instanceof PdfTextError && error.code === "PDF_TEXT_LIMIT");
   assert.throws(() => suggestContractFields(source(...Array.from({ length: 51 }, () => "Invoice"))), error => error instanceof PdfTextError && error.code === "PDF_PAGE_LIMIT");
 });
+
+
+test("photography PDF recognizes a currency-labelled unpaid total and short due-date headings", async () => {
+  const lines = ["NORTHLIGHT STUDIO", "Wedding photography | Vancouver, BC", "INVOICE", "BILL TO", "Demo Wedding",
+    "Issued: November 27, 2026", "Due: December 22, 2026", "Status: Unpaid", "Event date: June 19, 2027",
+    "Subtotal   $2,000.00", "GST (5%)   $100.00", "Payments received   $0.00", "TOTAL DUE (CAD)   $2,100.00",
+    "Payment terms", "Full payment due December 22, 2026."];
+  const result = suggestContractFields(await extractPdfText(contractPdf([lines])));
+  assert.deepEqual(result.fields, { vendorName: "NORTHLIGHT STUDIO", totalAmount: "2100.00", depositAmount: null, dueDate: "2026-12-22" });
+  assert.match(result.evidence.totalAmount![0].text, /TOTAL DUE \(CAD\)/);
+  assert.equal(result.evidence.dueDate!.length, 2);
+  assert.ok(result.warnings.some(warning => warning.code === "VENDOR_FROM_HEADER"));
+});
+
+test("currency-labelled total due still requires explicit zero payments and cannot replace a full total", () => {
+  for (const prefix of ["", "Payments received: $100.00\n", "Payments received: unknown\n"]) {
+    const result = suggestContractFields(source(prefix + "TOTAL DUE (CAD) $2,100.00"));
+    assert.equal(result.fields.totalAmount, null);
+    assert.ok(result.warnings.some(warning => warning.field === "totalAmount"));
+  }
+  const explicit = suggestContractFields(source("Grand total: $2,500.00\nPayments received: $400.00\nTOTAL DUE (CAD) $2,100.00"));
+  assert.equal(explicit.fields.totalAmount, "2500.00");
+  const conflict = suggestContractFields(source("Payments received: $0.00\nTOTAL DUE (CAD) $2,100.00\nTotal due: $2,200.00"));
+  assert.equal(conflict.fields.totalAmount, null);
+  assert.ok(conflict.warnings.some(warning => warning.code === "CONFLICTING_VALUES"));
+});
+
+test("short due-date labels reject invalid dates and retain conflicts instead of guessing", () => {
+  for (const label of ["Due: ", "Full payment due "]) {
+    assert.equal(suggestContractFields(source(label + "December 22, 2026.")).fields.dueDate, "2026-12-22");
+    for (const raw of ["$2,100.00", "12/22/2026", "December 22", "2026-02-29", "next month"]) {
+      assert.equal(suggestContractFields(source(label + raw)).fields.dueDate, null);
+    }
+  }
+  const result = suggestContractFields(source("Due: December 22, 2026\nFull payment due December 23, 2026."));
+  assert.equal(result.fields.dueDate, null);
+  assert.ok(result.warnings.some(warning => warning.field === "dueDate" && warning.code === "CONFLICTING_VALUES"));
+});
