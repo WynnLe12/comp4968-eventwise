@@ -1,3 +1,5 @@
+import { DraftExtractionService } from "../extraction/draftExtractionService";
+import { MySqlDraftExtractionStore } from "../repositories/draftExtractionStore";
 import { ApiError } from "../../expense-service/errors";
 import { invokeNodeHttpHandler } from "../../shared/lambda/nodeHttpBridge";
 import { sendJson } from "../../shared/utils/http";
@@ -7,7 +9,7 @@ import { MySqlDraftCreator } from "../repositories/draftCreator";
 import { MySqlDraftUpdater } from "../repositories/draftUpdater";
 import { MySqlDraftDiscarder } from "../repositories/draftDiscarder";
 import { MySqlDraftConfirmer } from "../repositories/draftConfirmer";
-import type { DraftConfirmer, DraftCreator, DraftDiscarder, DraftReader, DraftUpdater } from "../types";
+import type { DraftConfirmer, DraftCreator, DraftDiscarder, DraftExtractor, DraftReader, DraftUpdater } from "../types";
 
 /** API Gateway REST proxy v1; HTTP API v2 and function URLs are not supported. */
 export interface ContractsProxyEvent {
@@ -36,6 +38,7 @@ export interface ContractStores {
   updater: DraftUpdater;
   discarder: DraftDiscarder;
   confirmer: DraftConfirmer;
+  extractor: DraftExtractor;
 }
 
 function subject(event: ContractsProxyEvent, env: NodeJS.ProcessEnv): string {
@@ -69,6 +72,7 @@ export function createContractsHandler(dependencies: { stores?: ContractStores; 
   const stores = dependencies.stores ?? {
     reader: new MySqlDraftReader(), creator: new MySqlDraftCreator(), updater: new MySqlDraftUpdater(),
     discarder: new MySqlDraftDiscarder(), confirmer: new MySqlDraftConfirmer(),
+    extractor: new DraftExtractionService(new MySqlDraftExtractionStore()),
   };
   return async (event: ContractsProxyEvent): Promise<ContractsProxyResponse> => {
     const headers: Record<string, string> = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
@@ -84,7 +88,7 @@ export function createContractsHandler(dependencies: { stores?: ContractStores; 
     });
     try {
       const match = typeof event.path === "string"
-        ? /^\/events\/([^/?#]+)\/contract-drafts(?:\/([^/?#]+)(\/(?:discard|confirm))?)?$/.exec(event.path) : null;
+        ? /^\/events\/([^/?#]+)\/contract-drafts(?:\/([^/?#]+)(\/(?:discard|confirm|extract))?)?$/.exec(event.path) : null;
       const resource = "/events/{eventId}/contract-drafts" + (match?.[2] ? "/{draftId}" : "") + (match?.[3] ?? "");
       if (!match || event.version === "2.0" || typeof event.httpMethod !== "string" ||
           (event.resource !== undefined && event.resource !== resource) ||
@@ -115,7 +119,7 @@ export function createContractsHandler(dependencies: { stores?: ContractStores; 
       }
       // A separate auth closure per invocation prevents concurrent calls sharing an identity.
       const http = contractDraftHttpHandler(stores.reader, async () => sub, stores.creator,
-        stores.updater, stores.discarder, stores.confirmer);
+        stores.updater, stores.discarder, stores.confirmer, stores.extractor);
       const result = await invokeNodeHttpHandler(event.httpMethod, event.path + (query.size ? "?" + query : ""),
         payload(event), async (request, response) => {
           if (!await http(request, response)) sendJson(response, 404, { error: { code: "NOT_FOUND", message: "Not found." } });

@@ -26,6 +26,12 @@ function fixture(failure?: Error) {
     if (eventId !== "12" || !["owner", "planner"].includes(sub)) throw new ApiError(403, "FORBIDDEN", "You do not have access to this event.");
   };
   const stores: ContractStores = {
+    extractor: { async extract(eventId, draftId, sub, body) {
+      calls.push(["extract", eventId, draftId, sub, body]); guard(eventId, sub);
+      parseDraftVersion(body);
+      return { draft: { ...draft, version: "2" }, appliedFields: ["dueDate"], skippedFields: ["totalAmount"],
+        warnings: [{ field: "totalAmount", code: "SAVED_VALUE_KEPT" }] };
+    } },
     reader: {
       async list(eventId, sub, query) { calls.push(["list", eventId, sub, query]); guard(eventId, sub);
         return { data: [draft], total: 1, limit: query.limit, offset: query.offset }; },
@@ -168,4 +174,48 @@ test("Contracts Lambda keeps invocation identities isolated and hides private er
   const response = await fixture(new Error("private.sql credentials and document details")).handle(event());
   assert.equal(response.statusCode, 500); assert.doesNotMatch(response.body, /private|credentials/);
   assert.doesNotMatch(JSON.stringify(log.mock.calls), /private.sql|credentials/);
+});
+
+
+test("Contracts Lambda extraction uses the verified identity and exact resource, and supports unauthenticated preflight", async () => {
+  const { handle, calls } = fixture();
+  const request = { ...event(item + "/extract", "POST", { version: "1" }),
+    resource: "/events/{eventId}/contract-drafts/{draftId}/extract", pathParameters: { eventId: "12", draftId: id } };
+  const response = await handle(request);
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.headers.Allow, "POST, OPTIONS");
+  assert.equal(response.headers["Cache-Control"], "no-store");
+  const result = JSON.parse(response.body);
+  assert.equal(result.data.version, "2");
+  assert.deepEqual(result.appliedFields, ["dueDate"]);
+  assert.deepEqual(result.skippedFields, ["totalAmount"]);
+  assert.deepEqual(result.warnings, [{ field: "totalAmount", code: "SAVED_VALUE_KEPT" }]);
+  assert.deepEqual(calls, [["extract", "12", id, "owner", { version: "1" }]]);
+  const preflight = { ...request, httpMethod: "OPTIONS", body: null, requestContext: null };
+  assert.equal((await createContractsHandler({ env })(preflight)).statusCode, 204);
+  assert.equal((await handle({ ...request, requestContext: null })).statusCode, 401);
+  const outsider = event(item + "/extract", "POST", { version: "1" });
+  outsider.requestContext!.authorizer!.claims!.sub = "outsider";
+  assert.equal((await handle(outsider)).statusCode, 403);
+  assert.equal((await handle({ ...request, pathParameters: { eventId: "13", draftId: id } })).statusCode, 404);
+  assert.equal((await handle({ ...request, httpMethod: "GET" })).statusCode, 405);
+  assert.equal((await handle({ ...request, queryStringParameters: { eventId: "13" } })).statusCode, 422);
+  for (const body of [{}, { version: 1 }, { version: "1", documentId: "99" }]) {
+    assert.equal((await handle(event(item + "/extract", "POST", body))).statusCode, 422);
+  }
+});
+
+test("Contracts Lambda extraction preserves review conflicts and sanitized manual-entry fallback errors", async t => {
+  const log = t.mock.method(console, "error", () => {});
+  for (const failure of [new ApiError(409, "DRAFT_CHANGED", "Reload this draft."),
+    new ApiError(422, "PDF_NO_TEXT", "Enter these details manually."),
+    new ApiError(503, "DOCUMENT_UNAVAILABLE", "Try again later.")]) {
+    const response = await fixture(failure).handle(event(item + "/extract", "POST", { version: "1" }));
+    assert.equal(response.statusCode, failure.status);
+    assert.equal(JSON.parse(response.body).error.code, failure.code);
+  }
+  const response = await fixture(new Error("private document text and storage key")).handle(event(item + "/extract", "POST", { version: "1" }));
+  assert.equal(response.statusCode, 500);
+  assert.equal(JSON.parse(response.body).error.message, "Unable to extract contract details.");
+  assert.doesNotMatch(JSON.stringify(log.mock.calls), /private document|storage key/);
 });

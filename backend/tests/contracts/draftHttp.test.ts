@@ -90,7 +90,12 @@ async function withServer(run: (url: string, calls: unknown[][]) => Promise<void
     },
   };
   const server = createAppServer({ contractDrafts: reader, contractDraftCreator: creator, contractDraftUpdater: updater,
-    contractDraftDiscarder: discarder, contractDraftConfirmer: confirmer, authenticate: async header => {
+    contractDraftDiscarder: discarder, contractDraftConfirmer: confirmer,
+    contractDraftExtractor: { async extract(eventId, draftId, sub, body) {
+      calls.push(["extract", eventId, draftId, sub, body]); authorize(eventId, sub);
+      parseDraftVersion(body);
+      return { draft: saved, appliedFields: [], skippedFields: [], warnings: [] };
+    } }, authenticate: async header => {
     if (!header || !/^Bearer (owner|planner|outsider)$/.test(header)) throw new ApiError(401, "UNAUTHENTICATED", "Sign in to continue.");
     return header.slice(7);
   } });
@@ -562,5 +567,19 @@ test("contract new-vendor confirmation rejects nonboolean intent, conflicting se
     const forgedName = await post(item + "/confirm", { version: "3", createVendor: true, vendorName: "Not reviewed" });
     assert.equal(forgedName.status, 422);
     assert.equal((await (await get(item)).json()).data.status, "DRAFT");
+  });
+});
+
+
+test("local extraction route passes version and verified identity without creating an expense", async () => {
+  await withServer(async (base, calls) => {
+    const url = base + "/12/contract-drafts/" + draft.draftId + "/extract";
+    const preflight = await fetch(url, { method: "OPTIONS" });
+    assert.equal(preflight.status, 204); assert.equal(calls.length, 0);
+    const result = await fetch(url, { method: "POST", headers: { authorization: "Bearer planner", "Content-Type": "application/json" }, body: JSON.stringify({ version: "1" }) });
+    assert.equal(result.status, 200);
+    assert.deepEqual(await result.json(), { data: draft, appliedFields: [], skippedFields: [], warnings: [] });
+    assert.deepEqual(calls, [["extract", "12", draft.draftId, "planner", { version: "1" }]]);
+    assert.equal((await get(url)).status, 405);
   });
 });

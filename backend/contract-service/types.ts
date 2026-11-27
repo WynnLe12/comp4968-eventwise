@@ -80,3 +80,7 @@ export interface DraftConfirmation {
 export interface DraftConfirmer {
   confirm(eventId: string, draftId: string, sub: string, body: unknown): Promise<DraftConfirmation>;
 }
+
+export interface DraftExtractor {
+  extract(eventId: string, draftId: string, sub: string, body: unknown): Promise<import("./extraction/draftExtractionService").DraftExtractionResult>;
+}

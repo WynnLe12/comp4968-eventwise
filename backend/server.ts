@@ -1,10 +1,12 @@
 import "./shared/config/environment";
+import { DraftExtractionService } from "./contract-service/extraction/draftExtractionService";
+import { MySqlDraftExtractionStore } from "./contract-service/repositories/draftExtractionStore";
 import { ExpenseService } from "./expense-service/services/expenses";
 import { MySqlExpenseRepository } from "./expense-service/repositories/mysql-expenses";
 import { expenseHttpHandler } from "./expense-service/handlers/http";
 import { createCognitoAuthenticator, type Authenticate } from "./shared/auth/cognito";
 
-import type { DraftConfirmer, DraftCreator, DraftDiscarder, DraftReader, DraftUpdater } from "./contract-service/types";
+import type { DraftConfirmer, DraftCreator, DraftDiscarder, DraftExtractor, DraftReader, DraftUpdater } from "./contract-service/types";
 import { MySqlDraftReader } from "./contract-service/repositories/draftReader";
 import { MySqlDraftCreator } from "./contract-service/repositories/draftCreator";
 import { MySqlDraftUpdater } from "./contract-service/repositories/draftUpdater";
@@ -18,6 +20,7 @@ export interface AppDependencies {
   contractDraftUpdater?: DraftUpdater;
   contractDraftDiscarder?: DraftDiscarder;
   contractDraftConfirmer?: DraftConfirmer;
+  contractDraftExtractor?: DraftExtractor;
   expenses?: ExpenseService;
   authenticate?: Authenticate;
 }
@@ -81,6 +84,7 @@ export function createAppServer(
     eventDependencies.contractDraftUpdater ?? new MySqlDraftUpdater(),
     eventDependencies.contractDraftDiscarder ?? new MySqlDraftDiscarder(),
     eventDependencies.contractDraftConfirmer ?? new MySqlDraftConfirmer(),
+    eventDependencies.contractDraftExtractor ?? new DraftExtractionService(new MySqlDraftExtractionStore()),
   );
 
   return createServer((request, response) => {
