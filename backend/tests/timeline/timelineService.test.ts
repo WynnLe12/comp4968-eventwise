@@ -234,3 +234,67 @@ test("changedFieldsBetween treats omitted optional fields as null; isNotifiable 
   assert.equal(isNotifiable({ type: "UPDATED", changedFields: ["visibility"] }), true);
   assert.equal(isNotifiable({ type: "DELETED", changedFields: [] }), true);
 });
+
+// --- Past times (same rule as the RSVP deadline) ----------------------------------------
+
+function clockSetup(start: string) {
+  let now = new Date(start);
+  const store = new MemoryTimelineStore();
+  const service = new TimelineService({
+    repository: store,
+    requireMember: memberships([["42", OWNER]]).check,
+    notifier: new RecordingNotifier(),
+    now: () => now,
+    logError: () => {},
+  });
+  return { service, store, moveTo: (instant: string) => { now = new Date(instant); } };
+}
+
+async function rejectsField(promise: Promise<unknown>, field: string, message: string) {
+  await assert.rejects(promise, (error: ApiError) => {
+    assert.equal(error.status, 422);
+    assert.equal(error.code, "VALIDATION_ERROR");
+    assert.deepEqual(error.fields, { [field]: message });
+    return true;
+  });
+}
+
+test("a new activity must start in the future; exactly now counts as past", async () => {
+  const { service, store } = clockSetup("2026-12-05T20:00:00Z");
+  await rejectsField(service.create("42", OWNER, { title: "Yesterday", startsAt: "2026-12-04T20:00:00Z" }),
+    "startsAt", "The start time must be in the future.");
+  await rejectsField(service.create("42", OWNER, { title: "Now", startsAt: "2026-12-05T20:00:00Z" }),
+    "startsAt", "The start time must be in the future.");
+  assert.equal(store.records.size, 0);
+  const item = await service.create("42", OWNER, { title: "Soon", startsAt: "2026-12-05T20:01:00Z" });
+  assert.equal(item.startsAt, "2026-12-05T20:01:00Z");
+});
+
+test("an activity can't be moved into the past, and its end can't be changed to the past", async () => {
+  const { service, moveTo } = clockSetup("2026-12-05T12:00:00Z");
+  const item = await service.create("42", OWNER, { title: "Ceremony", startsAt: "2026-12-05T23:00:00Z", endsAt: "2026-12-05T23:30:00Z" });
+  await rejectsField(service.update("42", item.itemId, OWNER, { version: 1, startsAt: "2026-12-05T11:00:00Z" }),
+    "startsAt", "The start time must be in the future.");
+
+  moveTo("2026-12-05T23:10:00Z"); // the ceremony has started
+  await rejectsField(service.update("42", item.itemId, OWNER, { version: 1, endsAt: "2026-12-05T23:05:00Z" }),
+    "endsAt", "The end time must be in the future.");
+  // Extending a running activity into the future is fine.
+  const extended = await service.update("42", item.itemId, OWNER, { version: 1, endsAt: "2026-12-05T23:45:00Z" });
+  assert.equal(extended.item.endsAt, "2026-12-05T23:45:00Z");
+});
+
+test("an activity that is already over can still have its details corrected", async () => {
+  const { service, moveTo } = clockSetup("2026-12-05T12:00:00Z");
+  const item = await service.create("42", OWNER, { title: "Ceremony", place: "Garden", startsAt: "2026-12-05T23:00:00Z", endsAt: "2026-12-05T23:30:00Z" });
+  moveTo("2026-12-06T02:00:00Z"); // after the ceremony
+
+  const fixed = await service.update("42", item.itemId, OWNER, { version: 1, title: "Ceremony (moved indoors)", place: "Main hall", notes: "Rain plan" });
+  assert.equal(fixed.item.title, "Ceremony (moved indoors)");
+  // Re-sending the unchanged times (what a full edit form does) is not a change.
+  const same = await service.update("42", item.itemId, OWNER, { version: 2, startsAt: "2026-12-05T15:00:00-08:00", endsAt: "2026-12-05T23:30:00Z", notes: "Rain plan." });
+  assert.equal(same.item.version, 3);
+  // Clearing the end time is allowed too.
+  const cleared = await service.update("42", item.itemId, OWNER, { version: 3, endsAt: null });
+  assert.equal(cleared.item.endsAt, null);
+});

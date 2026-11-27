@@ -88,6 +88,17 @@ export function toUtcInstant(date: Date): string {
   return date.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
+/**
+ * Throws 422 when a start or end time is not in the future. Same rule and wording as the
+ * RSVP deadline (rsvp-service/services/validation.ts): the instant must be after `now`.
+ */
+export function assertInFuture(field: "startsAt" | "endsAt", instant: string | null, now: Date): void {
+  if (instant !== null && Date.parse(instant) <= now.getTime()) {
+    const label = field === "startsAt" ? "start time" : "end time";
+    throw new ApiError(422, "VALIDATION_ERROR", "Check the submitted fields.", { [field]: `The ${label} must be in the future.` });
+  }
+}
+
 /** Throws 422 on endsAt when it is not after startsAt. Both must already be normalized. */
 export function assertEndsAfterStart(startsAt: string, endsAt: string | null): void {
   if (endsAt !== null && endsAt <= startsAt) {
