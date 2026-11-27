@@ -1,6 +1,6 @@
-# Payment & Budget Alerts Lambda Deployment Guide — Feature 9
+# Payment & Budget Alerts Deployment Guide — Feature 9
 
-Step-by-step AWS Console guide for deploying the daily **Payment & Budget Alerts** feature using **Amazon EventBridge Scheduler**, **AWS Lambda**, and **Amazon SNS**.
+Step-by-step AWS Console guide and implementation reference for the daily **Payment & Budget Alerts** feature using **Amazon EventBridge Scheduler**, **AWS Lambda**, **Amazon SNS**, **Amazon Cognito**, and **Amazon SES**.
 
 Work in **US West (Oregon) `us-west-2`** throughout.
 
@@ -8,18 +8,59 @@ Work in **US West (Oregon) `us-west-2`** throughout.
 
 ## 1. Architecture Overview
 
+```text
+EventBridge Scheduler (daily 8:00 AM America/Vancouver)
+        │
+        ▼
+eventwise-alerts (VPC Lambda: notification-service/handlers/alerts.handler)
+  ├── Queries RDS MySQL (via Secrets Manager + TLS) for:
+  │     • Unpaid expenses due within 7 days (today .. today + 7, subtracting refunds)
+  │     • Categories where committed spending > planned_amount
+  ├── Deduplicates against alert_notifications (MySQL)
+  └── Publishes per-event alert to SNS (via VPC Interface Endpoint)
+        with MessageAttributes: ownerSub, eventId, alertTypes
+        │
+        ▼
+Amazon SNS Topic (eventwise-payment-budget-alerts)
+        │
+        ▼
+eventwise-alerts-email-sender (Non-VPC Lambda: notification-service/handlers/emailSender.handler)
+  ├── Looks up the event owner's email in Cognito (ListUsers by ownerSub)
+  └── Sends the alert directly to that owner via Amazon SES
+```
+
+### Deployed Resources
+
 | Resource | Name | Purpose |
 | --- | --- | --- |
 | MySQL Migration | `007_alert_notifications.sql` | Creates `alert_notifications` table in RDS `eventwise` for deduplication |
 | VPC Endpoint | `eventwise-sns-endpoint` | Allows the VPC Lambda to call SNS (`com.amazonaws.us-west-2.sns`) without a NAT Gateway |
-| SNS Topic | `eventwise-payment-budget-alerts` | Delivers owner email alerts (supports optional per-owner filter policies via `ownerSub`) |
+| SNS Topic | `eventwise-payment-budget-alerts` | Decouples alert detection (VPC) from owner email delivery (non-VPC) |
 | Lambda (Checker) | `eventwise-alerts` | Handler `notification-service/handlers/alerts.handler` inside the RDS VPC |
-| Lambda (Email Sender) | `eventwise-alerts-email-sender` | Handler `notification-service/handlers/emailSender.handler` **outside** the VPC (resolves owner email from Cognito and sends via SES) |
-| EventBridge Schedule | `eventwise-daily-alerts` | Runs every morning (`cron(0 8 * * ? *)` America/Vancouver) |
+| Lambda (Email Sender) | `eventwise-alerts-email-sender` | Handler `notification-service/handlers/emailSender.handler` **outside** the VPC |
+| EventBridge Schedule | `eventwise-daily-alerts` | Runs every morning (`cron(0 8 * * ? *)`, `America/Vancouver`) |
 
 ---
 
-## 2. Build the Deployment Package
+## 2. Implementation Details
+
+* **Source files** (`backend/notification-service/`):
+  * `types.ts` — domain types for due payments, budget overruns, deduplication records, and run summaries.
+  * `repositories/mysql-alerts.ts` — parameterized SQL queries for unpaid due payments (`due_date BETWEEN startDate AND endDate` with `committed_amount > net_paid`), category overruns (`SUM(committed_amount) > planned_amount`), and `alert_notifications` reads/inserts (`INSERT IGNORE`).
+  * `services/alertService.ts` — exact `bigint` cent math, `[0, 7]` day boundary validation, per-event digest email formatting, deduplication, and per-event error isolation (failed publishes are never recorded as sent so they retry on the next run).
+  * `services/snsPublisher.ts` — publishes to SNS with 100-char subject truncation and `ownerSub`, `eventId`, and `alertTypes` message attributes.
+  * `handlers/alerts.ts` — EventBridge Lambda entry point (`notification-service/handlers/alerts.handler`).
+  * `handlers/emailSender.ts` — SNS-triggered non-VPC Lambda (`notification-service/handlers/emailSender.handler`) that resolves `ownerSub` to an email address via Cognito `ListUsers` (with per-invocation caching and `sub` validation) and sends the email via SESv2 `SendEmail`.
+* **Deduplication rules** (`alert_notifications`):
+  * `PAYMENT_DUE`: `dedupe_key = due:<YYYY-MM-DD>`. Prevents duplicate alerts across repeated daily runs; re-notifies only if the expense due date changes to a new date entering the 7-day window.
+  * `BUDGET_OVERRUN`: `dedupe_key = overrun:<planned_amount>:<committed_total>`. Prevents duplicate alerts while totals are unchanged; re-notifies if spending or planned budget changes while still over budget.
+* **Tests**: `backend/tests/alerts.test.ts` (10 unit tests covering day `-1`/`0`/`7`/`8` boundaries, 1-cent overruns, false-alert prevention, deduplication, SNS failure handling, Cognito lookup, and SES delivery).
+
+---
+
+## 3. Build the Deployment Package
+
+Both Lambdas ship in the same ZIP archive (`backend/build/eventwise-alerts.zip`):
 
 ```bash
 cd backend
@@ -29,128 +70,121 @@ npm test
 npm run package:alerts
 ```
 
-This outputs **`backend/build/eventwise-alerts.zip`**.
+`package:alerts` smoke-loads both `notification-service/handlers/alerts.js` and `notification-service/handlers/emailSender.js` in isolation and verifies the bundled `certs/rds-ca.pem`.
 
 ---
 
-## 3. Apply the Database Migration
+## 4. Apply the Database Migration
 
 Run `database/mysql/migrations/007_alert_notifications.sql` against the `eventwise` database (local Docker MySQL or Amazon RDS `eventwise-db`).
 
 ---
 
-## 4. Create the SNS VPC Interface Endpoint (Required for VPC Lambda)
+## 5. Create the SNS VPC Interface Endpoint
 
-Because EventWise's VPC (`vpc-0a29df84c9e10f13e`) has **no NAT Gateway**, the Lambda inside the VPC needs an interface endpoint to reach SNS (just like `eventwise-secrets-endpoint` and `eventwise-sqs-endpoint`):
+Because EventWise's VPC (`vpc-0a29df84c9e10f13e`) has **no NAT Gateway**, the checker Lambda inside the VPC needs an interface endpoint to reach SNS (just like `eventwise-secrets-endpoint` and `eventwise-sqs-endpoint`):
 
 1. Open **VPC → Endpoints → Create endpoint**.
 2. Name tag: `eventwise-sns-endpoint`.
-3. Service category: **AWS services**.
-4. Services: Search **`sns`** and select **`com.amazonaws.us-west-2.sns`** (Type: Interface).
-5. VPC: Select `vpc-0a29df84c9e10f13e`.
-6. Subnets: Select the same two subnets used by `eventwise-events` Lambda.
-7. Enable DNS name: **Checked** (Private DNS enabled).
-8. Security groups: Select a security group that allows **Inbound HTTPS (TCP 443)** from **`eventwise-lambda-sg`** (you can reuse `eventwise-sqs-endpoint-sg` or create `eventwise-sns-endpoint-sg`).
-9. Click **Create endpoint** and wait until status is **Available**.
+3. Service category: **AWS services** → search **`com.amazonaws.us-west-2.sns`** (Type: Interface).
+4. VPC: `vpc-0a29df84c9e10f13e` | Subnets: same two subnets used by `eventwise-events` | **Enable DNS name: Checked**.
+5. Security group: reuse `eventwise-sqs-endpoint-sg` (or any SG allowing inbound **TCP 443** from `eventwise-lambda-sg`).
+6. Create and wait until status is **Available**.
 
 ---
 
-## 5. Create the SNS Topic & Email Subscription
+## 6. Create the SNS Topic
 
 1. Open **Amazon SNS → Topics → Create topic**.
-2. Type: **Standard**.
-3. Name: `eventwise-payment-budget-alerts`.
-4. Display name: `EventWise` (optional).
-5. Click **Create topic** and copy the **Topic ARN** (e.g. `arn:aws:sns:us-west-2:<ACCOUNT_ID>:eventwise-payment-budget-alerts`).
-6. Under **Subscriptions → Create subscription**:
-   - Protocol: **Email**
-   - Endpoint: Your owner email address
-   - *(Optional, for multi-owner filtering)* Under **Subscription filter policy**, enable and set **Message attributes** scope:
+2. Type: **Standard** | Name: `eventwise-payment-budget-alerts`.
+3. Click **Create topic** and copy the **Topic ARN**.
+
+---
+
+## 7. Create Lambda #1: `eventwise-alerts` (VPC Checker)
+
+1. **Lambda → Create function → Author from scratch** → Name: `eventwise-alerts` | Runtime: **Node.js 22.x** (`x86_64`).
+2. **IAM Role** (**Configuration → Permissions → Role name** — do this **before** attaching the VPC):
+   * Attach AWS managed policy: **`AWSLambdaVPCAccessExecutionRole`**.
+   * Add inline policy (`EventWiseAlertsPolicy`):
      ```json
      {
-       "ownerSub": ["<COGNITO_USER_SUB>"]
+       "Version": "2012-10-17",
+       "Statement": [
+         {
+           "Sid": "ReadDatabaseSecret",
+           "Effect": "Allow",
+           "Action": "secretsmanager:GetSecretValue",
+           "Resource": "<DB_SECRET_ARN>"
+         },
+         {
+           "Sid": "PublishAlertsToSns",
+           "Effect": "Allow",
+           "Action": "sns:Publish",
+           "Resource": "<ALERTS_SNS_TOPIC_ARN>"
+         }
+       ]
      }
      ```
-     *(Leave filter policy off during single-owner demo to receive all event alerts.)*
-7. Open your email inbox and click **Confirm subscription**.
+3. **Code → Upload from → .zip file** → upload `backend/build/eventwise-alerts.zip`.
+4. **Runtime settings → Edit → Handler**: `notification-service/handlers/alerts.handler`.
+5. **General configuration**: Memory `256 MB`, Timeout `30 s`.
+6. **VPC**: Attach to `vpc-0a29df84c9e10f13e`, the two `eventwise-events` subnets, and security group **`eventwise-lambda-sg`**.
+7. **Environment variables** (copy DB settings from `eventwise-events`):
+   * `DB_SECRET_ARN`, `DB_HOST`, `DB_PORT` (`3306`), `DB_NAME` (`eventwise`), `DB_CONNECTION_LIMIT` (`2`)
+   * `ALERTS_SNS_TOPIC_ARN`: `<Topic ARN from Step 6>`
 
 ---
 
-## 6. Create the Lambda Function (`eventwise-alerts`)
+## 8. Create Lambda #2: `eventwise-alerts-email-sender` (Non-VPC Sender)
 
-1. Open **AWS Lambda → Create function → Author from scratch**.
-2. Function name: `eventwise-alerts`.
-3. Runtime: **Node.js 22.x** (`x86_64`).
-4. Permissions: **Create a new role with basic Lambda permissions**.
-5. Upload code: **Code → Upload from → .zip file** → upload `backend/build/eventwise-alerts.zip`.
-6. Runtime settings: **Edit → Handler** → `notification-service/handlers/alerts.handler`.
-7. General configuration: Memory **256 MB**, Timeout **30 seconds**.
-8. **VPC**: Attach to `vpc-0a29df84c9e10f13e`, same two subnets as `eventwise-events`, security group **`eventwise-lambda-sg`**.
-9. **Environment variables** (copy DB settings from `eventwise-events`):
-   - `DB_SECRET_ARN`: `<same as eventwise-events>`
-   - `DB_HOST`: `<same as eventwise-events>`
-   - `DB_PORT`: `3306`
-   - `DB_NAME`: `eventwise`
-   - `DB_CONNECTION_LIMIT`: `2`
-   - `ALERTS_SNS_TOPIC_ARN`: `<Topic ARN from Step 5>`
-10. **IAM Role permissions** (**Configuration → Permissions → click Role name**):
-    - Attach AWS managed policy: **`AWSLambdaVPCAccessExecutionRole`**.
-    - Add inline policy (`EventWiseAlertsPolicy`):
-      ```json
-      {
-        "Version": "2012-10-17",
-        "Statement": [
-          {
-            "Sid": "ReadDatabaseSecret",
-            "Effect": "Allow",
-            "Action": "secretsmanager:GetSecretValue",
-            "Resource": "<DB_SECRET_ARN>"
-          },
-          {
-            "Sid": "PublishAlertsToSns",
-            "Effect": "Allow",
-            "Action": "sns:Publish",
-            "Resource": "<ALERTS_SNS_TOPIC_ARN>"
-          }
-        ]
-      }
-      ```
-
----
-
-## 7. Schedule Daily Execution with EventBridge Scheduler
-
-1. Open **Amazon EventBridge → Scheduler → Schedules → Create schedule**.
-2. Schedule name: `eventwise-daily-alerts`.
-3. Occurrence: **Recurring schedule**.
-4. Schedule type: **Cron-based schedule**.
-   - Cron expression: `0 8 * * ? *`
-   - Timezone: **America/Vancouver** (runs every morning at 8:00 AM local time).
-5. Flexible time window: **Off** (or 5 minutes).
-6. Target: **AWS Lambda → Invoke** → select **`eventwise-alerts`**.
-7. Payload: `{}`.
-8. Permissions: **Create new role for this schedule**.
-9. Click **Create schedule**.
-
----
-
-## 8. Verify in AWS Console
-
-1. Open Lambda `eventwise-alerts` → **Test** tab.
-2. Invoke with `{}` (or `{"runDate": "2026-11-26"}` to test a specific date).
-3. Check the returned JSON summary:
+1. **Lambda → Create function → Author from scratch** → Name: `eventwise-alerts-email-sender` | Runtime: **Node.js 22.x** (`x86_64`).
+2. **VPC**: Leave **None** (must stay outside the VPC to reach Cognito and SES).
+3. **Code → Upload from → .zip file** → upload the same `backend/build/eventwise-alerts.zip`.
+4. **Runtime settings → Edit → Handler**: `notification-service/handlers/emailSender.handler`.
+5. **General configuration**: Memory `256 MB`, Timeout `30 s`.
+6. **Environment variables**:
+   * `COGNITO_USER_POOL_ID`: `us-west-2_bV89z9COo`
+   * `SES_FROM_ADDRESS`: `<verified SES sender email>` (same as `eventwise-timeline-email-sender`)
+7. **IAM Role** (**Configuration → Permissions → Role name** → **Create inline policy → JSON**):
    ```json
    {
-     "runDate": "2026-11-26",
-     "windowDays": 7,
-     "eventsEvaluated": 1,
-     "paymentsDueFound": 1,
-     "budgetOverrunsFound": 1,
-     "alertsSkippedAsDuplicate": 0,
-     "notificationsSent": 1,
-     "alertsRecorded": 2,
-     "failedEvents": 0
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Sid": "LookupOwnerEmailInCognito",
+         "Effect": "Allow",
+         "Action": "cognito-idp:ListUsers",
+         "Resource": "arn:aws:cognito-idp:us-west-2:<ACCOUNT_ID>:userpool/us-west-2_bV89z9COo"
+       },
+       {
+         "Sid": "SendAlertEmailWithSes",
+         "Effect": "Allow",
+         "Action": "ses:SendEmail",
+         "Resource": "arn:aws:ses:us-west-2:<ACCOUNT_ID>:identity/*"
+       }
+     ]
    }
    ```
-4. Confirm you received the email in your inbox.
-5. Click **Test** a second time immediately: verify `notificationsSent: 0` and `alertsSkippedAsDuplicate: 2` (no duplicate email!).
+8. **SNS Trigger**: Click **Add trigger → SNS** → select **`eventwise-payment-budget-alerts`** → **Add**.
+   *(Make sure each demo owner email is verified in **Amazon SES → Identities** while in the SES sandbox.)*
+
+---
+
+## 9. Schedule Daily Execution with EventBridge Scheduler
+
+1. Open **Amazon EventBridge → Scheduler → Schedules → Create schedule**.
+2. Name: `eventwise-daily-alerts`.
+3. **Recurring schedule → Cron-based**: `0 8 * * ? *` | Timezone: **America/Vancouver** | Flexible time window: **Off**.
+4. Target: **AWS Lambda → Invoke** → select **`eventwise-alerts`** | Payload: `{}`.
+5. Permissions: **Create new role for this schedule** → **Create schedule**.
+
+---
+
+## 10. Verify End-to-End
+
+1. In Lambda **`eventwise-alerts`** → **Test**, invoke with `{}` (or `{"runDate": "2026-11-27"}`):
+   * Returns a JSON summary (`notificationsSent`, `alertsRecorded`, `failedEvents: 0`).
+   * Triggers **`eventwise-alerts-email-sender`** via SNS; check its CloudWatch Logs to confirm each event's owner email was resolved from Cognito and sent via SES.
+2. Click **Test** a second time immediately:
+   * Verify `notificationsSent: 0` and `alertsSkippedAsDuplicate > 0` (no duplicate emails sent).
