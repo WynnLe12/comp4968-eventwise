@@ -32,6 +32,7 @@
     "package:photos": "npm run build && node scripts/package-photos.mjs",
     "package:expenses": "npm run build && node scripts/package-expenses.mjs",
     "package:timeline": "npm run build && node scripts/package-timeline.mjs",
+    "package:contracts": "npm run build && node scripts/package-contracts.mjs",
     "package:tasks": "npm run build && node scripts/package-tasks.mjs",
     "package:rsvp": "npm run build && node scripts/package-rsvp.mjs",
     "package:alerts": "npm run build && node scripts/package-alerts.mjs"
@@ -57,6 +58,7 @@
     "dotenv": "^18.0.10",
     "mysql": "^2.18.1",
     "mysql2": "^3.24.6",
-    "sharp": "^0.35.5"
+    "sharp": "^0.35.5",
+    "unpdf": "1.9.1"
   }
 }

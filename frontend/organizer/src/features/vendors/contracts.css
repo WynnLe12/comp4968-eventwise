@@ -1,0 +1,42 @@
+.contracts-help { margin: 0 0 24px; color: var(--muted, #777189); }
+.contracts-list { overflow: hidden; }
+.contracts-list-head, .contracts-pagination { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 20px 24px; }
+.contracts-list-head { justify-content: space-between; }
+.contracts-list-head h2 { margin: 0; font-size: 18px; }
+.contracts-list-head small, .contracts-pagination span { color: var(--muted, #777189); font-weight: 400; }
+.contracts-rows { list-style: none; margin: 0; padding: 0; }
+.contracts-rows li { display: flex; align-items: center; gap: 20px; padding: 24px; border-top: 1px solid #e9e2f3; flex-wrap: wrap; }
+.contracts-draft-name { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+.contracts-draft-name h3 { margin: 0; font-size: 16px; }
+.contracts-draft-name p { margin: 6px 0; color: var(--muted, #777189); }
+.contracts-draft-name small { display: block; margin-top: 6px; }
+.contracts-pagination { border-top: 1px solid #e9e2f3; }
+.contracts-pagination span { margin-right: auto; }
+
+.contract-details section { margin: 20px 0; }
+.contract-details section p { overflow-wrap: anywhere; }
+.contract-details dl { margin: 24px 0; }
+.contract-details dl > div { display: flex; flex-wrap: wrap; gap: 8px 24px; padding: 12px 0; border-bottom: 1px solid #e9e2f3; }
+.contract-details dt { flex: 1 1 160px; color: var(--muted, #777189); }
+.contract-details dd { flex: 1 1 200px; margin: 0; overflow-wrap: anywhere; }
+
+.contract-draft-form fieldset { border: 0; padding: 0; margin: 20px 0; min-width: 0; display: grid; gap: 20px; }
+.contract-draft-form .form-row { margin: 0; }
+.contract-form-actions { display: flex; justify-content: flex-end; gap: 12px; flex-wrap: wrap; margin: 20px 0; }
+.contract-form-message { color: #b52b48; }
+
+.contract-confirmation { padding: 20px; border: 1px solid #e9e2f3; border-radius: 16px; background: #faf7ff; }
+.contract-confirmation h3 { margin-top: 0; }
+.contract-confirmation ul { padding-left: 20px; }
+.contract-confirmation li { margin: 8px 0; }
+.contract-confirmation .contract-form-actions { margin-bottom: 0; }
+
+.contract-page-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+
+.contract-extraction { margin: 16px 0; }
+.contract-extraction .contracts-help { margin: 8px 0 0; font-size: 14px; }
+
+.contract-discard { margin-top: 24px; padding-top: 20px; border-top: 1px solid #e9e2f3; }
+
+.contract-discard > h3 { margin: 0 0 8px; font-size: 16px; }
+.contract-discard > .contracts-help { margin-bottom: 12px; font-size: 14px; }

@@ -1032,6 +1032,7 @@ test("event workspace renders loading, empty, retry, and unavailable states inst
   state = { ...state, status: "ready" };
   assert.doesNotMatch(render("expenses"), /Preview: sample expenses/);
   assert.match(render("expenses"), /LIVE CONTENT/);
+  assert.match(render("contracts"), /LIVE CONTENT/);
   // Vendors are live API data: no sample-data notice.
   assert.doesNotMatch(render("vendors"), /Preview: sample/);
   assert.match(render("vendors"), /LIVE CONTENT/);

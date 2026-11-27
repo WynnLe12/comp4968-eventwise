@@ -1,4 +1,4 @@
-// Database row -> API JSON 
+// Database row -> API JSON
 import type { TaskRow } from "../repositories/taskRepository";
 import type { MemberRole, TaskFields } from "../types";
 

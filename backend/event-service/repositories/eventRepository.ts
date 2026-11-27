@@ -156,6 +156,9 @@ export class EventRepository {
          WHERE d.event_id = ? AND b.event_id <> ? LIMIT 1 FOR UPDATE`, [eventId, eventId],
       );
       if (tasks.length || drafts.length) throw new EventDeletionBlockedError("references");
+      // Remove drafts (and their extraction jobs) before document/event cascades.
+      // This also avoids SET NULL document updates racing the same-event job FK.
+      await connection.execute("DELETE FROM draft_budget_items WHERE event_id = ?", [eventId]);
       // RESTRICT links to vendors/categories require expenses to be removed first.
       await connection.execute("DELETE FROM expenses WHERE event_id = ?", [eventId]);
       const [result] = await connection.execute<ResultSetHeader>("DELETE FROM events WHERE event_id = ?", [eventId]);

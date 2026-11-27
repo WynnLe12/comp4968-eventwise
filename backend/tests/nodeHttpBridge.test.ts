@@ -73,3 +73,22 @@ test("HTTP bridge forwards a JSON request body", async () => {
         message: "Request body received",
     });
 });
+
+test("HTTP bridge preserves response links, allowed methods and private cache headers", async () => {
+    const result = await invokeNodeHttpHandler(
+        "POST", "/events/12/contract-drafts/23/confirm", Buffer.from('{"version":"1"}'),
+        async (_request, response) => {
+            response.setHeader("Cache-Control", "no-store");
+            response.setHeader("Allow", "POST, OPTIONS");
+            response.setHeader("Location", "/events/12/expenses/9007199254740993");
+            sendJson(response, 201, { data: { confirmedExpenseId: "9007199254740993" } });
+        },
+        { "Content-Type": "application/json" },
+    );
+    assert.equal(result.statusCode, 201);
+    assert.equal(result.headers.Location, "/events/12/expenses/9007199254740993");
+    assert.equal(result.headers.Allow, "POST, OPTIONS");
+    assert.equal(result.headers["Cache-Control"], "no-store");
+    assert.match(result.headers["Content-Type"], /application\/json/);
+    assert.deepEqual(JSON.parse(result.body), { data: { confirmedExpenseId: "9007199254740993" } });
+});

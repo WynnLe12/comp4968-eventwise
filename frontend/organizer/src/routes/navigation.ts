@@ -27,7 +27,7 @@ export const navGroups: { label: string; items: { id: Page; label: string; icon:
       { id: "templates", label: "Templates", icon: "spark" },
       { id: "coplanners", label: "Co-planners", icon: "userplus" },
       { id: "photos", label: "Photo gallery", icon: "image" },
-      { id: "contracts", label: "Contract extraction", icon: "scan" },
+      { id: "contracts", label: "Contract Extraction", icon: "scan" },
       { id: "alerts", label: "Alerts", icon: "bell" },
     ],
   },
@@ -48,7 +48,7 @@ export const pageTitles: Record<Page, [string, string]> = {
   tasks: ["Tasks", "A shared checklist to keep planning moving forward."],
   timeline: ["Event timeline", "Build a smooth schedule for your team and guests."],
   photos: ["QR photo gallery", "Collect guest photos and approve the best moments."],
-  contracts: ["Contract extraction", "Turn vendor contracts into clear dates, costs, and actions."],
+  contracts: ["Contract Extraction", "Turn vendor contracts into clear dates, costs, and actions."],
 };
 
 export const pagePath = (page: Page) => `/app/${page}`;

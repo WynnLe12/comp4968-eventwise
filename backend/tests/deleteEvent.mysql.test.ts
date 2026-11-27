@@ -8,7 +8,7 @@ import { EventService, EventAccessDeniedError, EventNotFoundError, EventConflict
 
 const enabled = process.env.EVENTWISE_MYSQL_TEST === "1";
 after(async () => { await db.end(); });
-const tables = ["events", "event_members", "expenses", "budget_categories", "vendors", "tasks", "event_invitations", "event_documents", "draft_budget_items"];
+const tables = ["events", "event_members", "expenses", "budget_categories", "vendors", "tasks", "event_invitations", "event_documents", "draft_budget_items", "contract_extraction_jobs"];
 async function snapshot(id: string) {
   const counts: Record<string, number> = {};
   for (const table of tables) {
@@ -28,6 +28,7 @@ async function fixture() {
   const cleanup = async () => {
     for (const id of [...eventIds].reverse()) {
       await db.execute("DELETE p FROM expense_payments p JOIN expenses e ON e.expense_id = p.expense_id WHERE e.event_id = ?", [id]);
+      await db.execute("DELETE FROM draft_budget_items WHERE event_id = ?", [id]);
       await db.execute("DELETE FROM expenses WHERE event_id = ?", [id]);
       await db.execute("DELETE FROM events WHERE event_id = ?", [id]);
     }
@@ -48,7 +49,8 @@ async function fixture() {
       const member = String(members[0].id);
       await insert("INSERT INTO tasks (event_id, title, assigned_member_id) VALUES (?, ?, ?)", [id, "Task", member]);
       const document = await insert("INSERT INTO event_documents (event_id, uploaded_by_sub, s3_object_key, original_filename, content_type, size_bytes) VALUES (?, ?, ?, ?, ?, ?)", [id, owner, `delete-test/${randomUUID()}`, "test.pdf", "application/pdf", 1]);
-      await insert("INSERT INTO draft_budget_items (event_id, document_id) VALUES (?, ?)", [id, document]);
+      const draft = await insert("INSERT INTO draft_budget_items (event_id, document_id) VALUES (?, ?)", [id, document]);
+      await insert("INSERT INTO contract_extraction_jobs (request_id, event_id, draft_id, draft_version, requested_by_sub) VALUES (?, ?, ?, 1, ?)", [randomUUID(), id, draft, owner]);
       await insert("INSERT INTO event_invitations (event_id, email, invited_by_sub, token_hash, expires_at) VALUES (?, ?, ?, ?, ?)", [id, "test@example.invalid", owner, randomUUID().replaceAll("-", "").padEnd(64, "0"), "2099-01-01"]);
       records.push({ id, expense, member, document });
     }

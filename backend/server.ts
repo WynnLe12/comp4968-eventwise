@@ -1,10 +1,26 @@
 import "./shared/config/environment";
+import { DraftExtractionService } from "./contract-service/extraction/draftExtractionService";
+import { MySqlDraftExtractionStore } from "./contract-service/repositories/draftExtractionStore";
 import { ExpenseService } from "./expense-service/services/expenses";
 import { MySqlExpenseRepository } from "./expense-service/repositories/mysql-expenses";
 import { expenseHttpHandler } from "./expense-service/handlers/http";
 import { createCognitoAuthenticator, type Authenticate } from "./shared/auth/cognito";
 
+import type { DraftConfirmer, DraftCreator, DraftDiscarder, DraftExtractor, DraftReader, DraftUpdater } from "./contract-service/types";
+import { MySqlDraftReader } from "./contract-service/repositories/draftReader";
+import { MySqlDraftCreator } from "./contract-service/repositories/draftCreator";
+import { MySqlDraftUpdater } from "./contract-service/repositories/draftUpdater";
+import { MySqlDraftDiscarder } from "./contract-service/repositories/draftDiscarder";
+import { MySqlDraftConfirmer } from "./contract-service/repositories/draftConfirmer";
+import { contractDraftHttpHandler } from "./contract-service/handlers/draftHttp";
+
 export interface AppDependencies {
+  contractDrafts?: DraftReader;
+  contractDraftCreator?: DraftCreator;
+  contractDraftUpdater?: DraftUpdater;
+  contractDraftDiscarder?: DraftDiscarder;
+  contractDraftConfirmer?: DraftConfirmer;
+  contractDraftExtractor?: DraftExtractor;
   expenses?: ExpenseService;
   authenticate?: Authenticate;
 }
@@ -59,6 +75,16 @@ export function createAppServer(
   const expenses = expenseHttpHandler(
     eventDependencies.expenses ?? new ExpenseService(new MySqlExpenseRepository()),
     eventDependencies.authenticate ?? createCognitoAuthenticator(),
+  );
+
+  const contractDrafts = contractDraftHttpHandler(
+    eventDependencies.contractDrafts ?? new MySqlDraftReader(),
+    eventDependencies.authenticate ?? createCognitoAuthenticator(),
+    eventDependencies.contractDraftCreator ?? new MySqlDraftCreator(),
+    eventDependencies.contractDraftUpdater ?? new MySqlDraftUpdater(),
+    eventDependencies.contractDraftDiscarder ?? new MySqlDraftDiscarder(),
+    eventDependencies.contractDraftConfirmer ?? new MySqlDraftConfirmer(),
+    eventDependencies.contractDraftExtractor ?? new DraftExtractionService(new MySqlDraftExtractionStore()),
   );
 
   return createServer((request, response) => {
@@ -241,7 +267,7 @@ export function createAppServer(
     // Feature 11: Event Templates (Lulu)
     void handleTemplates(request.method, path, response)
       .then(async (handled) => {
-        if (!handled && !await expenses(request, response)) {
+        if (!handled && !await contractDrafts(request, response) && !await expenses(request, response)) {
           sendJson<ErrorResponse>(response, 404, {
             error: "Not found",
           });

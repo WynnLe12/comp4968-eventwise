@@ -10,6 +10,7 @@ export interface DocumentRecord extends RowDataPacket {
     content_type: string;
     size_bytes: string;
     created_at: Date;
+    content_sha256: string | null;
 }
 
 export interface CreateDocumentInput {
@@ -19,6 +20,7 @@ export interface CreateDocumentInput {
     originalFilename: string;
     contentType: string;
     sizeBytes: number;
+    contentSha256: string;
 }
 
 export class DocumentRepository {
@@ -45,7 +47,7 @@ export class DocumentRepository {
         const [rows] = await db.execute<DocumentRecord[]>(
             `SELECT document_id, event_id, uploaded_by_sub,
               s3_object_key, original_filename,
-              content_type, size_bytes, created_at
+              content_type, size_bytes, created_at, content_sha256
             FROM event_documents
             WHERE event_id = ?
             ORDER BY created_at DESC, document_id DESC`,
@@ -63,7 +65,7 @@ export class DocumentRepository {
         const [rows] = await db.execute<DocumentRecord[]>(
             `SELECT document_id, event_id, uploaded_by_sub,
               s3_object_key, original_filename,
-              content_type, size_bytes, created_at
+              content_type, size_bytes, created_at, content_sha256
             FROM event_documents
             WHERE event_id = ? AND document_id = ?
             LIMIT 1`,
@@ -79,10 +81,11 @@ export class DocumentRepository {
         const [result] = await db.execute<ResultSetHeader>(
             `INSERT INTO event_documents
             (event_id, uploaded_by_sub, s3_object_key,
-                original_filename, content_type, size_bytes)
-            VALUES (?, ?, ?, ?, ?, ?)
+                original_filename, content_type, size_bytes, content_sha256)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON DUPLICATE KEY UPDATE
-                document_id = LAST_INSERT_ID(document_id)`,
+                document_id = LAST_INSERT_ID(document_id),
+                content_sha256 = COALESCE(content_sha256, ?)`,
             [
                 input.eventId,
                 input.uploadedBySub,
@@ -90,6 +93,8 @@ export class DocumentRepository {
                 input.originalFilename,
                 input.contentType,
                 input.sizeBytes,
+                input.contentSha256,
+                input.contentSha256,
             ],
         );
 
@@ -145,7 +150,7 @@ export class DocumentRepository {
         const [rows] = await db.execute<DocumentRecord[]>(
             `SELECT document_id, event_id, uploaded_by_sub,
               s3_object_key, original_filename,
-              content_type, size_bytes, created_at
+              content_type, size_bytes, created_at, content_sha256
             FROM event_documents
             WHERE event_id = ?
                 AND s3_object_key = ?
