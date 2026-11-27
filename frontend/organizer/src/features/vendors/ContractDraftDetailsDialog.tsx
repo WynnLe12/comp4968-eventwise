@@ -1,3 +1,5 @@
+import { ContractDraftExtraction } from "./ContractDraftExtraction";
+import { contractExtractionFeedback } from "./contractExtractionFeedback";
 import { formatContractAmount } from "./contractAmount";
 import { ContractDraftConfirmation } from "./ContractDraftConfirmation";
 import { ContractDraftForm } from "./ContractDraftForm";
@@ -18,18 +20,20 @@ export function ContractDraftDetailsDialog({ eventId, draftId, onClose, onSaved,
   const { data, loading, error, reload, update } = useResource(load);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState(initialNotice);
-  const saved = (draft: ContractDraftDetails) => { update(() => draft); setNotice(draft.status === "CONFIRMED" ? "Contract confirmed and saved to expenses." : "Draft saved. No expense was created."); onSaved(draft); };
+  const saved = (draft: ContractDraftDetails, message?: string) => { update(() => draft); setNotice(message ?? (draft.status === "CONFIRMED" ? "Contract confirmed and saved to expenses." : "Draft saved. No expense was created.")); onSaved(draft); };
   return <Modal title="Contract details" onClose={() => { if (!busy) onClose(); }} footer={<Button variant="secondary" disabled={busy} onClick={onClose}>Close</Button>}>
     {notice && <p role="status">{notice}</p>}
     {loading ? <LoadingState label="Loading contract details..." /> : error ?
       <ErrorState message={error instanceof Error ? error.message : "We couldn't load this draft."} onRetry={reload} /> :
-      data && <Details key={data.version} draft={data} onSaved={saved} onReload={() => { setNotice(""); reload(); }} onBusy={setBusy} />}
+      data && <Details key={data.version} draft={data} onSaved={saved} onReload={() => { setNotice(""); reload(); }} onBusy={value => { setBusy(value); if (value) setNotice(""); }} />}
   </Modal>;
 }
 
-function Details({ draft, onSaved, onReload, onBusy }: { draft: ContractDraftDetails; onSaved: (draft: ContractDraftDetails) => void; onReload: () => void; onBusy: (busy: boolean) => void }) {
+function Details({ draft, onSaved, onReload, onBusy }: { draft: ContractDraftDetails; onSaved: (draft: ContractDraftDetails, message?: string) => void; onReload: () => void; onBusy: (busy: boolean) => void }) {
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [extracting, setExtracting] = useState(false);
+  const [extractionNeedsReload, setExtractionNeedsReload] = useState(false);
   const loadReferences = useCallback(async () => {
     const [categories, vendors] = await Promise.allSettled([
       draft.categoryId ? fetchBudgetCategories(draft.eventId) : Promise.resolve(null),
@@ -72,15 +76,18 @@ function Details({ draft, onSaved, onReload, onBusy }: { draft: ContractDraftDet
     <section>
       <h3>Source document</h3>
       <p>{draft.documentFilename || "Source document unavailable"}</p>
-      {draft.documentId && <Button variant="secondary" disabled={opening || confirming} onClick={() => void openDocument()}>{opening ? "Opening..." : "Open source document"}</Button>}
+      {draft.documentId && <Button variant="secondary" disabled={opening || confirming || extracting} onClick={() => void openDocument()}>{opening ? "Opening..." : "Open source document"}</Button>}
       {documentError && <p role="alert">{documentError}</p>}
     </section>
     {editing ? <ContractDraftForm draft={draft} onSaved={onSaved} onReload={onReload} onBusy={onBusy} onCancel={() => setEditing(false)} /> : <>
-    {draft.status === "DRAFT" && <Button variant="secondary" disabled={confirming} onClick={() => setEditing(true)}>Edit draft</Button>}
+    {draft.status === "DRAFT" && <Button variant="secondary" disabled={confirming || extracting || extractionNeedsReload} onClick={() => setEditing(true)}>Edit draft</Button>}
+    <ContractDraftExtraction draft={draft} disabled={confirming || extractionNeedsReload}
+      onExtracted={result => onSaved(result.draft, contractExtractionFeedback(result))} onReload={onReload}
+      onReloadRequired={() => setExtractionNeedsReload(true)} onBusy={value => { setExtracting(value); onBusy(value); }} />
     <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
     <p className="contracts-help">A deposit requirement does not record a payment. Payments are managed separately in Expenses.</p>
     {draft.status === "CONFIRMED" && <p>This draft has been confirmed and saved to expenses.</p>}
-    {draft.status === "DRAFT" && <ContractDraftConfirmation draft={draft} onConfirmed={onSaved} onReload={onReload}
+    {draft.status === "DRAFT" && !extracting && !extractionNeedsReload && <ContractDraftConfirmation draft={draft} onConfirmed={onSaved} onReload={onReload}
       referenceIssue={references.loading ? "Checking the selected category and vendor..." : draft.categoryId && !references.data?.category ? "The selected category could not be loaded. Reload details before confirming." : draft.vendorId && !references.data?.vendor ? "The selected vendor could not be loaded. Reload details before confirming." : ""}
       onBusy={busy => { setConfirming(busy); onBusy(busy); }} />}
     </>}

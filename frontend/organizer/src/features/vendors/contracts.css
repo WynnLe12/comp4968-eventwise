@@ -32,3 +32,6 @@
 .contract-confirmation .contract-form-actions { margin-bottom: 0; }
 
 .contract-page-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+
+.contract-extraction { margin: 16px 0; }
+.contract-extraction .contracts-help { margin: 8px 0 0; font-size: 14px; }

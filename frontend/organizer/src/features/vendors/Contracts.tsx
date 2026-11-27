@@ -34,7 +34,7 @@ function EventContracts({ eventId }: { eventId: string }) {
       <Button variant="secondary" onClick={() => navigate("/app/documents")}>Open Documents</Button>
       <Button onClick={() => setChoosing(true)}>Choose document</Button>
     </div>} />
-    <p className="contracts-help">Review contract details before adding them to expenses. Automatic extraction is not available yet.</p>
+    <p className="contracts-help">Choose a document, extract details from PDF text, then review before saving to expenses. Scanned PDFs and images need manual entry.</p>
     <DraftList key={JSON.stringify([offset, refreshKey])} eventId={eventId} offset={offset} onPage={setOffset}
       onSelect={draftId => setSelectedDraft({ draftId, notice: "" })} onChoose={() => setChoosing(true)} />
     {choosing && <ChooseContractDocumentDialog eventId={eventId} onClose={() => setChoosing(false)} onCreated={result => {

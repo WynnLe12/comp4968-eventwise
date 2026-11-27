@@ -16,7 +16,7 @@ function load(name, imports = {}) {
 const validation = load("contractDraftValidation");
 const draft = {
   draftId: "1", eventId: "3", version: "2", status: "DRAFT", documentId: "6",
-  documentFilename: "contract.pdf", description: "Review", categoryId: "19", vendorId: null,
+  documentFilename: "contract.pdf", documentContentType: "application/pdf", description: "Review", categoryId: "19", vendorId: null,
   vendorName: null, totalAmount: "100.00", depositAmount: null, dueDate: null,
   currencyCode: "USD", saveAction: "CREATE_EXPENSE", targetExpenseId: null, confirmedExpenseId: null,
 };
@@ -241,4 +241,67 @@ test("signed-out draft creation never sends a request", async () => {
   await withApi(async () => { assert.fail("No unauthenticated request expected"); }, async api => {
     await assert.rejects(api.createContractDraft("3", "9"), /sign in again/);
   }, async () => { throw new Error("Signed out"); });
+});
+
+
+const extraction = { data: { ...draft, version: "3", dueDate: "2026-12-18" }, appliedFields: ["dueDate"], skippedFields: ["totalAmount"], warnings: [{ field: "totalAmount", code: "SAVED_VALUE_KEPT" }] };
+
+test("extraction sends only the current version with access-token auth and returns review feedback", async () => {
+  await withApi(async (url, options) => {
+    assert.equal(url, "/api/events/3/contract-drafts/1/extract");
+    assert.equal(options.method, "POST");
+    assert.equal(options.headers.Authorization, "Bearer test-access-token");
+    assert.deepEqual(JSON.parse(options.body), { version: "2" });
+    return Response.json(extraction);
+  }, async api => {
+    const result = await api.extractContractDraft("3", "1", "2");
+    assert.equal(result.draft.version, "3");
+    assert.equal(result.draft.description, "Review");
+    assert.equal(result.draft.status, "DRAFT");
+    assert.deepEqual(result.appliedFields, ["dueDate"]);
+    assert.deepEqual(result.skippedFields, ["totalAmount"]);
+  });
+});
+
+test("extraction rejects wrong-event, finalized, stale and malformed results before updating the UI", async () => {
+  for (const change of [{ data: { ...extraction.data, eventId: "4" } }, { data: { ...extraction.data, status: "CONFIRMED" } },
+    { data: { ...extraction.data, version: "2" } }, { appliedFields: ["paidTotal"] }, { skippedFields: ["dueDate"] },
+    { appliedFields: ["dueDate", "dueDate"] }, { warnings: [{ field: "totalAmount", code: "private" }] }]) {
+    await withApi(async () => Response.json({ ...extraction, ...change }), async api => {
+      await assert.rejects(api.extractContractDraft("3", "1", "2"));
+    });
+  }
+});
+
+test("extraction conflicts require reload and never automatically retry a stale write", async () => {
+  let calls = 0;
+  await withApi(async () => { calls++; return Response.json({ error: { code: "DRAFT_CHANGED" } }, { status: 409 }); }, async api => {
+    await assert.rejects(api.extractContractDraft("3", "1", "2"), error => error instanceof api.ContractDraftSaveError && error.reloadRequired);
+    assert.equal(calls, 1);
+  });
+});
+
+test("extraction errors give manual-entry or retry guidance without displaying private server messages", async () => {
+  for (const [status, code, expected] of [[422, "PDF_NO_TEXT", /scanned PDF/], [422, "PDF_PASSWORD_REQUIRED", /password protected/],
+    [422, "PDF_REQUIRED", /image details manually/], [422, "PDF_PAGE_LIMIT", /50 pages/], [422, "PDF_TIMEOUT", /too long/],
+    [503, "DOCUMENT_UNAVAILABLE", /source file/], [500, "INTERNAL_ERROR", /couldn't extract/], [401, "UNAUTHENTICATED", /sign in again/]]) {
+    await withApi(async () => Response.json({ error: { code, message: "private storage key" } }, { status }), async api => {
+      await assert.rejects(api.extractContractDraft("3", "1", "2"), error => expected.test(error.message) && !error.message.includes("private storage"));
+    });
+  }
+});
+
+test("signed-out or invalid extraction selections make no request", async () => {
+  await withApi(async () => { assert.fail("No invalid request expected"); }, async api => {
+    for (const version of ["", "0", "01", "18446744073709551616"]) await assert.rejects(api.extractContractDraft("3", "1", version));
+    await assert.rejects(api.extractContractDraft("3", "1", "2"), /sign in again/);
+  }, async () => { throw new Error("Signed out"); });
+});
+
+const feedback = load("contractExtractionFeedback");
+test("extraction feedback distinguishes filled and preserved fields and flags partial or uncertain text", () => {
+  const message = feedback.contractExtractionFeedback({ ...extraction, draft: extraction.data,
+    warnings: [{ field: "vendorName", code: "VENDOR_FROM_HEADER" }, { field: null, code: "PARTIAL_TEXT" }, { field: "totalAmount", code: "CONFLICTING_VALUES" }] });
+  for (const expected of [/due date/, /saved details were kept/, /vendor name/, /Some pages/, /conflicting/, /No expense or payment was created/]) assert.match(message, expected);
+  assert.match(feedback.contractExtractionFeedback({ appliedFields: [], skippedFields: [], warnings: [] }), /No new details/);
 });

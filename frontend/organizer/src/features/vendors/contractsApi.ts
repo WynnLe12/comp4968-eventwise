@@ -36,8 +36,24 @@ async function contractRequest(eventId: string, suffix: string, body?: unknown, 
       };
       throw new Error(messages[result?.error?.code] ?? (response.status === 404 ? "This document is no longer available. Refresh the document list." : "We couldn't create the draft. Please try again."));
     }
+    if (method === "POST" && suffix.endsWith("/extract") && ![401, 403, 409].includes(response.status)) {
+      const messages: Record<string, string> = {
+        PDF_NO_TEXT: "No readable text was found. For a scanned PDF, choose Edit draft and enter the details manually.",
+        PDF_PASSWORD_REQUIRED: "This PDF is password protected. Use an unlocked copy or enter the details manually.",
+        INVALID_PDF: "This file could not be read as a PDF. Enter the details manually.",
+        PDF_READ_FAILED: "We couldn't read this PDF. Enter the details manually.",
+        PDF_TOO_LARGE: "Choose a PDF up to 10 MB, or enter the details manually.",
+        PDF_PAGE_LIMIT: "This PDF has more than 50 pages. Enter the details manually.",
+        PDF_TEXT_LIMIT: "This PDF contains too much text to extract. Enter the details manually.",
+        PDF_TIMEOUT: "Reading the PDF took too long. Try again or enter the details manually.",
+        PDF_REQUIRED: "Extraction supports PDFs with readable text. Enter image details manually.",
+        DOCUMENT_UNAVAILABLE: "We couldn't read the source file. Check it in Documents and try again.",
+      };
+      throw new Error(messages[result?.error?.code] ?? (response.status === 404 ? "This draft is no longer available. Close it and refresh the list." : "We couldn't extract details. Try again or enter them manually."));
+    }
     if (response.status === 409) {
       const messages: Record<string, string> = {
+        DOCUMENT_CHANGED: "The source document changed. Reopen it in Documents and reload this draft before continuing.",
         DRAFT_CHANGED: "This draft changed in another tab. Reload the latest version before continuing.",
         DRAFT_NOT_EDITABLE: "This draft is no longer editable. Reload to see its current status.",
         DOCUMENT_UNVERIFIED: "The source document could not be verified. Reopen the document and reload this draft before confirming.",
@@ -84,6 +100,7 @@ export async function fetchContractDrafts(eventId: string, offset = 0): Promise<
 }
 
 export interface ContractDraftDetails extends ContractDraftSummary {
+  documentContentType: string | null;
   documentId: string | null;
   categoryId: string | null;
   vendorId: string | null;
@@ -108,7 +125,7 @@ function readContractDraft(result: { data?: ContractDraftDetails } | null, event
   if (!draft || draft.eventId !== eventId || draft.draftId !== draftId ||
       !["DRAFT", "CONFIRMED", "REJECTED"].includes(draft.status) ||
       !["CREATE_EXPENSE", "UPDATE_EXPENSE"].includes(draft.saveAction) || typeof draft.version !== "string" ||
-      ![draft.documentId, draft.documentFilename, draft.description, draft.currencyCode, draft.categoryId,
+      ![draft.documentId, draft.documentFilename, draft.documentContentType, draft.description, draft.currencyCode, draft.categoryId,
         draft.vendorId, draft.vendorName, draft.targetExpenseId, draft.confirmedExpenseId].every(nullableText) ||
       !money(draft.totalAmount) || !money(draft.depositAmount) ||
       !(draft.dueDate === null || typeof draft.dueDate === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(draft.dueDate))) {
@@ -154,4 +171,33 @@ export async function createContractDraft(eventId: string, documentId: string): 
     throw new Error("We couldn't read the draft result. Refresh the saved drafts before trying again.");
   }
   return { draftId: result.data.draftId, created: result.created };
+}
+
+
+export const CONTRACT_EXTRACTION_FIELDS = ["vendorName", "totalAmount", "depositAmount", "dueDate"] as const;
+export type ContractExtractionField = typeof CONTRACT_EXTRACTION_FIELDS[number];
+export interface ContractExtractionResult {
+  draft: ContractDraftDetails;
+  appliedFields: ContractExtractionField[];
+  skippedFields: ContractExtractionField[];
+  warnings: { field: ContractExtractionField | null; code: string }[];
+}
+export async function extractContractDraft(eventId: string, draftId: string, version: string): Promise<ContractExtractionResult> {
+  const validId = (value: string) => /^[1-9][0-9]{0,19}$/.test(value) && BigInt(value) <= 18446744073709551615n;
+  if (![eventId, draftId, version].every(validId)) throw new Error("Reload this draft before extracting details.");
+  const result = await contractRequest(eventId, "/" + encodeURIComponent(draftId) + "/extract", { version }, "POST") as {
+    data?: ContractDraftDetails; appliedFields?: unknown; skippedFields?: unknown; warnings?: unknown;
+  } | null;
+  const draft = readContractDraft(result, eventId, draftId);
+  const fields = (value: unknown): value is ContractExtractionField[] => Array.isArray(value) && value.length <= 4 &&
+    new Set(value).size === value.length && value.every(field => CONTRACT_EXTRACTION_FIELDS.includes(field));
+  const warningCodes = ["CONFLICTING_VALUES", "AMBIGUOUS_VALUE", "VENDOR_FROM_HEADER", "PARTIAL_TEXT", "SAVED_VALUE_KEPT", "LINKED_VENDOR_KEPT", "AMOUNT_CONFLICT"];
+  if (draft.status !== "DRAFT" || !validId(draft.version) || BigInt(draft.version) <= BigInt(version) ||
+      !fields(result?.appliedFields) || !fields(result?.skippedFields) ||
+      result.appliedFields.some(field => (result.skippedFields as ContractExtractionField[]).includes(field)) ||
+      !Array.isArray(result.warnings) || !result.warnings.every(warning => warning &&
+        (warning.field === null || CONTRACT_EXTRACTION_FIELDS.includes(warning.field)) && warningCodes.includes(warning.code))) {
+    throw new ContractDraftSaveError("We couldn't verify the extraction result. Reload this draft before trying again.", {}, true);
+  }
+  return { draft, appliedFields: result.appliedFields, skippedFields: result.skippedFields, warnings: result.warnings };
 }
