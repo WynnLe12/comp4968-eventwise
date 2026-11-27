@@ -41,7 +41,7 @@ export function ContractDraftConfirmation({ draft, referenceIssue, onConfirmed, 
     {error && <p role="alert" className="contract-form-message">{error}</p>}
     <div className="contract-form-actions">
       {(reloadRequired || referenceIssue && !referenceIssue.startsWith("Checking")) && <Button variant="secondary" disabled={confirming} onClick={onReload}>Reload details</Button>}
-      <Button disabled={confirming || reloadRequired || issues.length > 0} onClick={() => void confirm()}>{confirming ? "Confirming..." : "Confirm and create expense"}</Button>
+      <Button disabled={confirming || reloadRequired || issues.length > 0} onClick={() => void confirm()}>{confirming ? "Confirming..." : "Confirm And Create Expense"}</Button>
     </div>
   </section>;
 }

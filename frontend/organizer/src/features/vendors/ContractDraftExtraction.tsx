@@ -33,9 +33,9 @@ export function ContractDraftExtraction({ draft, disabled, onExtracted, onReload
   }
   if (draft.status !== "DRAFT" || !draft.documentId || draft.documentContentType !== "application/pdf") return null;
   return <div className="contract-extraction" aria-busy={extracting}>
-    <Button variant="secondary" disabled={disabled || extracting || reloadRequired} onClick={() => void extract()}>{extracting ? "Extracting�" : "Extract details"}</Button>
+    <Button variant="secondary" disabled={disabled || extracting || reloadRequired} onClick={() => void extract()}>{extracting ? "Extracting..." : "Extract Details"}</Button>
     <p className="contracts-help">Fill missing details from PDF text. Saved edits are kept; review the suggestions before confirming.</p>
-    {extracting && <p role="status">Reading the PDF. This may take a few seconds�</p>}
+    {extracting && <p role="status">Reading the PDF. This may take a few seconds...</p>}
     {error && <p role="alert" className="contract-form-message">{error}</p>}
     {reloadRequired && <Button variant="secondary" disabled={extracting} onClick={onReload}>Reload details</Button>}
   </div>;

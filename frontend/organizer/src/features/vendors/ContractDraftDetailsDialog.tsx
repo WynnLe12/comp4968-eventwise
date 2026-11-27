@@ -76,11 +76,11 @@ function Details({ draft, onSaved, onReload, onBusy }: { draft: ContractDraftDet
     <section>
       <h3>Source document</h3>
       <p>{draft.documentFilename || "Source document unavailable"}</p>
-      {draft.documentId && <Button variant="secondary" disabled={opening || confirming || extracting} onClick={() => void openDocument()}>{opening ? "Opening..." : "Open source document"}</Button>}
+      {draft.documentId && <Button variant="secondary" disabled={opening || confirming || extracting} onClick={() => void openDocument()}>{opening ? "Opening..." : "Open Source Document"}</Button>}
       {documentError && <p role="alert">{documentError}</p>}
     </section>
     {editing ? <ContractDraftForm draft={draft} onSaved={onSaved} onReload={onReload} onBusy={onBusy} onCancel={() => setEditing(false)} /> : <>
-    {draft.status === "DRAFT" && <Button variant="secondary" disabled={confirming || extracting || extractionNeedsReload} onClick={() => setEditing(true)}>Edit draft</Button>}
+    {draft.status === "DRAFT" && <Button variant="secondary" disabled={confirming || extracting || extractionNeedsReload} onClick={() => setEditing(true)}>Edit Draft</Button>}
     <ContractDraftExtraction draft={draft} disabled={confirming || extractionNeedsReload}
       onExtracted={result => onSaved(result.draft, contractExtractionFeedback(result))} onReload={onReload}
       onReloadRequired={() => setExtractionNeedsReload(true)} onBusy={value => { setExtracting(value); onBusy(value); }} />
