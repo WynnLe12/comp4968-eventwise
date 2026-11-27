@@ -63,12 +63,14 @@ Every resource also has an unauthenticated OPTIONS method returning 204 with COR
 | `title` | string | Required on POST. Trimmed, 1–120 characters |
 | `place` | string \| null | Trimmed, at most 160 characters; empty string becomes `null` |
 | `notes` | string \| null | At most 500 characters. Shown to guests only when `visibility` is `GUESTS` |
-| `startsAt` | instant | Required on POST |
-| `endsAt` | instant \| null | Must be after `startsAt` |
+| `startsAt` | instant | Required on POST. Must be in the future when created or changed |
+| `endsAt` | instant \| null | Must be after `startsAt`, and in the future when changed |
 | `visibility` | `"GUESTS"` \| `"TEAM"` | Default `GUESTS`. `TEAM` items (vendor setup, staff calls) are never shown to guests |
 | `reminderMinutes` | `0` \| `15` \| `60` \| `1440` | Default `60`. `0` means no reminder |
 
 An event may hold at most 100 items (409 `TIMELINE_FULL`).
+
+Times can't be in the past, like the RSVP deadline: POST rejects a `startsAt` at or before now, and PATCH rejects a changed `startsAt` or `endsAt` at or before now (422 with `"The start time must be in the future."` or `"The end time must be in the future."`). An activity that is already over can still be edited (name, place, notes, visibility) as long as its times are not changed, so organizers can fix details on the day of the event.
 
 ### TimelineItem
 

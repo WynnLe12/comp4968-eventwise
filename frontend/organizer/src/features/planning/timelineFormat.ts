@@ -117,6 +117,12 @@ export function localToInstant(date: string, time: string): string | null {
   return `${d[1]}-${d[2]}-${d[3]}T${t[1]}:${t[2]}:00${sign}${pad(Math.trunc(offset / 60))}:${pad(offset % 60)}`;
 }
 
+/** Today's date in Vancouver, "YYYY-MM-DD" (the earliest date the activity form offers). */
+export function todayInVancouver(now: Date = new Date()): string {
+  const p = localParts(now.getTime());
+  return `${p.year}-${pad(p.month)}-${pad(p.day)}`;
+}
+
 /** UTC instant -> { date: "YYYY-MM-DD", time: "HH:MM" } in Vancouver. */
 export function instantToLocal(instant: string): { date: string; time: string } {
   const p = localParts(Date.parse(instant));
@@ -216,11 +222,22 @@ export function formFromItem(item: TimelineItem): TimelineForm {
 
 const length = (text: string) => [...text].length;
 
+export interface ValidateOptions {
+  /** Defaults to the current time. */
+  now?: Date;
+  /** The stored activity when editing: only times that change must be in the future. */
+  item?: Pick<TimelineItem, "startsAt" | "endsAt"> | null;
+}
+
 /**
  * Checks the form the same way the API will, so most mistakes show before saving.
  * An end time earlier than the start time means the activity runs past midnight.
+ * Times can't be in the past (like the RSVP deadline), but an activity that is already
+ * over can still be edited as long as its times are left unchanged.
  */
-export function validateForm(form: TimelineForm): { errors: FormErrors; fields?: TimelineFields } {
+export function validateForm(form: TimelineForm, options: ValidateOptions = {}): { errors: FormErrors; fields?: TimelineFields } {
+  const now = options.now ?? new Date();
+  const item = options.item ?? null;
   const errors: FormErrors = {};
   const title = form.title.trim();
   const place = form.place.trim();
@@ -246,6 +263,12 @@ export function validateForm(form: TimelineForm): { errors: FormErrors; fields?:
     }
     if (!endsAt) errors.endTime = "That time doesn't exist on this date (clocks change). Choose another.";
     else if (Date.parse(endsAt) === Date.parse(startsAt)) errors.endTime = "End time must be after the start time.";
+  }
+  if (startsAt && !errors.startTime && !sameInstant(startsAt, item?.startsAt ?? null) && Date.parse(startsAt) <= now.getTime()) {
+    errors.startTime = "The start time must be in the future.";
+  }
+  if (endsAt && !errors.endTime && !sameInstant(endsAt, item?.endsAt ?? null) && Date.parse(endsAt) <= now.getTime()) {
+    errors.endTime = "The end time must be in the future.";
   }
   if (!["0", "15", "60", "1440"].includes(form.reminderMinutes)) errors.reminderMinutes = "Choose a reminder.";
 

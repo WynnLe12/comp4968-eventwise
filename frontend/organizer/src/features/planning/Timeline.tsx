@@ -32,6 +32,7 @@ import {
   nextUpItemId,
   reminderLabel,
   savedMessage,
+  todayInVancouver,
   validateForm,
   type FormErrors,
   type TimelineForm,
@@ -298,14 +299,14 @@ function ActivityEditor({
   // Whether ticking "notify" would actually send anything for the current edits.
   const pending = useMemo(() => {
     if (!item) return null;
-    const { fields } = validateForm(form);
+    const { fields } = validateForm(form, { item });
     return fields ? changedFields(item, fields) : null;
   }, [form, item]);
   const notifiable = Boolean(pending && isNotifiableChange(pending));
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    const { errors: found, fields } = validateForm(form);
+    const { errors: found, fields } = validateForm(form, { item });
     if (!fields) {
       setErrors(found);
       return;
@@ -360,7 +361,15 @@ function ActivityEditor({
           onChange={(e) => set("title", e.target.value)}
         />
         <div className="form-row">
-          <Field label="Date" type="date" value={form.date} error={errors.date} onChange={(e) => set("date", e.target.value)} />
+          <Field
+            label="Date"
+            type="date"
+            // Like the event date: no past days. An activity that's already over keeps its own date.
+            min={item && formFromItem(item).date < todayInVancouver() ? undefined : todayInVancouver()}
+            value={form.date}
+            error={errors.date}
+            onChange={(e) => set("date", e.target.value)}
+          />
           <Field label="Starts" type="time" value={form.startTime} error={errors.startTime} onChange={(e) => set("startTime", e.target.value)} />
           <Field
             label="Ends (optional)"
